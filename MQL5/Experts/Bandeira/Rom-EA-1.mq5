@@ -1,4 +1,5 @@
-#include <Trade\Trade.mqh> // Include trade operations
+// @ts-nocheck
+#include <Trade\Trade.mqh>
 
 // Input Parameters
 input double RiskPercentage = 1;             // Risk per trade as % of account balance
