@@ -1,25 +1,47 @@
 //+------------------------------------------------------------------+
-//| Input parameters for optimization                                |
+//| QuantumTraderAI.mq5                                              |
+//| Your Name or Company                                             |
 //+------------------------------------------------------------------+
-input double ImbalanceThreshold = 1.5; // Sensitivity to volume imbalance
-input double LiquidityThreshold = 100; // Threshold for identifying liquidity pools
+#property copyright "VSol Software"
+#property version   "1.00"
+#property strict
+
+#include <Trade\Trade.mqh>
+#include <Errors.mqh>
 
 //+------------------------------------------------------------------+
-//| Input parameters for risk management and drawdown                |
+//| Input parameters                                                 |
 //+------------------------------------------------------------------+
-input double MaxDrawdownPercent = 20.0; // Maximum allowable drawdown in percentage
-input double RiskPercent = 1.0;         // Risk percentage per trade
-input double RecoveryFactor = 1.2;      // Scaling factor for Auto Recovery Mode
-input double ATRMultiplier = 1.5;       // ATR multiplier for SL/TP
+
+// Strategy Activation
+input bool UseTrendStrategy = true;         // Enable or disable the Trend Following strategy
+input bool UseScalpingStrategy = true;      // Enable or disable the Scalping strategy
+input bool UseCounterTrendStrategy = true;  // Enable or disable the Counter-Trend strategy
+
+// Risk Management
+input double RiskPercent = 1.0;             // Percentage of account equity risked per trade
+input double MaxDrawdownPercent = 15.0;     // Maximum drawdown percentage allowed before trading halts
+
+// Execution Settings
+input double Aggressiveness = 1.0;          // Factor to adjust trade aggressiveness
+input double RecoveryFactor = 1.2;          // Multiplier for lot size in recovery mode to regain losses
+input double ATRMultiplier = 1.5;           // Multiplier for ATR to set dynamic SL/TP
+
+// Scalping Parameters
+input double ScalpingThreshold = 0.8;       // Sensitivity threshold for identifying favorable scalping conditions
+
+// Counter-Trend Parameters
+input double OverboughtLevel = 80.0;        // Stochastic indicator level above which the market is considered overbought
+input double OversoldLevel = 20.0;          // Stochastic indicator level below which the market is considered oversold
+
+// Other Parameters
+input double ImbalanceThreshold = 1.5;      // Sensitivity to volume imbalance
+input double LiquidityThreshold = 100;      // Threshold for identifying liquidity pools
 
 //+------------------------------------------------------------------+
-//| Access Depth of Market Data                                      |
+//| Global Variables and Objects                                     |
 //+------------------------------------------------------------------+
-bool GetMarketDepthData(MqlBookInfo &book[])
-{
-    int depth = MarketBookGet(_Symbol, book);
-    return (depth > 0);
-}
+CTrade trade;
 
 //+------------------------------------------------------------------+
 //| Helper function to get indicator value                           |
@@ -82,12 +104,21 @@ double CalculateATR(int period, int shift = 0)
 //+------------------------------------------------------------------+
 bool IsOverbought(double stochastic, double cci)
 {
-    return (stochastic > 80 && cci > 100); // Example thresholds
+    return (stochastic > OverboughtLevel && cci > 100); // Use input parameter
 }
 
 bool IsOversold(double stochastic, double cci)
 {
-    return (stochastic < 20 && cci < -100); // Example thresholds
+    return (stochastic < OversoldLevel && cci < -100); // Use input parameter
+}
+
+//+------------------------------------------------------------------+
+//| Access Depth of Market Data                                      |
+//+------------------------------------------------------------------+
+bool GetMarketDepthData(MqlBookInfo &book[])
+{
+    int depth = MarketBookGet(_Symbol, book);
+    return (depth > 0);
 }
 
 //+------------------------------------------------------------------+
@@ -127,14 +158,12 @@ void GenerateCounterTrendSignals()
     if (IsOverbought(stochastic, cci) && CheckDOMLiquidityGaps(book, depth))
     {
         Print("Counter-Trend: Sell Signal Generated");
-        // Placeholder for sell order logic
-        // Example: OrderSend(...);
+        PlaceSellOrder();
     }
     else if (IsOversold(stochastic, cci) && CheckDOMLiquidityGaps(book, depth))
     {
         Print("Counter-Trend: Buy Signal Generated");
-        // Placeholder for buy order logic
-        // Example: OrderSend(...);
+        PlaceBuyOrder();
     }
 }
 
@@ -192,13 +221,13 @@ void DetectOrderImbalances(double buyVolume, double sellVolume)
     {
         Print("Significant Buy Imbalance Detected: Potential Upward Breakout");
         Alert("Buy Imbalance Detected: Potential Upward Breakout");
-        // Placeholder for buy order logic
+        PlaceBuyOrder();
     }
     else if (imbalanceRatio < 1.0 / ImbalanceThreshold)
     {
         Print("Significant Sell Imbalance Detected: Potential Downward Breakout");
         Alert("Sell Imbalance Detected: Potential Downward Breakout");
-        // Placeholder for sell order logic
+        PlaceSellOrder();
     }
 }
 
@@ -380,12 +409,12 @@ void PlaceOrderWithDynamicSLTP(double lot_size, double stop_loss, double take_pr
     if (signal == 1)
     {
         Print("Placing Buy Order with Dynamic SL/TP");
-        // Placeholder for buy order logic
+        PlaceBuyOrderWithSLTP(lot_size, stop_loss, take_profit);
     }
     else if (signal == -1)
     {
         Print("Placing Sell Order with Dynamic SL/TP");
-        // Placeholder for sell order logic
+        PlaceSellOrderWithSLTP(lot_size, stop_loss, take_profit);
     }
 }
 
@@ -424,22 +453,95 @@ void ExecuteTradingLogic(double starting_balance)
         return;
     }
 
-    // Monitor Depth of Market (DOM) data
-    MonitorDOM();
+    // Execute Trend Strategy if enabled
+    if (UseTrendStrategy)
+    {
+        int trendSignal = TrendFollowingCore();
+        if (trendSignal == 1)
+        {
+            PlaceBuyOrder();
+        }
+        else if (trendSignal == -1)
+        {
+            PlaceSellOrder();
+        }
+    }
 
-    // Calculate dynamic stop-loss and take-profit levels
-    double stop_loss, take_profit;
-    CalculateDynamicSLTP(stop_loss, take_profit, ATRMultiplier);
+    // Execute Scalping Strategy if enabled
+    if (UseScalpingStrategy)
+    {
+        int scalpingSignal = ScalpingModule();
+        if (scalpingSignal == 1)
+        {
+            PlaceBuyOrder();
+        }
+        else if (scalpingSignal == -1)
+        {
+            PlaceSellOrder();
+        }
+    }
 
-    // Calculate lot size with potential recovery adjustment
-    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-    double stop_loss_pips = stop_loss / point;
-    double lot_size = CalculateRecoveryLotSize(stop_loss_pips, starting_balance);
+    // Execute Counter-Trend Strategy if enabled
+    if (UseCounterTrendStrategy)
+    {
+        int counterTrendSignal = CounterTrendTrading();
+        if (counterTrendSignal == 1)
+        {
+            PlaceBuyOrder();
+        }
+        else if (counterTrendSignal == -1)
+        {
+            PlaceSellOrder();
+        }
+    }
+}
 
-    // Place order with calculated parameters
-    PlaceOrderWithDynamicSLTP(lot_size, stop_loss, take_profit);
+//+------------------------------------------------------------------+
+//| Placeholder for Order Placement Functions                        |
+//+------------------------------------------------------------------+
+void PlaceBuyOrder()
+{
+    double stop_loss_pips = 20; // Example value
+    double take_profit_pips = 40; // Example value
+    double lot_size = CalculateLotSize(RiskPercent, stop_loss_pips);
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double sl = price - stop_loss_pips * _Point;
+    double tp = price + take_profit_pips * _Point;
 
-    // Log trade details for reporting
+    trade.Buy(lot_size, _Symbol, price, sl, tp, "Buy Order");
+    LogTradeDetails(lot_size, stop_loss_pips, take_profit_pips);
+}
+
+void PlaceSellOrder()
+{
+    double stop_loss_pips = 20; // Example value
+    double take_profit_pips = 40; // Example value
+    double lot_size = CalculateLotSize(RiskPercent, stop_loss_pips);
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double sl = price + stop_loss_pips * _Point;
+    double tp = price - take_profit_pips * _Point;
+
+    trade.Sell(lot_size, _Symbol, price, sl, tp, "Sell Order");
+    LogTradeDetails(lot_size, stop_loss_pips, take_profit_pips);
+}
+
+void PlaceBuyOrderWithSLTP(double lot_size, double stop_loss, double take_profit)
+{
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double sl = price - stop_loss;
+    double tp = price + take_profit;
+
+    trade.Buy(lot_size, _Symbol, price, sl, tp, "Buy Order with Dynamic SL/TP");
+    LogTradeDetails(lot_size, stop_loss, take_profit);
+}
+
+void PlaceSellOrderWithSLTP(double lot_size, double stop_loss, double take_profit)
+{
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double sl = price + stop_loss;
+    double tp = price - take_profit;
+
+    trade.Sell(lot_size, _Symbol, price, sl, tp, "Sell Order with Dynamic SL/TP");
     LogTradeDetails(lot_size, stop_loss, take_profit);
 }
 
@@ -571,6 +673,88 @@ int CounterTrendTrading()
 }
 
 //+------------------------------------------------------------------+
+//| Validate Input Parameters                                        |
+//+------------------------------------------------------------------+
+void ValidateInputs()
+{
+    // Validate RiskPercent
+    if (RiskPercent <= 0.0 || RiskPercent > 10.0)
+    {
+        Alert("RiskPercent must be between 0.1 and 10.0");
+        return;
+    }
+
+    // Validate MaxDrawdownPercent
+    if (MaxDrawdownPercent <= 0.0 || MaxDrawdownPercent > 100.0)
+    {
+        Alert("MaxDrawdownPercent must be between 0.1 and 100.0");
+        return;
+    }
+
+    // Validate RecoveryFactor
+    if (RecoveryFactor < 1.0 || RecoveryFactor > 2.0)
+    {
+        Alert("RecoveryFactor must be between 1.0 and 2.0");
+        return;
+    }
+
+    // Validate ATRMultiplier
+    if (ATRMultiplier <= 0.0 || ATRMultiplier > 5.0)
+    {
+        Alert("ATRMultiplier must be between 0.1 and 5.0");
+        return;
+    }
+
+    // Validate ScalpingThreshold
+    if (ScalpingThreshold <= 0.0 || ScalpingThreshold > 2.0)
+    {
+        Alert("ScalpingThreshold must be between 0.1 and 2.0");
+        return;
+    }
+
+    // Validate OverboughtLevel
+    if (OverboughtLevel <= 50.0 || OverboughtLevel > 100.0)
+    {
+        Alert("OverboughtLevel must be between 50.1 and 100.0");
+        return;
+    }
+
+    // Validate OversoldLevel
+    if (OversoldLevel < 0.0 || OversoldLevel >= 50.0)
+    {
+        Alert("OversoldLevel must be between 0.0 and 49.9");
+        return;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Main OnInit Function                                             |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    // Validate input parameters
+    ValidateInputs();
+
+    // Print current configurations to the journal/log
+    Print("Configuration: ");
+    Print("  UseTrendStrategy=", UseTrendStrategy);
+    Print("  UseScalpingStrategy=", UseScalpingStrategy);
+    Print("  UseCounterTrendStrategy=", UseCounterTrendStrategy);
+    Print("  RiskPercent=", RiskPercent);
+    Print("  MaxDrawdownPercent=", MaxDrawdownPercent);
+    Print("  Aggressiveness=", Aggressiveness);
+    Print("  RecoveryFactor=", RecoveryFactor);
+    Print("  ATRMultiplier=", ATRMultiplier);
+    Print("  ScalpingThreshold=", ScalpingThreshold);
+    Print("  OverboughtLevel=", OverboughtLevel);
+    Print("  OversoldLevel=", OversoldLevel);
+
+    // Additional initialization code can be added here
+
+    return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
 //| Main OnTick Function                                             |
 //+------------------------------------------------------------------+
 void OnTick()
@@ -581,17 +765,23 @@ void OnTick()
     ExecuteTradingLogic(starting_balance);
 
     // Generate counter-trend signals
-    GenerateCounterTrendSignals();
+    if (UseCounterTrendStrategy)
+    {
+        GenerateCounterTrendSignals();
+    }
 
     // Monitor order flow
     MonitorOrderFlow();
 
     // Additional strategies can be called here
-    // int scalping_signal = ScalpingModule();
-    // if (scalping_signal != 0)
-    // {
-    //     // Implement scalping trade logic
-    // }
+    if (UseScalpingStrategy)
+    {
+        int scalping_signal = ScalpingModule();
+        if (scalping_signal != 0)
+        {
+            // Implement scalping trade logic
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
