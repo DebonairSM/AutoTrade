@@ -1,13 +1,12 @@
 //+------------------------------------------------------------------+
 //| QuantumTraderAI.mq5                                              |
-//| Your Name or Company                                             |
+//| VSol Software                                                    |
 //+------------------------------------------------------------------+
 #property copyright "VSol Software"
 #property version   "1.00"
 #property strict
 
 #include <Trade\Trade.mqh>
-//#include <Errors.mqh>
 
 //+------------------------------------------------------------------+
 //| Input parameters                                                 |
@@ -49,13 +48,21 @@ CTrade trade;
 double GetIndicatorValue(int handle, int bufferIndex, int shift = 0)
 {
     double value[];
+    if (handle == INVALID_HANDLE)
+    {
+        Print("Invalid indicator handle");
+        return 0;
+    }
+
     if (CopyBuffer(handle, bufferIndex, shift, 1, value) > 0)
     {
         return value[0];
     }
     else
     {
-        Print("Error copying data from indicator handle: ", GetLastError());
+        int error = GetLastError();
+        Print("Error copying data from indicator handle: ", error);
+        ResetLastError();
         return 0;
     }
 }
@@ -66,37 +73,91 @@ double GetIndicatorValue(int handle, int bufferIndex, int shift = 0)
 double CalculateStochastic(int kPeriod, int dPeriod, int slowing, int shift = 0)
 {
     int handle = iStochastic(_Symbol, PERIOD_CURRENT, kPeriod, dPeriod, slowing, MODE_SMA, STO_LOWHIGH);
-    return GetIndicatorValue(handle, 0, shift); // %K line is buffer 0
+    if (handle == INVALID_HANDLE)
+    {
+        int error = GetLastError();
+        Print("Failed to create Stochastic indicator handle: ", error);
+        ResetLastError();
+        return 0;
+    }
+    double value = GetIndicatorValue(handle, 0, shift); // %K line is buffer 0
+    IndicatorRelease(handle);
+    return value;
 }
 
 double CalculateCCI(int period, int shift = 0)
 {
     int handle = iCCI(_Symbol, PERIOD_CURRENT, period, PRICE_TYPICAL);
-    return GetIndicatorValue(handle, 0, shift);
+    if (handle == INVALID_HANDLE)
+    {
+        int error = GetLastError();
+        Print("Failed to create CCI indicator handle: ", error);
+        ResetLastError();
+        return 0;
+    }
+    double value = GetIndicatorValue(handle, 0, shift);
+    IndicatorRelease(handle);
+    return value;
 }
 
 double CalculateSMA(int period, int shift = 0)
 {
     int handle = iMA(_Symbol, PERIOD_CURRENT, period, 0, MODE_SMA, PRICE_CLOSE);
-    return GetIndicatorValue(handle, 0, shift);
+    if (handle == INVALID_HANDLE)
+    {
+        int error = GetLastError();
+        Print("Failed to create SMA indicator handle: ", error);
+        ResetLastError();
+        return 0;
+    }
+    double value = GetIndicatorValue(handle, 0, shift);
+    IndicatorRelease(handle);
+    return value;
 }
 
 double CalculateEMA(int period, int shift = 0)
 {
     int handle = iMA(_Symbol, PERIOD_CURRENT, period, 0, MODE_EMA, PRICE_CLOSE);
-    return GetIndicatorValue(handle, 0, shift);
+    if (handle == INVALID_HANDLE)
+    {
+        int error = GetLastError();
+        Print("Failed to create EMA indicator handle: ", error);
+        ResetLastError();
+        return 0;
+    }
+    double value = GetIndicatorValue(handle, 0, shift);
+    IndicatorRelease(handle);
+    return value;
 }
 
 double CalculateRSI(int period, int shift = 0)
 {
     int handle = iRSI(_Symbol, PERIOD_CURRENT, period, PRICE_CLOSE);
-    return GetIndicatorValue(handle, 0, shift);
+    if (handle == INVALID_HANDLE)
+    {
+        int error = GetLastError();
+        Print("Failed to create RSI indicator handle: ", error);
+        ResetLastError();
+        return 0;
+    }
+    double value = GetIndicatorValue(handle, 0, shift);
+    IndicatorRelease(handle);
+    return value;
 }
 
 double CalculateATR(int period, int shift = 0)
 {
     int handle = iATR(_Symbol, PERIOD_CURRENT, period);
-    return GetIndicatorValue(handle, 0, shift);
+    if (handle == INVALID_HANDLE)
+    {
+        int error = GetLastError();
+        Print("Failed to create ATR indicator handle: ", error);
+        ResetLastError();
+        return 0;
+    }
+    double value = GetIndicatorValue(handle, 0, shift);
+    IndicatorRelease(handle);
+    return value;
 }
 
 //+------------------------------------------------------------------+
@@ -118,7 +179,14 @@ bool IsOversold(double stochastic, double cci)
 bool GetMarketDepthData(MqlBookInfo &book[])
 {
     int depth = MarketBookGet(_Symbol, book);
-    return (depth > 0);
+    if (depth <= 0)
+    {
+        int error = GetLastError();
+        Print("MarketBookGet() failed with error: ", error);
+        ResetLastError();
+        return false;
+    }
+    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -126,6 +194,12 @@ bool GetMarketDepthData(MqlBookInfo &book[])
 //+------------------------------------------------------------------+
 bool CheckDOMLiquidityGaps(MqlBookInfo &book[], int depth)
 {
+    if (depth <= 0)
+    {
+        Print("No depth of market data available.");
+        return false;
+    }
+
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
     double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
@@ -151,7 +225,10 @@ void GenerateCounterTrendSignals()
 
     MqlBookInfo book[32];
     if (!GetMarketDepthData(book))
+    {
+        Print("Skipping Counter-Trend Signals due to missing market depth data.");
         return;
+    }
 
     int depth = ArraySize(book);
 
@@ -173,6 +250,12 @@ void GenerateCounterTrendSignals()
 void ProcessDOMData(const MqlBookInfo &book_info[], int book_count, double &buyVolume, double &sellVolume,
                     double &buyVolumeAtLevel[], double &sellVolumeAtLevel[], double &priceLevels[], int &levelCount)
 {
+    if (book_count <= 0)
+    {
+        Print("No DOM data to process.");
+        return;
+    }
+
     double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
 
     for (int i = 0; i < book_count; i++)
@@ -215,7 +298,13 @@ void ProcessDOMData(const MqlBookInfo &book_info[], int book_count, double &buyV
 //+------------------------------------------------------------------+
 void DetectOrderImbalances(double buyVolume, double sellVolume)
 {
-    double imbalanceRatio = (sellVolume > 0.0) ? buyVolume / sellVolume : 0.0;
+    if (sellVolume <= 0.0)
+    {
+        Print("No sell volume data available for imbalance detection.");
+        return;
+    }
+
+    double imbalanceRatio = buyVolume / sellVolume;
 
     if (imbalanceRatio > ImbalanceThreshold)
     {
@@ -288,6 +377,17 @@ void MonitorDOM()
         // Identify liquidity pools
         IdentifyLiquidityPools(buyVolumeAtLevel, sellVolumeAtLevel, priceLevels, levelCount);
     }
+    else if (book_count == 0)
+    {
+        Print("No DOM data available.");
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("MarketBookGet() failed with error: ", error);
+        ResetLastError();
+        // Skip this feature
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -301,6 +401,13 @@ double CalculateLotSize(double risk_percent, double stop_loss_pips)
     double tick_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
     double min_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
     double max_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+
+    // Avoid division by zero
+    if (tick_value == 0 || tick_size == 0)
+    {
+        Print("Tick value or tick size is zero. Cannot calculate lot size.");
+        return min_lot;
+    }
 
     // Calculate the risk amount in account currency
     double risk_amount = account_equity * risk_percent / 100.0;
@@ -391,6 +498,14 @@ void CalculateDynamicSLTP(double &stop_loss, double &take_profit, double atr_mul
 {
     // Calculate ATR for volatility measurement
     double atr = CalculateATR(14); // 14-period ATR
+
+    if (atr <= 0)
+    {
+        Print("ATR calculation failed or returned zero. Using default SL/TP values.");
+        stop_loss = 20 * _Point; // Default stop loss
+        take_profit = 40 * _Point; // Default take profit
+        return;
+    }
 
     // Define SL/TP based on ATR
     stop_loss = atr * atr_multiplier;
@@ -555,13 +670,19 @@ int TrendFollowingCore()
     double rsi = CalculateRSI(14);
     double atr = CalculateATR(14); // Calculate ATR for volatility measurement
 
+    if (atr <= 0)
+    {
+        Print("ATR calculation failed or returned zero. Skipping trend following signal.");
+        return 0;
+    }
+
     // Determine trend and generate signals
-    if (ema > sma && rsi > 50 && atr > 0.0001)
+    if (ema > sma && rsi > 50)
     {
         Print("Trend Following: Buy Signal");
         return 1; // Buy signal
     }
-    else if (ema < sma && rsi < 50 && atr > 0.0001)
+    else if (ema < sma && rsi < 50)
     {
         Print("Trend Following: Sell Signal");
         return -1; // Sell signal
@@ -614,6 +735,17 @@ void MonitorOrderFlow()
             // Signal potential downward price movement
         }
     }
+    else if (book_count == 0)
+    {
+        Print("No order flow data available.");
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("MarketBookGet() failed with error: ", error);
+        ResetLastError();
+        // Skip this feature
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -623,7 +755,10 @@ int ScalpingModule()
 {
     MqlBookInfo book[32];
     if (!GetMarketDepthData(book))
+    {
+        Print("Skipping Scalping Module due to missing market depth data.");
         return 0; // Hold if no data
+    }
 
     int depth = ArraySize(book);
     if (IsFavorableScalpingCondition(book, depth))
@@ -655,7 +790,10 @@ int CounterTrendTrading()
 
     MqlBookInfo book[32];
     if (!GetMarketDepthData(book))
+    {
+        Print("Skipping Counter-Trend Trading due to missing market depth data.");
         return 0; // Hold if no data
+    }
 
     int depth = ArraySize(book);
 
@@ -681,6 +819,7 @@ void ValidateInputs()
     if (RiskPercent <= 0.0 || RiskPercent > 10.0)
     {
         Alert("RiskPercent must be between 0.1 and 10.0");
+        ExpertRemove();
         return;
     }
 
@@ -688,6 +827,7 @@ void ValidateInputs()
     if (MaxDrawdownPercent <= 0.0 || MaxDrawdownPercent > 100.0)
     {
         Alert("MaxDrawdownPercent must be between 0.1 and 100.0");
+        ExpertRemove();
         return;
     }
 
@@ -695,6 +835,7 @@ void ValidateInputs()
     if (RecoveryFactor < 1.0 || RecoveryFactor > 2.0)
     {
         Alert("RecoveryFactor must be between 1.0 and 2.0");
+        ExpertRemove();
         return;
     }
 
@@ -702,6 +843,7 @@ void ValidateInputs()
     if (ATRMultiplier <= 0.0 || ATRMultiplier > 5.0)
     {
         Alert("ATRMultiplier must be between 0.1 and 5.0");
+        ExpertRemove();
         return;
     }
 
@@ -709,6 +851,7 @@ void ValidateInputs()
     if (ScalpingThreshold <= 0.0 || ScalpingThreshold > 2.0)
     {
         Alert("ScalpingThreshold must be between 0.1 and 2.0");
+        ExpertRemove();
         return;
     }
 
@@ -716,6 +859,7 @@ void ValidateInputs()
     if (OverboughtLevel <= 50.0 || OverboughtLevel > 100.0)
     {
         Alert("OverboughtLevel must be between 50.1 and 100.0");
+        ExpertRemove();
         return;
     }
 
@@ -723,6 +867,7 @@ void ValidateInputs()
     if (OversoldLevel < 0.0 || OversoldLevel >= 50.0)
     {
         Alert("OversoldLevel must be between 0.0 and 49.9");
+        ExpertRemove();
         return;
     }
 }
@@ -790,4 +935,5 @@ void OnTick()
 void OnDeinit(const int reason)
 {
     Print("Deinitializing EA...");
+    // Additional cleanup code can be added here
 }
