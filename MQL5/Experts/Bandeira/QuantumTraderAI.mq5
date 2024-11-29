@@ -7,7 +7,7 @@
 #property strict
 
 #include <Trade\Trade.mqh>
-#include <Errors.mqh>
+//#include <Errors.mqh>
 
 //+------------------------------------------------------------------+
 //| Input parameters                                                 |
