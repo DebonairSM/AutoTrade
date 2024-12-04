@@ -3,7 +3,7 @@
 //| VSol Software                                                    |
 //+------------------------------------------------------------------+
 #property copyright "VSol Software"
-#property version   "1.06"
+#property version   "1.07"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -13,58 +13,52 @@
 //+------------------------------------------------------------------+
 
 // Strategy Activation
+input group "Strategy Settings"
 input bool UseTrendStrategy = true;         // Enable or disable the Trend Following strategy
+input ENUM_TIMEFRAMES Timeframe = PERIOD_H1; // Default timeframe
 
 // Risk Management
+input group "Risk Management"
 input double RiskPercent = 2.0;             // Percentage of account equity risked per trade
-input double MaxDrawdownPercent = 15.0;     // Maximum drawdown percentage allowed before trading halts
+input double MaxDrawdownPercent = 15.0;     // Maximum drawdown percentage allowed
+input double Aggressiveness = 1.0;          // Trade aggressiveness factor
+input double RecoveryFactor = 1.2;          // Recovery mode lot size multiplier
+input double ATRMultiplier = 1.0;           // ATR multiplier for dynamic SL/TP
+input double fixedStopLossPips = 20.0;      // Fixed Stop Loss in pips
 
-// Execution Settings
-input double Aggressiveness = 1.0;          // Factor to adjust trade aggressiveness
-input double RecoveryFactor = 1.2;          // Multiplier for lot size in recovery mode to regain losses
-input double ATRMultiplier = 1.0;           // Multiplier for ATR to set dynamic SL/TP
-
-// ADX Parameters
+// Trend Indicators
+input group "Trend Indicators"
 input int ADXPeriod = 14;                   // ADX indicator period
-input double TrendADXThreshold = 25.0;      // ADX threshold for Trend Following strategy
+input double TrendADXThreshold = 25.0;      // ADX threshold for trend
+input double RSIUpperThreshold = 70.0;      // RSI overbought level
+input double RSILowerThreshold = 30.0;      // RSI oversold level
 
-// Time Filters
-input string TradingStartTime = "00:00";    // Start of trading time (expanded)
-input string TradingEndTime = "23:59";      // End of trading time (expanded)
+// Trading Hours
+input group "Trading Time Settings"
+input string TradingStartTime = "00:00";    // Trading session start time
+input string TradingEndTime = "23:59";      // Trading session end time
 
-// Trailing Stop Settings
-input bool UseTrailingStop = false;          // Enable or disable trailing stops
+// Position Management
+input group "Position Management"
+input bool UseTrailingStop = false;         // Enable trailing stops
 input double TrailingStopPips = 20.0;       // Trailing stop distance in pips
+input bool UseBreakeven = true;             // Enable breakeven
+input double BreakevenActivationPips = 30.0;// Breakeven activation distance
+input double BreakevenOffsetPips = 5.0;     // Breakeven offset distance
 
-// Breakeven Settings
-input bool UseBreakeven = true;             // Enable or disable breakeven mechanism
-input double BreakevenActivationPips = 30.0;// Profit in pips to activate breakeven
-input double BreakevenOffsetPips = 5.0;     // Offset in pips from entry price when moving SL to breakeven
+// Order Flow Analysis
+input group "Order Flow Settings"
+input bool UseDOMAnalysis = false;          // Enable DOM analysis
+input double LiquidityThreshold = 50.0;     // Liquidity pool threshold
+input double ImbalanceThreshold = 1.5;      // Order flow imbalance ratio
 
-// DOM Analysis Settings
-input bool UseDOMAnalysis = false;          // Disable DOM analysis to reduce constraints
-input double LiquidityThreshold = 50.0;     // Threshold volume to identify liquidity pools
-input double ImbalanceThreshold = 1.5;      // Ratio to detect order flow imbalances
-
-// Timeframe Setting
-input ENUM_TIMEFRAMES Timeframe = PERIOD_H1; // Default to 1-Hour timeframe
-
-// Stop Loss Settings
-input double fixedStopLossPips = 20.0;    // Fixed Stop Loss in pips
-
-// RSI Overbought and Oversold Levels
-input double RSIUpperThreshold = 70.0;      // RSI level above which the market is considered overbought
-input double RSILowerThreshold = 30.0;      // RSI level below which the market is considered oversold
-
-//+------------------------------------------------------------------+
-//| Pattern Recognition Parameters                                    |
-//+------------------------------------------------------------------+
-input group "Pattern Recognition Settings"
+// Pattern Recognition
+input group "Pattern Recognition"
 input int EMA_PERIODS_SHORT = 20;           // Short EMA period
 input int EMA_PERIODS_MEDIUM = 50;          // Medium EMA period
 input int EMA_PERIODS_LONG = 200;           // Long EMA period
-input int PATTERN_LOOKBACK = 5;             // Number of periods to look back
-input double GOLDEN_CROSS_THRESHOLD = 0.001; // Golden cross threshold (points)
+input int PATTERN_LOOKBACK = 5;             // Pattern lookback periods
+input double GOLDEN_CROSS_THRESHOLD = 0.001; // Golden cross threshold
 
 //+------------------------------------------------------------------+
 //| Global Variables and Objects                                     |
@@ -934,41 +928,182 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
-//| Check for Bullish Candle Pattern                                 |
+//| Candle Pattern Analysis Functions                                |
 //+------------------------------------------------------------------+
-bool IsBullishCandlePattern()
+
+// Structure to hold candle data
+struct CandleData {
+    double open;
+    double high;
+    double low;
+    double close;
+    double body;
+    double upperWick;
+    double lowerWick;
+    bool isBullish;
+};
+
+//+------------------------------------------------------------------+
+//| Get Normalized Candle Data                                       |
+//+------------------------------------------------------------------+
+CandleData GetCandleData(int shift)
 {
-    // Example: Check for a bullish engulfing pattern
-    double open = iOpen(_Symbol, Timeframe, 1);
-    double close = iClose(_Symbol, Timeframe, 1);
-    double prevOpen = iOpen(_Symbol, Timeframe, 2);
-    double prevClose = iClose(_Symbol, Timeframe, 2);
-
-    if (close > open && open < prevClose && close > prevOpen)
-    {
-        return true;
-    }
-
-    return false;
+    CandleData candle;
+    
+    candle.open = iOpen(_Symbol, Timeframe, shift);
+    candle.high = iHigh(_Symbol, Timeframe, shift);
+    candle.low = iLow(_Symbol, Timeframe, shift);
+    candle.close = iClose(_Symbol, Timeframe, shift);
+    
+    candle.isBullish = (candle.close > candle.open);
+    
+    // Calculate body and wick sizes
+    candle.body = MathAbs(candle.close - candle.open);
+    candle.upperWick = candle.high - (candle.isBullish ? candle.close : candle.open);
+    candle.lowerWick = (candle.isBullish ? candle.open : candle.close) - candle.low;
+    
+    return candle;
 }
 
 //+------------------------------------------------------------------+
-//| Check for Bearish Candle Pattern                                 |
+//| Check for Bullish Candle Pattern                                |
+//+------------------------------------------------------------------+
+bool IsBullishCandlePattern()
+{
+    CandleData current = GetCandleData(1);
+    CandleData previous = GetCandleData(2);
+    
+    // Get average candle size for reference
+    double avgCandleSize = 0;
+    for(int i = 1; i <= 10; i++)
+    {
+        CandleData temp = GetCandleData(i);
+        avgCandleSize += temp.body;
+    }
+    avgCandleSize /= 10;
+    
+    // 1. Bullish Engulfing
+    bool isBullishEngulfing = 
+        current.isBullish &&
+        !previous.isBullish &&
+        current.open < previous.close &&
+        current.close > previous.open &&
+        current.body > previous.body * 1.2; // Body should be significantly larger
+    
+    // 2. Morning Star
+    CandleData twoDaysAgo = GetCandleData(3);
+    bool isMorningStar =
+        !twoDaysAgo.isBullish &&
+        current.isBullish &&
+        previous.body < avgCandleSize * 0.5 && // Small body in middle
+        twoDaysAgo.body > avgCandleSize &&
+        current.body > avgCandleSize &&
+        current.close > (twoDaysAgo.open + twoDaysAgo.close) / 2;
+    
+    // 3. Hammer
+    bool isHammer = 
+        current.isBullish &&
+        current.lowerWick > current.body * 2 && // Long lower wick
+        current.upperWick < current.body * 0.2 && // Minimal upper wick
+        current.body > avgCandleSize * 0.5;
+    
+    // 4. Bullish Harami
+    bool isBullishHarami =
+        current.isBullish &&
+        !previous.isBullish &&
+        current.body < previous.body * 0.6 &&
+        current.high < previous.open &&
+        current.low > previous.close;
+    
+    // Log pattern detection
+    if(isBullishEngulfing) Print("Bullish Engulfing Pattern Detected");
+    if(isMorningStar) Print("Morning Star Pattern Detected");
+    if(isHammer) Print("Hammer Pattern Detected");
+    if(isBullishHarami) Print("Bullish Harami Pattern Detected");
+    
+    return (isBullishEngulfing || isMorningStar || isHammer || isBullishHarami);
+}
+
+//+------------------------------------------------------------------+
+//| Check for Bearish Candle Pattern                                |
 //+------------------------------------------------------------------+
 bool IsBearishCandlePattern()
 {
-    // Example: Check for a bearish engulfing pattern
-    double open = iOpen(_Symbol, Timeframe, 1);
-    double close = iClose(_Symbol, Timeframe, 1);
-    double prevOpen = iOpen(_Symbol, Timeframe, 2);
-    double prevClose = iClose(_Symbol, Timeframe, 2);
-
-    if (close < open && open > prevClose && close < prevOpen)
+    CandleData current = GetCandleData(1);
+    CandleData previous = GetCandleData(2);
+    
+    // Get average candle size for reference
+    double avgCandleSize = 0;
+    for(int i = 1; i <= 10; i++)
     {
-        return true;
+        CandleData temp = GetCandleData(i);
+        avgCandleSize += temp.body;
     }
+    avgCandleSize /= 10;
+    
+    // 1. Bearish Engulfing
+    bool isBearishEngulfing = 
+        !current.isBullish &&
+        previous.isBullish &&
+        current.open > previous.close &&
+        current.close < previous.open &&
+        current.body > previous.body * 1.2;
+    
+    // 2. Evening Star
+    CandleData twoDaysAgo = GetCandleData(3);
+    bool isEveningStar =
+        twoDaysAgo.isBullish &&
+        !current.isBullish &&
+        previous.body < avgCandleSize * 0.5 &&
+        twoDaysAgo.body > avgCandleSize &&
+        current.body > avgCandleSize &&
+        current.close < (twoDaysAgo.open + twoDaysAgo.close) / 2;
+    
+    // 3. Shooting Star
+    bool isShootingStar = 
+        !current.isBullish &&
+        current.upperWick > current.body * 2 &&
+        current.lowerWick < current.body * 0.2 &&
+        current.body > avgCandleSize * 0.5;
+    
+    // 4. Bearish Harami
+    bool isBearishHarami =
+        !current.isBullish &&
+        previous.isBullish &&
+        current.body < previous.body * 0.6 &&
+        current.high < previous.close &&
+        current.low > previous.open;
+    
+    // Log pattern detection
+    if(isBearishEngulfing) Print("Bearish Engulfing Pattern Detected");
+    if(isEveningStar) Print("Evening Star Pattern Detected");
+    if(isShootingStar) Print("Shooting Star Pattern Detected");
+    if(isBearishHarami) Print("Bearish Harami Pattern Detected");
+    
+    return (isBearishEngulfing || isEveningStar || isShootingStar || isBearishHarami);
+}
 
-    return false;
+//+------------------------------------------------------------------+
+//| Count Current Orders by Type                                      |
+//+------------------------------------------------------------------+
+int CountOrders(int type)
+{
+    int count = 0;
+    int total = PositionsTotal();
+    
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(PositionSelectByTicket(ticket))
+        {
+            if(PositionGetInteger(POSITION_TYPE) == type && 
+               PositionGetString(POSITION_SYMBOL) == _Symbol)
+            {
+                count++;
+            }
+        }
+    }
+    return count;
 }
 
 //+------------------------------------------------------------------+
@@ -976,22 +1111,29 @@ bool IsBearishCandlePattern()
 //+------------------------------------------------------------------+
 void PlaceAdditionalBuyOrder()
 {
+    // Check if we already have maximum allowed positions
+    if(CountOrders(POSITION_TYPE_BUY) >= 3)
+    {
+        Print("Maximum number of buy orders reached (3)");
+        return;
+    }
+
     double stop_loss, take_profit;
     CalculateDynamicSLTP(stop_loss, take_profit, ATRMultiplier);
 
     double lot_size = CalculateDynamicLotSize(stop_loss / _Point);
     double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    double limit_price = price - 10 * _Point; // Place limit order 10 points below current price
+    double limit_price = price - 10 * _Point;
     double sl = limit_price - stop_loss;
     double tp = limit_price + take_profit;
 
-    // Normalize SL and TP
     int price_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
     sl = NormalizeDouble(sl, price_digits);
     tp = NormalizeDouble(tp, price_digits);
     limit_price = NormalizeDouble(limit_price, price_digits);
 
-    if (trade.BuyLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "Additional Buy Limit Order"))
+    if(trade.BuyLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, 
+       "Additional Buy Limit Order #" + IntegerToString(CountOrders(POSITION_TYPE_BUY) + 1)))
     {
         LogTradeDetails(lot_size, stop_loss, take_profit);
     }
@@ -1008,23 +1150,29 @@ void PlaceAdditionalBuyOrder()
 //+------------------------------------------------------------------+
 void PlaceAdditionalSellOrder()
 {
-    double atr_multiplier = ATRMultiplier; // Use the input parameter
+    // Check if we already have maximum allowed positions
+    if(CountOrders(POSITION_TYPE_SELL) >= 3)
+    {
+        Print("Maximum number of sell orders reached (3)");
+        return;
+    }
+
     double stop_loss, take_profit;
-    CalculateDynamicSLTP(stop_loss, take_profit, atr_multiplier);
+    CalculateDynamicSLTP(stop_loss, take_profit, ATRMultiplier);
 
     double lot_size = CalculateDynamicLotSize(stop_loss / _Point);
     double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double limit_price = price + 10 * _Point; // Place limit order 10 points above current price
+    double limit_price = price + 10 * _Point;
     double sl = limit_price + stop_loss;
     double tp = limit_price - take_profit;
 
-    // Normalize SL and TP
     int price_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
     sl = NormalizeDouble(sl, price_digits);
     tp = NormalizeDouble(tp, price_digits);
     limit_price = NormalizeDouble(limit_price, price_digits);
 
-    if (trade.SellLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "Additional Sell Limit Order"))
+    if(trade.SellLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0,
+       "Additional Sell Limit Order #" + IntegerToString(CountOrders(POSITION_TYPE_SELL) + 1)))
     {
         LogTradeDetails(lot_size, stop_loss, take_profit);
     }
