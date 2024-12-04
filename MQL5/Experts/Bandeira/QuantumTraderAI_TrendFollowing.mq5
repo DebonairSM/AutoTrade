@@ -58,6 +58,12 @@ input double fixedStopLossPips = 20.0;    // Fixed Stop Loss in pips
 CTrade trade;
 double starting_balance;
 
+// Add a minimum price change threshold (in points)
+double MinPriceChangeThreshold = 10;
+
+// Store the last modification price
+double LastModificationPrice = 0;
+
 //+------------------------------------------------------------------+
 //| Helper function to get indicator value                           |
 //+------------------------------------------------------------------+
@@ -499,8 +505,14 @@ void ApplyTrailingStop(ulong ticket, int type, double open_price, double stop_lo
 
         if (new_stop_loss > stop_loss)
         {
-            trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP));
-            Print("Trailing Stop Updated for Buy Position ", ticket);
+            if (MathAbs(price - LastModificationPrice) >= MinPriceChangeThreshold * _Point)
+            {
+                if (trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
+                {
+                    LastModificationPrice = price; // Update the last modification price
+                    Print("Trailing Stop Updated for Buy Position ", ticket);
+                }
+            }
         }
     }
     else if (type == POSITION_TYPE_SELL)
@@ -510,8 +522,14 @@ void ApplyTrailingStop(ulong ticket, int type, double open_price, double stop_lo
 
         if (new_stop_loss < stop_loss || stop_loss == 0.0)
         {
-            trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP));
-            Print("Trailing Stop Updated for Sell Position ", ticket);
+            if (MathAbs(price - LastModificationPrice) >= MinPriceChangeThreshold * _Point)
+            {
+                if (trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
+                {
+                    LastModificationPrice = price; // Update the last modification price
+                    Print("Trailing Stop Updated for Sell Position ", ticket);
+                }
+            }
         }
     }
 }
@@ -532,8 +550,14 @@ void ApplyBreakeven(ulong ticket, int type, double open_price, double stop_loss)
             double new_stop_loss = open_price + offset;
             if (stop_loss < new_stop_loss)
             {
-                trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP));
-                Print("Breakeven Activated for Buy Position ", ticket);
+                if (MathAbs(price - LastModificationPrice) >= MinPriceChangeThreshold * _Point)
+                {
+                    if (trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
+                    {
+                        LastModificationPrice = price; // Update the last modification price
+                        Print("Breakeven Activated for Buy Position ", ticket);
+                    }
+                }
             }
         }
     }
@@ -545,8 +569,14 @@ void ApplyBreakeven(ulong ticket, int type, double open_price, double stop_loss)
             double new_stop_loss = open_price - offset;
             if (stop_loss > new_stop_loss || stop_loss == 0.0)
             {
-                trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP));
-                Print("Breakeven Activated for Sell Position ", ticket);
+                if (MathAbs(price - LastModificationPrice) >= MinPriceChangeThreshold * _Point)
+                {
+                    if (trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
+                    {
+                        LastModificationPrice = price; // Update the last modification price
+                        Print("Breakeven Activated for Sell Position ", ticket);
+                    }
+                }
             }
         }
     }
