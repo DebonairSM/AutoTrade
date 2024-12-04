@@ -3,7 +3,7 @@
 //| VSol Software                                                    |
 //+------------------------------------------------------------------+
 #property copyright "VSol Software"
-#property version   "1.02"
+#property version   "1.06"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -26,7 +26,7 @@ input double ATRMultiplier = 1.0;           // Multiplier for ATR to set dynamic
 
 // ADX Parameters
 input int ADXPeriod = 14;                   // ADX indicator period
-input double TrendADXThreshold = 15.0;      // ADX threshold for Trend Following strategy
+input double TrendADXThreshold = 25.0;      // ADX threshold for Trend Following strategy
 
 // Time Filters
 input string TradingStartTime = "00:00";    // Start of trading time (expanded)
@@ -51,6 +51,20 @@ input ENUM_TIMEFRAMES Timeframe = PERIOD_H1; // Default to 1-Hour timeframe
 
 // Stop Loss Settings
 input double fixedStopLossPips = 20.0;    // Fixed Stop Loss in pips
+
+// RSI Overbought and Oversold Levels
+input double RSIUpperThreshold = 70.0;      // RSI level above which the market is considered overbought
+input double RSILowerThreshold = 30.0;      // RSI level below which the market is considered oversold
+
+//+------------------------------------------------------------------+
+//| Pattern Recognition Parameters                                    |
+//+------------------------------------------------------------------+
+input group "Pattern Recognition Settings"
+input int EMA_PERIODS_SHORT = 20;           // Short EMA period
+input int EMA_PERIODS_MEDIUM = 50;          // Medium EMA period
+input int EMA_PERIODS_LONG = 200;           // Long EMA period
+input int PATTERN_LOOKBACK = 5;             // Number of periods to look back
+input double GOLDEN_CROSS_THRESHOLD = 0.001; // Golden cross threshold (points)
 
 //+------------------------------------------------------------------+
 //| Global Variables and Objects                                     |
@@ -152,19 +166,35 @@ double CalculateATR(int period, int shift = 0)
     return value;
 }
 
-double CalculateADX(int period, int shift = 0)
+//+------------------------------------------------------------------+
+//| Calculate ADX, +DI, and -DI                                      |
+//+------------------------------------------------------------------+
+void CalculateADX(int period, double &adx, double &plusDI, double &minusDI)
 {
     int handle = iADX(_Symbol, Timeframe, period);
     if (handle == INVALID_HANDLE)
     {
-        int error = GetLastError();
-        Print("Failed to create ADX handle: ", error);
-        ResetLastError();
-        return 0;
+        Print("Failed to create ADX handle");
+        return;
     }
-    double value = GetIndicatorValue(handle, 0, shift); // ADX is buffer 0
+
+    double adxVal[];
+    double plusDIVal[];
+    double minusDIVal[];
+
+    ArraySetAsSeries(adxVal, true);
+    ArraySetAsSeries(plusDIVal, true);
+    ArraySetAsSeries(minusDIVal, true);
+
+    CopyBuffer(handle, 0, 0, 3, adxVal);
+    CopyBuffer(handle, 1, 0, 3, plusDIVal);
+    CopyBuffer(handle, 2, 0, 3, minusDIVal);
+
+    adx = NormalizeDouble(adxVal[0], 2);
+    plusDI = NormalizeDouble(plusDIVal[0], 2);
+    minusDI = NormalizeDouble(minusDIVal[0], 2);
+
     IndicatorRelease(handle);
-    return value;
 }
 
 //+------------------------------------------------------------------+
@@ -217,47 +247,28 @@ double CalculateLotSize(double risk_percent, double stop_loss_pips)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Recovery Lot Size                                      |
+//| Calculate Dynamic Lot Size                                       |
 //+------------------------------------------------------------------+
-double CalculateRecoveryLotSize(double stop_loss_pips)
+double CalculateDynamicLotSize(double stop_loss_points)
 {
-    // Retrieve current account equity
-    double account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
-    // Retrieve broker's minimum and maximum lot sizes
-    double min_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-    double max_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+    double account_balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double risk_amount = account_balance * (RiskPercent / 100.0);
+    double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+    double tick_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
     double lot_step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
-    // Calculate base lot size using standard risk management
-    double base_lot_size = CalculateLotSize(RiskPercent, stop_loss_pips);
-
-    // Define equity threshold for activating recovery mode
-    double equity_threshold = starting_balance * 0.8; // Example: 80% of starting balance
-    if (account_equity < equity_threshold)
+    if (tick_value == 0.0 || tick_size == 0.0 || lot_step == 0.0)
     {
-        // Increase lot size slightly for recovery, capped at 150% of base lot size
-        double recovery_lot_size = base_lot_size * RecoveryFactor;
-        recovery_lot_size = MathMin(recovery_lot_size, base_lot_size * 1.5);
-
-        // Ensure the recovery lot size is within broker constraints
-        recovery_lot_size = MathMax(min_lot, MathMin(recovery_lot_size, max_lot));
-
-        // Adjust lot size to valid volume step
-        recovery_lot_size = MathFloor(recovery_lot_size / lot_step) * lot_step;
-
-        // Ensure the adjusted lot size is not less than minimum lot
-        recovery_lot_size = MathMax(recovery_lot_size, min_lot);
-
-        // Normalize lot size to avoid floating-point issues
-        int volume_step_digits = GetVolumeStepDigits(lot_step);
-        recovery_lot_size = NormalizeDouble(recovery_lot_size, volume_step_digits);
-
-        Print("Recovery Mode Active: Adjusted Lot Size: ", recovery_lot_size);
-        return recovery_lot_size;
+        Print("Error: Invalid symbol properties for lot size calculation.");
+        return 0.0;
     }
 
-    // Return base lot size if no recovery is needed
-    return base_lot_size;
+    double lot_size = (risk_amount / stop_loss_points) / (tick_value / tick_size);
+    lot_size = MathRound(lot_size / lot_step) * lot_step;
+    lot_size = MathMax(lot_size, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
+    lot_size = MathMin(lot_size, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX));
+
+    return lot_size;
 }
 
 //+------------------------------------------------------------------+
@@ -364,15 +375,17 @@ int TrendFollowingCore()
     double sma = CalculateSMA(100); // Shortened SMA period
     double ema = CalculateEMA(20);  // Shortened EMA period
     double rsi = CalculateRSI(14);
-    double adx = CalculateADX(ADXPeriod);
+
+    double adx, plusDI, minusDI;
+    CalculateADX(ADXPeriod, adx, plusDI, minusDI);
 
     // Determine trend and generate signals
-    if (ema > sma && rsi > 50 && adx > TrendADXThreshold)
+    if (ema > sma && rsi < RSIUpperThreshold && adx > TrendADXThreshold && plusDI > minusDI)
     {
         Print("Trend Following: Buy Signal");
         return 1; // Buy signal
     }
-    else if (ema < sma && rsi < 50 && adx > TrendADXThreshold)
+    else if (ema < sma && rsi > RSILowerThreshold && adx > TrendADXThreshold && minusDI > plusDI)
     {
         Print("Trend Following: Sell Signal");
         return -1; // Sell signal
@@ -401,31 +414,33 @@ bool HasOpenPosition(int type)
 }
 
 //+------------------------------------------------------------------+
-//| Order Placement Functions                        |
+//| Order Placement Functions                                        |
 //+------------------------------------------------------------------+
 void PlaceBuyOrder()
 {
     double stop_loss, take_profit;
     CalculateDynamicSLTP(stop_loss, take_profit, ATRMultiplier);
 
-    double lot_size = CalculateRecoveryLotSize(stop_loss / _Point);
+    double lot_size = CalculateDynamicLotSize(stop_loss / _Point);
     double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    double sl = price - stop_loss;
-    double tp = price + take_profit;
+    double limit_price = price - 10 * _Point; // Place limit order 10 points below current price
+    double sl = limit_price - stop_loss;
+    double tp = limit_price + take_profit;
 
     // Normalize SL and TP
     int price_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
     sl = NormalizeDouble(sl, price_digits);
     tp = NormalizeDouble(tp, price_digits);
+    limit_price = NormalizeDouble(limit_price, price_digits);
 
-    if (trade.Buy(lot_size, _Symbol, price, sl, tp, "Buy Order with Dynamic SL/TP"))
+    if (trade.BuyLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "Buy Limit Order with Dynamic SL/TP"))
     {
         LogTradeDetails(lot_size, stop_loss, take_profit);
     }
     else
     {
         int error = GetLastError();
-        Print("Buy Order Failed with Error: ", error);
+        Print("Buy Limit Order Failed with Error: ", error);
         ResetLastError();
     }
 }
@@ -436,24 +451,26 @@ void PlaceSellOrder()
     double stop_loss, take_profit;
     CalculateDynamicSLTP(stop_loss, take_profit, atr_multiplier);
 
-    double lot_size = CalculateRecoveryLotSize(stop_loss / _Point);
+    double lot_size = CalculateDynamicLotSize(stop_loss / _Point);
     double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double sl = price + stop_loss;
-    double tp = price - take_profit;
+    double limit_price = price + 10 * _Point; // Place limit order 10 points above current price
+    double sl = limit_price + stop_loss;
+    double tp = limit_price - take_profit;
 
     // Normalize SL and TP
     int price_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
     sl = NormalizeDouble(sl, price_digits);
     tp = NormalizeDouble(tp, price_digits);
+    limit_price = NormalizeDouble(limit_price, price_digits);
 
-    if (trade.Sell(lot_size, _Symbol, price, sl, tp, "Sell Order with Dynamic SL/TP"))
+    if (trade.SellLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "Sell Limit Order with Dynamic SL/TP"))
     {
         LogTradeDetails(lot_size, stop_loss, take_profit);
     }
     else
     {
         int error = GetLastError();
-        Print("Sell Order Failed with Error: ", error);
+        Print("Sell Limit Order Failed with Error: ", error);
         ResetLastError();
     }
 }
@@ -656,11 +673,11 @@ void MonitorOrderFlow()
         // Get current RSI value
         double rsi = CalculateRSI(14);
 
-        if (imbalanceSignal == 1 && !HasOpenPosition(POSITION_TYPE_BUY) && rsi < 30)
+        if (imbalanceSignal == 1 && !HasOpenPosition(POSITION_TYPE_BUY) && rsi < RSILowerThreshold)
         {
             PlaceBuyOrder();
         }
-        else if (imbalanceSignal == -1 && !HasOpenPosition(POSITION_TYPE_SELL) && rsi > 70)
+        else if (imbalanceSignal == -1 && !HasOpenPosition(POSITION_TYPE_SELL) && rsi > RSIUpperThreshold)
         {
             PlaceSellOrder();
         }
@@ -701,18 +718,55 @@ void ExecuteTradingLogic()
     if (UseTrendStrategy)
     {
         int trendSignal = TrendFollowingCore();
-        if (trendSignal == 1 && !HasOpenPosition(POSITION_TYPE_BUY))
+        int patternSignal = IdentifyTrendPattern();
+
+        // Only trade when both trend and pattern signals align
+        if (trendSignal == 1 && patternSignal == 1)
         {
-            PlaceBuyOrder();
+            if (!HasOpenPosition(POSITION_TYPE_BUY) && !HasPendingOrder(ORDER_TYPE_BUY_LIMIT))
+            {
+                PlaceBuyOrder();
+            }
+            else if (HasOpenPosition(POSITION_TYPE_BUY) && IsBullishCandlePattern())
+            {
+                PlaceAdditionalBuyOrder();
+            }
         }
-        else if (trendSignal == -1 && !HasOpenPosition(POSITION_TYPE_SELL))
+        else if (trendSignal == -1 && patternSignal == -1)
         {
-            PlaceSellOrder();
+            if (!HasOpenPosition(POSITION_TYPE_SELL) && !HasPendingOrder(ORDER_TYPE_SELL_LIMIT))
+            {
+                PlaceSellOrder();
+            }
+            else if (HasOpenPosition(POSITION_TYPE_SELL) && IsBearishCandlePattern())
+            {
+                PlaceAdditionalSellOrder();
+            }
         }
     }
 
     // Monitor order flow
     MonitorOrderFlow();
+}
+
+//+------------------------------------------------------------------+
+//| Check for Pending Orders                                         |
+//+------------------------------------------------------------------+
+bool HasPendingOrder(int type)
+{
+    int total = OrdersTotal();
+    for (int i = 0; i < total; i++)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if (OrderSelect(ticket))
+        {
+            if (OrderGetInteger(ORDER_TYPE) == type && OrderGetString(ORDER_SYMBOL) == _Symbol)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 //+------------------------------------------------------------------+
@@ -799,6 +853,28 @@ void ValidateInputs()
         ExpertRemove();
         return;
     }
+
+    // Validate Pattern Recognition parameters
+    if (EMA_PERIODS_SHORT >= EMA_PERIODS_MEDIUM || EMA_PERIODS_MEDIUM >= EMA_PERIODS_LONG)
+    {
+        Alert("EMA periods must be in ascending order: SHORT < MEDIUM < LONG");
+        ExpertRemove();
+        return;
+    }
+
+    if (PATTERN_LOOKBACK <= 0 || PATTERN_LOOKBACK > 100)
+    {
+        Alert("PATTERN_LOOKBACK must be between 1 and 100");
+        ExpertRemove();
+        return;
+    }
+
+    if (GOLDEN_CROSS_THRESHOLD <= 0)
+    {
+        Alert("GOLDEN_CROSS_THRESHOLD must be greater than 0");
+        ExpertRemove();
+        return;
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -855,4 +931,200 @@ void OnDeinit(const int reason)
 {
     Print("Deinitializing EA...");
     // Additional cleanup code can be added here
+}
+
+//+------------------------------------------------------------------+
+//| Check for Bullish Candle Pattern                                 |
+//+------------------------------------------------------------------+
+bool IsBullishCandlePattern()
+{
+    // Example: Check for a bullish engulfing pattern
+    double open = iOpen(_Symbol, Timeframe, 1);
+    double close = iClose(_Symbol, Timeframe, 1);
+    double prevOpen = iOpen(_Symbol, Timeframe, 2);
+    double prevClose = iClose(_Symbol, Timeframe, 2);
+
+    if (close > open && open < prevClose && close > prevOpen)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check for Bearish Candle Pattern                                 |
+//+------------------------------------------------------------------+
+bool IsBearishCandlePattern()
+{
+    // Example: Check for a bearish engulfing pattern
+    double open = iOpen(_Symbol, Timeframe, 1);
+    double close = iClose(_Symbol, Timeframe, 1);
+    double prevOpen = iOpen(_Symbol, Timeframe, 2);
+    double prevClose = iClose(_Symbol, Timeframe, 2);
+
+    if (close < open && open > prevClose && close < prevOpen)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Place Additional Buy Order                                       |
+//+------------------------------------------------------------------+
+void PlaceAdditionalBuyOrder()
+{
+    double stop_loss, take_profit;
+    CalculateDynamicSLTP(stop_loss, take_profit, ATRMultiplier);
+
+    double lot_size = CalculateDynamicLotSize(stop_loss / _Point);
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double limit_price = price - 10 * _Point; // Place limit order 10 points below current price
+    double sl = limit_price - stop_loss;
+    double tp = limit_price + take_profit;
+
+    // Normalize SL and TP
+    int price_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+    sl = NormalizeDouble(sl, price_digits);
+    tp = NormalizeDouble(tp, price_digits);
+    limit_price = NormalizeDouble(limit_price, price_digits);
+
+    if (trade.BuyLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "Additional Buy Limit Order"))
+    {
+        LogTradeDetails(lot_size, stop_loss, take_profit);
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("Additional Buy Limit Order Failed with Error: ", error);
+        ResetLastError();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Place Additional Sell Order                                      |
+//+------------------------------------------------------------------+
+void PlaceAdditionalSellOrder()
+{
+    double atr_multiplier = ATRMultiplier; // Use the input parameter
+    double stop_loss, take_profit;
+    CalculateDynamicSLTP(stop_loss, take_profit, atr_multiplier);
+
+    double lot_size = CalculateDynamicLotSize(stop_loss / _Point);
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double limit_price = price + 10 * _Point; // Place limit order 10 points above current price
+    double sl = limit_price + stop_loss;
+    double tp = limit_price - take_profit;
+
+    // Normalize SL and TP
+    int price_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+    sl = NormalizeDouble(sl, price_digits);
+    tp = NormalizeDouble(tp, price_digits);
+    limit_price = NormalizeDouble(limit_price, price_digits);
+
+    if (trade.SellLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "Additional Sell Limit Order"))
+    {
+        LogTradeDetails(lot_size, stop_loss, take_profit);
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("Additional Sell Limit Order Failed with Error: ", error);
+        ResetLastError();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Comprehensive Pattern Recognition                                 |
+//+------------------------------------------------------------------+
+int IdentifyTrendPattern()
+{
+    // 1. Multiple EMA Crossover Analysis
+    double current_ema_short = CalculateEMA(EMA_PERIODS_SHORT, 0);
+    double current_ema_medium = CalculateEMA(EMA_PERIODS_MEDIUM, 0);
+    double current_ema_long = CalculateEMA(EMA_PERIODS_LONG, 0);
+    
+    // Store historical EMA values
+    double past_ema_short[5], past_ema_medium[5], past_ema_long[5];
+    for(int i = 0; i < PATTERN_LOOKBACK; i++)
+    {
+        past_ema_short[i] = CalculateEMA(EMA_PERIODS_SHORT, i+1);
+        past_ema_medium[i] = CalculateEMA(EMA_PERIODS_MEDIUM, i+1);
+        past_ema_long[i] = CalculateEMA(EMA_PERIODS_LONG, i+1);
+    }
+
+    // 2. Trend Strength Analysis
+    int bullish_signals = 0;
+    int bearish_signals = 0;
+
+    // Check EMA alignment (strongest when short > medium > long for bullish)
+    if(current_ema_short > current_ema_medium && current_ema_medium > current_ema_long)
+        bullish_signals += 2;
+    else if(current_ema_short < current_ema_medium && current_ema_medium < current_ema_long)
+        bearish_signals += 2;
+
+    // 3. Golden/Death Cross Detection
+    bool golden_cross = false;
+    bool death_cross = false;
+
+    // Check for recent golden cross (short EMA crossing above long EMA)
+    if(current_ema_short > current_ema_long && past_ema_short[0] < past_ema_long[0])
+    {
+        if(MathAbs(current_ema_short - current_ema_long) > GOLDEN_CROSS_THRESHOLD * _Point)
+            golden_cross = true;
+    }
+    // Check for recent death cross (short EMA crossing below long EMA)
+    else if(current_ema_short < current_ema_long && past_ema_short[0] > past_ema_long[0])
+    {
+        if(MathAbs(current_ema_short - current_ema_long) > GOLDEN_CROSS_THRESHOLD * _Point)
+            death_cross = true;
+    }
+
+    // 4. Trend Continuation Pattern
+    bool bullish_continuation = true;
+    bool bearish_continuation = true;
+
+    // Check if EMAs maintained their order for several periods
+    for(int i = 0; i < PATTERN_LOOKBACK - 1; i++)
+    {
+        if(!(past_ema_short[i] > past_ema_medium[i] && past_ema_medium[i] > past_ema_long[i]))
+            bullish_continuation = false;
+            
+        if(!(past_ema_short[i] < past_ema_medium[i] && past_ema_medium[i] < past_ema_long[i]))
+            bearish_continuation = false;
+    }
+
+    // 5. Volume Confirmation
+    double current_volume = iVolume(_Symbol, Timeframe, 0);
+    double avg_volume = 0;
+    for(int i = 1; i <= PATTERN_LOOKBACK; i++)
+    {
+        avg_volume += iVolume(_Symbol, Timeframe, i);
+    }
+    avg_volume /= PATTERN_LOOKBACK;
+
+    bool volume_confirmation = (current_volume > avg_volume * 1.2); // 20% above average
+
+    // 6. Combine All Signals
+    if(golden_cross && bullish_continuation && volume_confirmation)
+        bullish_signals += 3;
+    if(death_cross && bearish_continuation && volume_confirmation)
+        bearish_signals += 3;
+
+    // Add momentum confirmation
+    double rsi = CalculateRSI(14, 0);
+    if(rsi > 50 && rsi < 70) bullish_signals++;
+    if(rsi < 50 && rsi > 30) bearish_signals++;
+
+    // 7. Final Decision Making
+    Print("Pattern Analysis - Bullish Signals: ", bullish_signals, " Bearish Signals: ", bearish_signals);
+
+    if(bullish_signals >= 4 && bullish_signals > bearish_signals * 2)
+        return 1;  // Strong bullish pattern
+    else if(bearish_signals >= 4 && bearish_signals > bullish_signals * 2)
+        return -1; // Strong bearish pattern
+    
+    return 0;     // No clear pattern
 }
