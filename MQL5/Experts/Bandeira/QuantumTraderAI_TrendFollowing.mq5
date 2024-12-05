@@ -16,7 +16,7 @@
 input group "Strategy Settings"
 input bool UseTrendStrategy = true;         // Enable or disable the Trend Following strategy
 input ENUM_TIMEFRAMES Timeframe = PERIOD_H1; // Default timeframe
-input bool AllowShortTrades = true;         // Allow short (sell) trades
+input bool AllowShortTrades = false;         // Allow short (sell) trades
 
 // Risk Management
 input group "Risk Management"
