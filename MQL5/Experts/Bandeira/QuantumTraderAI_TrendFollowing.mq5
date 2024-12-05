@@ -388,89 +388,7 @@ int TrendFollowingCore()
 }
 
 //+------------------------------------------------------------------+
-//| Check for Open Positions                                         |
-//+------------------------------------------------------------------+
-bool HasOpenPosition(int type)
-{
-    int total = PositionsTotal();
-    for (int i = 0; i < total; i++)
-    {
-        ulong ticket = PositionGetTicket(i);
-        if (PositionSelectByTicket(ticket))
-        {
-            if (PositionGetInteger(POSITION_TYPE) == type && PositionGetString(POSITION_SYMBOL) == _Symbol)
-            {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-//+------------------------------------------------------------------+
-//| Order Placement Functions                                        |
-//+------------------------------------------------------------------+
-void PlaceBuyOrder()
-{
-    double stop_loss, take_profit;
-    CalculateDynamicSLTP(stop_loss, take_profit, ATRMultiplier);
-
-    double lot_size = CalculateDynamicLotSize(stop_loss / _Point);
-    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    double limit_price = price - 10 * _Point; // Place limit order 10 points below current price
-    double sl = limit_price - stop_loss;
-    double tp = limit_price + take_profit;
-
-    // Normalize SL and TP
-    int price_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-    sl = NormalizeDouble(sl, price_digits);
-    tp = NormalizeDouble(tp, price_digits);
-    limit_price = NormalizeDouble(limit_price, price_digits);
-
-    if (trade.BuyLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "Buy Limit Order with Dynamic SL/TP"))
-    {
-        LogTradeDetails(lot_size, stop_loss, take_profit);
-    }
-    else
-    {
-        int error = GetLastError();
-        Print("Buy Limit Order Failed with Error: ", error);
-        ResetLastError();
-    }
-}
-
-void PlaceSellOrder()
-{
-    double atr_multiplier = ATRMultiplier; // Use the input parameter
-    double stop_loss, take_profit;
-    CalculateDynamicSLTP(stop_loss, take_profit, atr_multiplier);
-
-    double lot_size = CalculateDynamicLotSize(stop_loss / _Point);
-    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double limit_price = price + 10 * _Point; // Place limit order 10 points above current price
-    double sl = limit_price + stop_loss;
-    double tp = limit_price - take_profit;
-
-    // Normalize SL and TP
-    int price_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-    sl = NormalizeDouble(sl, price_digits);
-    tp = NormalizeDouble(tp, price_digits);
-    limit_price = NormalizeDouble(limit_price, price_digits);
-
-    if (trade.SellLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "Sell Limit Order with Dynamic SL/TP"))
-    {
-        LogTradeDetails(lot_size, stop_loss, take_profit);
-    }
-    else
-    {
-        int error = GetLastError();
-        Print("Sell Limit Order Failed with Error: ", error);
-        ResetLastError();
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Monitor Open Positions                                           |
+//| Check and Manage Positions                                       |
 //+------------------------------------------------------------------+
 bool ManagePositions(int checkType = -1)  // -1 means check all positions
 {
@@ -681,11 +599,11 @@ void MonitorOrderFlow()
         // Get current RSI value
         double rsi = CalculateRSI(14);
 
-        if (imbalanceSignal == 1 && !HasOpenPosition(POSITION_TYPE_BUY) && rsi < RSILowerThreshold)
+        if (imbalanceSignal == 1 && !ManagePositions(POSITION_TYPE_BUY) && rsi < RSILowerThreshold)
         {
             PlaceBuyOrder();
         }
-        else if (imbalanceSignal == -1 && !HasOpenPosition(POSITION_TYPE_SELL) && rsi > RSIUpperThreshold)
+        else if (imbalanceSignal == -1 && !ManagePositions(POSITION_TYPE_SELL) && rsi > RSIUpperThreshold)
         {
             PlaceSellOrder();
         }
@@ -731,22 +649,22 @@ void ExecuteTradingLogic()
         // Only trade when both trend and pattern signals align
         if (trendSignal == 1 && patternSignal == 1)
         {
-            if (!HasOpenPosition(POSITION_TYPE_BUY) && !HasPendingOrder(ORDER_TYPE_BUY_LIMIT))
+            if (!ManagePositions(POSITION_TYPE_BUY) && !HasPendingOrder(ORDER_TYPE_BUY_LIMIT))
             {
                 PlaceBuyOrder();
             }
-            else if (HasOpenPosition(POSITION_TYPE_BUY) && IsBullishCandlePattern())
+            else if (ManagePositions(POSITION_TYPE_BUY) && IsBullishCandlePattern())
             {
                 PlaceAdditionalBuyOrder();
             }
         }
         else if (trendSignal == -1 && patternSignal == -1)
         {
-            if (!HasOpenPosition(POSITION_TYPE_SELL) && !HasPendingOrder(ORDER_TYPE_SELL_LIMIT))
+            if (!ManagePositions(POSITION_TYPE_SELL) && !HasPendingOrder(ORDER_TYPE_SELL_LIMIT))
             {
                 PlaceSellOrder();
             }
-            else if (HasOpenPosition(POSITION_TYPE_SELL) && IsBearishCandlePattern())
+            else if (ManagePositions(POSITION_TYPE_SELL) && IsBearishCandlePattern())
             {
                 PlaceAdditionalSellOrder();
             }
@@ -1289,4 +1207,65 @@ int IdentifyTrendPattern()
         return -1; // Strong bearish pattern
     
     return 0;     // No clear pattern
+}
+//+------------------------------------------------------------------+
+//| Order Placement Functions                                        |
+//+------------------------------------------------------------------+
+void PlaceBuyOrder()
+{
+    double stop_loss, take_profit;
+    CalculateDynamicSLTP(stop_loss, take_profit, ATRMultiplier);
+
+    double lot_size = CalculateDynamicLotSize(stop_loss / _Point);
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double limit_price = price - 10 * _Point; // Place limit order 10 points below current price
+    double sl = limit_price - stop_loss;
+    double tp = limit_price + take_profit;
+
+    // Normalize SL and TP
+    int price_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+    sl = NormalizeDouble(sl, price_digits);
+    tp = NormalizeDouble(tp, price_digits);
+    limit_price = NormalizeDouble(limit_price, price_digits);
+
+    if (trade.BuyLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "Buy Limit Order with Dynamic SL/TP"))
+    {
+        LogTradeDetails(lot_size, stop_loss, take_profit);
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("Buy Limit Order Failed with Error: ", error);
+        ResetLastError();
+    }
+}
+
+void PlaceSellOrder()
+{
+    double atr_multiplier = ATRMultiplier; // Use the input parameter
+    double stop_loss, take_profit;
+    CalculateDynamicSLTP(stop_loss, take_profit, atr_multiplier);
+
+    double lot_size = CalculateDynamicLotSize(stop_loss / _Point);
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double limit_price = price + 10 * _Point; // Place limit order 10 points above current price
+    double sl = limit_price + stop_loss;
+    double tp = limit_price - take_profit;
+
+    // Normalize SL and TP
+    int price_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+    sl = NormalizeDouble(sl, price_digits);
+    tp = NormalizeDouble(tp, price_digits);
+    limit_price = NormalizeDouble(limit_price, price_digits);
+
+    if (trade.SellLimit(lot_size, limit_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "Sell Limit Order with Dynamic SL/TP"))
+    {
+        LogTradeDetails(lot_size, stop_loss, take_profit);
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("Sell Limit Order Failed with Error: ", error);
+        ResetLastError();
+    }
 }
