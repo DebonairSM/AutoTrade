@@ -3,7 +3,7 @@
 //| VSol Software                                                    |
 //+------------------------------------------------------------------+
 #property copyright "VSol Software"
-#property version   "1.07"
+#property version   "1.08"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -16,6 +16,7 @@
 input group "Strategy Settings"
 input bool UseTrendStrategy = true;         // Enable or disable the Trend Following strategy
 input ENUM_TIMEFRAMES Timeframe = PERIOD_H1; // Default timeframe
+input bool AllowShortTrades = true;         // Allow short (sell) trades
 
 // Risk Management
 input group "Risk Management"
@@ -59,6 +60,14 @@ input int EMA_PERIODS_MEDIUM = 50;          // Medium EMA period
 input int EMA_PERIODS_LONG = 200;           // Long EMA period
 input int PATTERN_LOOKBACK = 5;             // Pattern lookback periods
 input double GOLDEN_CROSS_THRESHOLD = 0.001; // Golden cross threshold
+
+// RSI/MACD Settings
+input group "RSI/MACD Settings"
+input int RSI_Period = 14;           // RSI Period
+input int MACD_Fast = 12;            // MACD Fast EMA Period
+input int MACD_Slow = 26;            // MACD Slow EMA Period
+input int MACD_Signal = 9;           // MACD Signal Period
+input double RSI_Neutral = 50.0;     // RSI Neutral Level
 
 //+------------------------------------------------------------------+
 //| Global Variables and Objects                                     |
@@ -603,7 +612,7 @@ void MonitorOrderFlow()
         {
             PlaceBuyOrder();
         }
-        else if (imbalanceSignal == -1 && !ManagePositions(POSITION_TYPE_SELL) && rsi > RSIUpperThreshold)
+        else if (AllowShortTrades && imbalanceSignal == -1 && !ManagePositions(POSITION_TYPE_SELL) && rsi > RSIUpperThreshold)
         {
             PlaceSellOrder();
         }
@@ -622,7 +631,79 @@ void MonitorOrderFlow()
 }
 
 //+------------------------------------------------------------------+
-//| Execute Trading Logic                                            |
+//| Calculate MACD Values                                            |
+//+------------------------------------------------------------------+
+void CalculateMACD(double &macdMain, double &macdSignal, double &macdHistogram, int shift = 0)
+{
+    int handle = iMACD(_Symbol, Timeframe, MACD_Fast, MACD_Slow, MACD_Signal, PRICE_CLOSE);
+    if(handle == INVALID_HANDLE)
+    {
+        Print("Error creating MACD indicator handle");
+        return;
+    }
+
+    double macdBuffer[];
+    double signalBuffer[];
+    ArraySetAsSeries(macdBuffer, true);
+    ArraySetAsSeries(signalBuffer, true);
+
+    CopyBuffer(handle, 0, shift, 2, macdBuffer);    // MACD line
+    CopyBuffer(handle, 1, shift, 2, signalBuffer);  // Signal line
+
+    macdMain = macdBuffer[0];
+    macdSignal = signalBuffer[0];
+    macdHistogram = macdMain - macdSignal;
+
+    IndicatorRelease(handle);
+}
+
+//+------------------------------------------------------------------+
+//| Check RSI and MACD Combination Signal                            |
+//+------------------------------------------------------------------+
+int CheckRSIMACDSignal()
+{
+    double rsi = CalculateRSI(RSI_Period);
+    double macdMain, macdSignal, macdHistogram;
+    CalculateMACD(macdMain, macdSignal, macdHistogram);
+    
+    // Previous values for crossover detection
+    double prevMacdMain, prevMacdSignal, prevMacdHist;
+    CalculateMACD(prevMacdMain, prevMacdSignal, prevMacdHist, 1);
+    
+    // Buy Signal Conditions
+    bool buySignal = 
+        rsi < RSILowerThreshold &&                  // RSI oversold
+        macdMain > macdSignal &&                    // Current MACD above signal
+        prevMacdMain <= prevMacdSignal &&           // Previous MACD below signal (crossover)
+        macdHistogram > prevMacdHist;               // Increasing momentum
+        
+    // Sell Signal Conditions
+    bool sellSignal = 
+        rsi > RSIUpperThreshold &&                  // RSI overbought
+        macdMain < macdSignal &&                    // Current MACD below signal
+        prevMacdMain >= prevMacdSignal &&           // Previous MACD above signal (crossover)
+        macdHistogram < prevMacdHist;               // Decreasing momentum
+        
+    // Exit Conditions
+    bool exitLong = 
+        rsi > RSI_Neutral &&                        // RSI above neutral
+        macdHistogram < 0;                          // Negative momentum
+        
+    bool exitShort = 
+        rsi < RSI_Neutral &&                        // RSI below neutral
+        macdHistogram > 0;                          // Positive momentum
+    
+    // Log signals
+    if(buySignal) Print("RSI-MACD Buy Signal: RSI=", rsi, " MACD Hist=", macdHistogram);
+    if(sellSignal) Print("RSI-MACD Sell Signal: RSI=", rsi, " MACD Hist=", macdHistogram);
+    if(exitLong) Print("RSI-MACD Exit Long Signal");
+    if(exitShort) Print("RSI-MACD Exit Short Signal");
+    
+    return buySignal ? 1 : (sellSignal ? -1 : 0);
+}
+
+//+------------------------------------------------------------------+
+//| Modify ExecuteTradingLogic to include RSI-MACD                   |
 //+------------------------------------------------------------------+
 void ExecuteTradingLogic()
 {
@@ -645,28 +726,22 @@ void ExecuteTradingLogic()
     {
         int trendSignal = TrendFollowingCore();
         int patternSignal = IdentifyTrendPattern();
-
-        // Only trade when both trend and pattern signals align
-        if (trendSignal == 1 && patternSignal == 1)
+        int rsiMacdSignal = CheckRSIMACDSignal();
+        
+        // Long trades
+        if (trendSignal == 1 && patternSignal == 1 && rsiMacdSignal == 1)
         {
             if (!ManagePositions(POSITION_TYPE_BUY) && !HasPendingOrder(ORDER_TYPE_BUY_LIMIT))
             {
                 PlaceBuyOrder();
             }
-            else if (ManagePositions(POSITION_TYPE_BUY) && IsBullishCandlePattern())
-            {
-                PlaceAdditionalBuyOrder();
-            }
         }
-        else if (trendSignal == -1 && patternSignal == -1)
+        // Short trades - only if enabled
+        else if (AllowShortTrades && trendSignal == -1 && patternSignal == -1 && rsiMacdSignal == -1)
         {
             if (!ManagePositions(POSITION_TYPE_SELL) && !HasPendingOrder(ORDER_TYPE_SELL_LIMIT))
             {
                 PlaceSellOrder();
-            }
-            else if (ManagePositions(POSITION_TYPE_SELL) && IsBearishCandlePattern())
-            {
-                PlaceAdditionalSellOrder();
             }
         }
     }
