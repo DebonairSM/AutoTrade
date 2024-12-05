@@ -43,7 +43,7 @@ input string TradingEndTime = "23:59";      // Trading session end time
 input group "Position Management"
 input bool UseTrailingStop = false;         // Enable trailing stops
 input double TrailingStopPips = 20.0;       // Trailing stop distance in pips
-input bool UseBreakeven = true;             // Enable breakeven
+input bool UseBreakeven = false;             // Enable breakeven
 input double BreakevenActivationPips = 30.0;// Breakeven activation distance
 input double BreakevenOffsetPips = 5.0;     // Breakeven offset distance
 
@@ -74,12 +74,117 @@ input double RSI_Neutral = 50.0;     // RSI Neutral Level
 //+------------------------------------------------------------------+
 CTrade trade;
 double starting_balance;
-
 // Add a minimum price change threshold (in points)
 double MinPriceChangeThreshold = 10;
 
 // Store the last modification price
 double LastModificationPrice = 0;
+
+//+------------------------------------------------------------------+
+//| Core EA Functions                                                 |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                    |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    // Validate input parameters
+    ValidateInputs();
+
+    // Initialize starting balance
+    starting_balance = AccountInfoDouble(ACCOUNT_BALANCE);
+
+    // Print current configurations to the journal/log
+    Print("Configuration: ");
+    Print("  UseTrendStrategy=", UseTrendStrategy);
+    Print("  RiskPercent=", RiskPercent);
+    Print("  MaxDrawdownPercent=", MaxDrawdownPercent);
+    Print("  Aggressiveness=", Aggressiveness);
+    Print("  RecoveryFactor=", RecoveryFactor);
+    Print("  ATRMultiplier=", ATRMultiplier);
+    Print("  ADXPeriod=", ADXPeriod);
+    Print("  TrendADXThreshold=", TrendADXThreshold);
+    Print("  TradingStartTime=", TradingStartTime);
+    Print("  TradingEndTime=", TradingEndTime);
+    Print("  UseTrailingStop=", UseTrailingStop);
+    Print("  TrailingStopPips=", TrailingStopPips);
+    Print("  UseBreakeven=", UseBreakeven);
+    Print("  BreakevenActivationPips=", BreakevenActivationPips);
+    Print("  BreakevenOffsetPips=", BreakevenOffsetPips);
+    Print("  UseDOMAnalysis=", UseDOMAnalysis);
+    Print("  LiquidityThreshold=", LiquidityThreshold);
+    Print("  ImbalanceThreshold=", ImbalanceThreshold);
+    Print("  Timeframe=", EnumToString(Timeframe));
+
+    return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    // Execute trading logic on each tick
+    ExecuteTradingLogic();
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+    Print("Deinitializing EA...");
+    // Additional cleanup code can be added here
+}
+
+//+------------------------------------------------------------------+
+//| Execute Trading Logic                                            |
+//+------------------------------------------------------------------+
+void ExecuteTradingLogic()
+{
+    // Check if within trading hours
+    if (!IsWithinTradingHours())
+        return;
+
+    // Check drawdown before executing any trades
+    if (CheckDrawdown())
+    {
+        // Trading is halted due to excessive drawdown
+        return;
+    }
+
+    // Manage open positions
+    ManagePositions();
+
+    // Execute Trend Strategy if enabled
+    if (UseTrendStrategy)
+    {
+        int trendSignal = TrendFollowingCore();
+        int patternSignal = IdentifyTrendPattern();
+        int rsiMacdSignal = CheckRSIMACDSignal();
+        
+        // Long trades
+        if (trendSignal == 1 && patternSignal == 1 && rsiMacdSignal == 1)
+        {
+            if (!ManagePositions(POSITION_TYPE_BUY) && !HasPendingOrder(ORDER_TYPE_BUY_LIMIT))
+            {
+                PlaceBuyOrder();
+            }
+        }
+        // Short trades - only if enabled
+        else if (AllowShortTrades && trendSignal == -1 && patternSignal == -1 && rsiMacdSignal == -1)
+        {
+            if (!ManagePositions(POSITION_TYPE_SELL) && !HasPendingOrder(ORDER_TYPE_SELL_LIMIT))
+            {
+                PlaceSellOrder();
+            }
+        }
+    }
+
+    // Monitor order flow
+    MonitorOrderFlow();
+}
 
 //+------------------------------------------------------------------+
 //| Helper function to get indicator value                           |
@@ -703,54 +808,6 @@ int CheckRSIMACDSignal()
 }
 
 //+------------------------------------------------------------------+
-//| Modify ExecuteTradingLogic to include RSI-MACD                   |
-//+------------------------------------------------------------------+
-void ExecuteTradingLogic()
-{
-    // Check if within trading hours
-    if (!IsWithinTradingHours())
-        return;
-
-    // Check drawdown before executing any trades
-    if (CheckDrawdown())
-    {
-        // Trading is halted due to excessive drawdown
-        return;
-    }
-
-    // Manage open positions
-    ManagePositions();
-
-    // Execute Trend Strategy if enabled
-    if (UseTrendStrategy)
-    {
-        int trendSignal = TrendFollowingCore();
-        int patternSignal = IdentifyTrendPattern();
-        int rsiMacdSignal = CheckRSIMACDSignal();
-        
-        // Long trades
-        if (trendSignal == 1 && patternSignal == 1 && rsiMacdSignal == 1)
-        {
-            if (!ManagePositions(POSITION_TYPE_BUY) && !HasPendingOrder(ORDER_TYPE_BUY_LIMIT))
-            {
-                PlaceBuyOrder();
-            }
-        }
-        // Short trades - only if enabled
-        else if (AllowShortTrades && trendSignal == -1 && patternSignal == -1 && rsiMacdSignal == -1)
-        {
-            if (!ManagePositions(POSITION_TYPE_SELL) && !HasPendingOrder(ORDER_TYPE_SELL_LIMIT))
-            {
-                PlaceSellOrder();
-            }
-        }
-    }
-
-    // Monitor order flow
-    MonitorOrderFlow();
-}
-
-//+------------------------------------------------------------------+
 //| Check for Pending Orders                                         |
 //+------------------------------------------------------------------+
 bool HasPendingOrder(int type)
@@ -876,62 +933,6 @@ void ValidateInputs()
         ExpertRemove();
         return;
     }
-}
-
-//+------------------------------------------------------------------+
-//| Main OnInit Function                                             |
-//+------------------------------------------------------------------+
-int OnInit()
-{
-    // Validate input parameters
-    ValidateInputs();
-
-    // Initialize starting balance
-    starting_balance = AccountInfoDouble(ACCOUNT_BALANCE);
-
-    // Print current configurations to the journal/log
-    Print("Configuration: ");
-    Print("  UseTrendStrategy=", UseTrendStrategy);
-    Print("  RiskPercent=", RiskPercent);
-    Print("  MaxDrawdownPercent=", MaxDrawdownPercent);
-    Print("  Aggressiveness=", Aggressiveness);
-    Print("  RecoveryFactor=", RecoveryFactor);
-    Print("  ATRMultiplier=", ATRMultiplier);
-    Print("  ADXPeriod=", ADXPeriod);
-    Print("  TrendADXThreshold=", TrendADXThreshold);
-    Print("  TradingStartTime=", TradingStartTime);
-    Print("  TradingEndTime=", TradingEndTime);
-    Print("  UseTrailingStop=", UseTrailingStop);
-    Print("  TrailingStopPips=", TrailingStopPips);
-    Print("  UseBreakeven=", UseBreakeven);
-    Print("  BreakevenActivationPips=", BreakevenActivationPips);
-    Print("  BreakevenOffsetPips=", BreakevenOffsetPips);
-    Print("  UseDOMAnalysis=", UseDOMAnalysis);
-    Print("  LiquidityThreshold=", LiquidityThreshold);
-    Print("  ImbalanceThreshold=", ImbalanceThreshold);
-    Print("  Timeframe=", EnumToString(Timeframe));
-
-    // Additional initialization code can be added here
-
-    return INIT_SUCCEEDED;
-}
-
-//+------------------------------------------------------------------+
-//| Main OnTick Function                                             |
-//+------------------------------------------------------------------+
-void OnTick()
-{
-    // Execute trading logic on each tick
-    ExecuteTradingLogic();
-}
-
-//+------------------------------------------------------------------+
-//| Cleanup Code                                                     |
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-    Print("Deinitializing EA...");
-    // Additional cleanup code can be added here
 }
 
 //+------------------------------------------------------------------+

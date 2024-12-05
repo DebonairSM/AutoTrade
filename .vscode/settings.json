@@ -4,6 +4,5 @@
     },
     "editor.folding": true,
     "editor.foldingStrategy": "auto",
-    "editor.showFoldingControls": "always",
-    "C_Cpp.errorSquiggles": "disabled"
+    "editor.showFoldingControls": "always"
 }
