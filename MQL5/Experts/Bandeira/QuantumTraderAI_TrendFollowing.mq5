@@ -6,7 +6,7 @@
 #property version   "1.07"
 #property strict
 
-#include <Trade\Trade.mqh>
+#include <Trade/Trade.mqh>
 
 //+------------------------------------------------------------------+
 //| Input parameters                                                 |
@@ -472,33 +472,47 @@ void PlaceSellOrder()
 //+------------------------------------------------------------------+
 //| Monitor Open Positions                                           |
 //+------------------------------------------------------------------+
-void ManageOpenPositions()
+bool ManagePositions(int checkType = -1)  // -1 means check all positions
 {
+    bool hasPosition = false;
     int total = PositionsTotal();
-    for (int i = 0; i < total; i++)
+    
+    for(int i = 0; i < total; i++)
     {
         ulong ticket = PositionGetTicket(i);
-        if (PositionSelectByTicket(ticket))
+        if(PositionSelectByTicket(ticket))
         {
+            // Check if position is for our symbol
             string symbol = PositionGetString(POSITION_SYMBOL);
-            if (symbol != _Symbol)
-                continue;
+            if(symbol != _Symbol) continue;
+            
+            int posType = (int)PositionGetInteger(POSITION_TYPE);
+            
+            // If checking for specific type and doesn't match, skip
+            if(checkType != -1 && posType != checkType) continue;
+            
+            hasPosition = true;
+            
+            // Only manage if trailing stop or breakeven is enabled
+            if(UseTrailingStop || UseBreakeven)
+            {
+                double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
+                double current_price = PositionGetDouble(POSITION_PRICE_CURRENT);
+                double stop_loss = PositionGetDouble(POSITION_SL);
+                double profit = PositionGetDouble(POSITION_PROFIT);
 
-            double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
-            double current_price = PositionGetDouble(POSITION_PRICE_CURRENT);
-            double stop_loss = PositionGetDouble(POSITION_SL);
-            int type = PositionGetInteger(POSITION_TYPE);
-            double profit = PositionGetDouble(POSITION_PROFIT);
+                // Apply trailing stop if enabled
+                if(UseTrailingStop)
+                    ApplyTrailingStop(ticket, posType, open_price, stop_loss);
 
-            // Implement Trailing Stop
-            if (UseTrailingStop)
-                ApplyTrailingStop(ticket, type, open_price, stop_loss);
-
-            // Implement Breakeven
-            if (UseBreakeven)
-                ApplyBreakeven(ticket, type, open_price, stop_loss);
+                // Apply breakeven if enabled
+                if(UseBreakeven)
+                    ApplyBreakeven(ticket, posType, open_price, stop_loss);
+            }
         }
     }
+    
+    return hasPosition;
 }
 
 //+------------------------------------------------------------------+
@@ -706,7 +720,7 @@ void ExecuteTradingLogic()
     }
 
     // Manage open positions
-    ManageOpenPositions();
+    ManagePositions();
 
     // Execute Trend Strategy if enabled
     if (UseTrendStrategy)
