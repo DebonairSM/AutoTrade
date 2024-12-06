@@ -149,10 +149,7 @@ void ExecuteTradingLogic()
 
     // Check drawdown before executing any trades
     if (CheckDrawdown())
-    {
-        // Trading is halted due to excessive drawdown
         return;
-    }
 
     // Manage open positions
     ManagePositions();
@@ -161,23 +158,41 @@ void ExecuteTradingLogic()
     if (UseTrendStrategy)
     {
         int trendSignal = TrendFollowingCore();
-        int patternSignal = IdentifyTrendPattern();
         int rsiMacdSignal = CheckRSIMACDSignal();
         
-        // Long trades
-        if (trendSignal == 1 && patternSignal == 1 && rsiMacdSignal == 1)
+        // For BUY signals - only avoid if there's a clear bearish pattern
+        if (trendSignal == 1 && rsiMacdSignal == 1)
         {
-            if (!ManagePositions(POSITION_TYPE_BUY) && !HasPendingOrder(ORDER_TYPE_BUY_LIMIT))
+            // Check for strong bearish patterns that would contradict our buy signal
+            if (!IsBearishCandlePattern()) // Only check for opposing patterns
             {
-                PlaceBuyOrder();
+                if (!ManagePositions(POSITION_TYPE_BUY) && !HasPendingOrder(ORDER_TYPE_BUY_LIMIT))
+                {
+                    Print("Buy Signal - No contradicting bearish patterns found");
+                    PlaceBuyOrder();
+                }
+            }
+            else
+            {
+                Print("Buy Signal Rejected - Strong bearish pattern detected");
             }
         }
-        // Short trades - only if enabled
-        else if (AllowShortTrades && trendSignal == -1 && patternSignal == -1 && rsiMacdSignal == -1)
+        
+        // For SELL signals - only avoid if there's a clear bullish pattern
+        else if (AllowShortTrades && trendSignal == -1 && rsiMacdSignal == -1)
         {
-            if (!ManagePositions(POSITION_TYPE_SELL) && !HasPendingOrder(ORDER_TYPE_SELL_LIMIT))
+            // Check for strong bullish patterns that would contradict our sell signal
+            if (!IsBullishCandlePattern()) // Only check for opposing patterns
             {
-                PlaceSellOrder();
+                if (!ManagePositions(POSITION_TYPE_SELL) && !HasPendingOrder(ORDER_TYPE_SELL_LIMIT))
+                {
+                    Print("Sell Signal - No contradicting bullish patterns found");
+                    PlaceSellOrder();
+                }
+            }
+            else
+            {
+                Print("Sell Signal Rejected - Strong bullish pattern detected");
             }
         }
     }
@@ -443,22 +458,47 @@ void CalculateDynamicSLTP(double &stop_loss, double &take_profit, double atr_mul
 //+------------------------------------------------------------------+
 void LogTradeDetails(double lot_size, double stop_loss, double take_profit)
 {
-    // Retrieve current account equity and balance
-    double account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
-    double account_balance = AccountInfoDouble(ACCOUNT_BALANCE);
-
-    // Avoid division by zero
-    if (account_balance == 0.0)
-        account_balance = 0.0001;
-
-    // Calculate current drawdown percentage
-    double drawdown_percent = ((account_balance - account_equity) / account_balance) * 100.0;
-
-    // Log trade details to the terminal
-    Print("Trade Log: Lot Size: ", lot_size, ", SL: ", stop_loss, ", TP: ", take_profit, ", Equity: ", account_equity, ", Drawdown: ", drawdown_percent, "%");
-
-    // Optionally, write to a file or external log
-    // FileWrite(...);
+    // Create log message
+    string log_message = StringFormat(
+        "\n=== Trade Log [%s] ===\n"
+        "Time: %s\n"
+        "Symbol: %s\n"
+        "Lot Size: %.2f\n"
+        "Stop Loss: %.5f\n"
+        "Take Profit: %.5f\n"
+        "Account Balance: %.2f\n"
+        "Account Equity: %.2f\n"
+        "Current Drawdown: %.2f%%\n"
+        "===================\n",
+        __FUNCTION__,
+        TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS),
+        _Symbol,
+        lot_size,
+        stop_loss,
+        take_profit,
+        AccountInfoDouble(ACCOUNT_BALANCE),
+        AccountInfoDouble(ACCOUNT_EQUITY),
+        ((AccountInfoDouble(ACCOUNT_BALANCE) - AccountInfoDouble(ACCOUNT_EQUITY)) / AccountInfoDouble(ACCOUNT_BALANCE)) * 100.0
+    );
+    
+    // Print to Experts tab
+    Print(log_message);
+    
+    // Write to file in the correct location
+    string filename = "QuantumTraderAI_" + _Symbol + ".log";
+    int filehandle = FileOpen(filename, FILE_WRITE|FILE_READ|FILE_TXT|FILE_SHARE_READ|FILE_SHARE_WRITE);
+    
+    if(filehandle != INVALID_HANDLE)
+    {
+        FileSeek(filehandle, 0, SEEK_END);     // Move to end of file
+        FileWriteString(filehandle, log_message);  // Write the log
+        FileClose(filehandle);
+        Print("Log written to: ", TerminalInfoString(TERMINAL_DATA_PATH), "\\MQL5\\Logs\\", filename);
+    }
+    else
+    {
+        Print("Failed to open log file: ", GetLastError());
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -990,46 +1030,41 @@ bool IsBullishCandlePattern()
     }
     avgCandleSize /= 10;
     
-    // 1. Bullish Engulfing
-    bool isBullishEngulfing = 
+    // Only return true for very strong bullish patterns
+    
+    // 1. Strong Bullish Engulfing (more stringent criteria)
+    bool isStrongBullishEngulfing = 
         current.isBullish &&
         !previous.isBullish &&
         current.open < previous.close &&
         current.close > previous.open &&
-        current.body > previous.body * 1.2; // Body should be significantly larger
+        current.body > previous.body * 1.5 && // Increased size requirement
+        current.body > avgCandleSize * 1.2;   // Must be larger than average
     
-    // 2. Morning Star
+    // 2. Perfect Morning Star
     CandleData twoDaysAgo = GetCandleData(3);
-    bool isMorningStar =
+    bool isPerfectMorningStar =
         !twoDaysAgo.isBullish &&
         current.isBullish &&
-        previous.body < avgCandleSize * 0.5 && // Small body in middle
-        twoDaysAgo.body > avgCandleSize &&
-        current.body > avgCandleSize &&
-        current.close > (twoDaysAgo.open + twoDaysAgo.close) / 2;
+        previous.body < avgCandleSize * 0.3 && // Smaller doji body
+        twoDaysAgo.body > avgCandleSize * 1.2 &&
+        current.body > avgCandleSize * 1.2 &&
+        current.close > twoDaysAgo.open; // More stringent price requirement
     
-    // 3. Hammer
-    bool isHammer = 
+    // 3. Clear Hammer
+    bool isClearHammer = 
         current.isBullish &&
-        current.lowerWick > current.body * 2 && // Long lower wick
-        current.upperWick < current.body * 0.2 && // Minimal upper wick
-        current.body > avgCandleSize * 0.5;
+        current.lowerWick > current.body * 3 && // Increased wick requirement
+        current.upperWick < current.body * 0.1 && // Minimal upper wick
+        current.body > avgCandleSize * 0.8 &&
+        current.low < previous.low; // Must make new low
     
-    // 4. Bullish Harami
-    bool isBullishHarami =
-        current.isBullish &&
-        !previous.isBullish &&
-        current.body < previous.body * 0.6 &&
-        current.high < previous.open &&
-        current.low > previous.close;
+    // Log pattern detection with confidence levels
+    if(isStrongBullishEngulfing) Print("Strong Bullish Engulfing Pattern - High Confidence Reversal Signal");
+    if(isPerfectMorningStar) Print("Perfect Morning Star Pattern - High Confidence Reversal Signal");
+    if(isClearHammer) Print("Clear Hammer Pattern - High Confidence Reversal Signal");
     
-    // Log pattern detection
-    if(isBullishEngulfing) Print("Bullish Engulfing Pattern Detected");
-    if(isMorningStar) Print("Morning Star Pattern Detected");
-    if(isHammer) Print("Hammer Pattern Detected");
-    if(isBullishHarami) Print("Bullish Harami Pattern Detected");
-    
-    return (isBullishEngulfing || isMorningStar || isHammer || isBullishHarami);
+    return (isStrongBullishEngulfing || isPerfectMorningStar || isClearHammer);
 }
 
 //+------------------------------------------------------------------+
@@ -1049,46 +1084,41 @@ bool IsBearishCandlePattern()
     }
     avgCandleSize /= 10;
     
-    // 1. Bearish Engulfing
-    bool isBearishEngulfing = 
+    // Only return true for very strong bearish patterns
+    
+    // 1. Strong Bearish Engulfing (more stringent criteria)
+    bool isStrongBearishEngulfing = 
         !current.isBullish &&
         previous.isBullish &&
         current.open > previous.close &&
         current.close < previous.open &&
-        current.body > previous.body * 1.2;
+        current.body > previous.body * 1.5 && // Increased size requirement
+        current.body > avgCandleSize * 1.2;   // Must be larger than average
     
-    // 2. Evening Star
+    // 2. Perfect Evening Star
     CandleData twoDaysAgo = GetCandleData(3);
-    bool isEveningStar =
+    bool isPerfectEveningStar =
         twoDaysAgo.isBullish &&
         !current.isBullish &&
-        previous.body < avgCandleSize * 0.5 &&
-        twoDaysAgo.body > avgCandleSize &&
-        current.body > avgCandleSize &&
-        current.close < (twoDaysAgo.open + twoDaysAgo.close) / 2;
+        previous.body < avgCandleSize * 0.3 && // Smaller doji body
+        twoDaysAgo.body > avgCandleSize * 1.2 &&
+        current.body > avgCandleSize * 1.2 &&
+        current.close < twoDaysAgo.open; // More stringent price requirement
     
-    // 3. Shooting Star
-    bool isShootingStar = 
+    // 3. Clear Shooting Star
+    bool isClearShootingStar = 
         !current.isBullish &&
-        current.upperWick > current.body * 2 &&
-        current.lowerWick < current.body * 0.2 &&
-        current.body > avgCandleSize * 0.5;
+        current.upperWick > current.body * 3 && // Increased wick requirement
+        current.lowerWick < current.body * 0.1 && // Minimal lower wick
+        current.body > avgCandleSize * 0.8 &&
+        current.high > previous.high; // Must make new high
     
-    // 4. Bearish Harami
-    bool isBearishHarami =
-        !current.isBullish &&
-        previous.isBullish &&
-        current.body < previous.body * 0.6 &&
-        current.high < previous.close &&
-        current.low > previous.open;
+    // Log pattern detection with confidence levels
+    if(isStrongBearishEngulfing) Print("Strong Bearish Engulfing Pattern - High Confidence Reversal Signal");
+    if(isPerfectEveningStar) Print("Perfect Evening Star Pattern - High Confidence Reversal Signal");
+    if(isClearShootingStar) Print("Clear Shooting Star Pattern - High Confidence Reversal Signal");
     
-    // Log pattern detection
-    if(isBearishEngulfing) Print("Bearish Engulfing Pattern Detected");
-    if(isEveningStar) Print("Evening Star Pattern Detected");
-    if(isShootingStar) Print("Shooting Star Pattern Detected");
-    if(isBearishHarami) Print("Bearish Harami Pattern Detected");
-    
-    return (isBearishEngulfing || isEveningStar || isShootingStar || isBearishHarami);
+    return (isStrongBearishEngulfing || isPerfectEveningStar || isClearShootingStar);
 }
 
 //+------------------------------------------------------------------+
