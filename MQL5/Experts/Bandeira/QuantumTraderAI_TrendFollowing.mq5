@@ -3,7 +3,7 @@
 //| VSol Software                                                    |
 //+------------------------------------------------------------------+
 #property copyright "VSol Software"
-#property version   "1.08"
+#property version   "1.12"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -16,7 +16,7 @@
 input group "Strategy Settings"
 input bool UseTrendStrategy = true;         // Enable or disable the Trend Following strategy
 input ENUM_TIMEFRAMES Timeframe = PERIOD_H1; // Default timeframe
-input bool AllowShortTrades = false;         // Allow short (sell) trades
+input bool AllowShortTrades = true;         // Allow short (sell) trades
 
 // Risk Management
 input group "Risk Management"
@@ -24,7 +24,7 @@ input double RiskPercent = 2.0;             // Percentage of account equity risk
 input double MaxDrawdownPercent = 15.0;     // Maximum drawdown percentage allowed
 input double Aggressiveness = 1.0;          // Trade aggressiveness factor
 input double RecoveryFactor = 1.2;          // Recovery mode lot size multiplier
-input double ATRMultiplier = 1.0;           // ATR multiplier for dynamic SL/TP
+input double ATRMultiplier = 1.5;           // ATR multiplier for dynamic SL/TP
 input double fixedStopLossPips = 20.0;      // Fixed Stop Loss in pips
 
 // Trend Indicators
@@ -161,7 +161,7 @@ void ExecuteTradingLogic()
         int rsiMacdSignal = CheckRSIMACDSignal();
         
         // For BUY signals - only avoid if there's a clear bearish pattern
-        if (trendSignal == 1 && rsiMacdSignal == 1)
+        if ((trendSignal == 1 || rsiMacdSignal == 1))  // Changed from AND to OR
         {
             // Check for strong bearish patterns that would contradict our buy signal
             if (!IsBearishCandlePattern()) // Only check for opposing patterns
@@ -179,7 +179,7 @@ void ExecuteTradingLogic()
         }
         
         // For SELL signals - only avoid if there's a clear bullish pattern
-        else if (AllowShortTrades && trendSignal == -1 && rsiMacdSignal == -1)
+        else if (AllowShortTrades && (trendSignal == -1 || rsiMacdSignal == -1))  // Changed from AND to OR
         {
             // Check for strong bullish patterns that would contradict our sell signal
             if (!IsBullishCandlePattern()) // Only check for opposing patterns
@@ -399,35 +399,24 @@ double CalculateDynamicLotSize(double stop_loss_points)
 //+------------------------------------------------------------------+
 bool CheckDrawdown()
 {
-    // Retrieve account balance and equity
     double account_balance = AccountInfoDouble(ACCOUNT_BALANCE);
     double account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
-
-    // Avoid division by zero
-    if (account_balance == 0.0)
-        account_balance = 0.0001;
-
-    // Calculate drawdown percentage
+    if (account_balance == 0.0) account_balance = 0.0001;
+    
     double drawdown_percent = ((account_balance - account_equity) / account_balance) * 100.0;
-
-    // Log current drawdown for monitoring
-    Print("Current Drawdown: ", drawdown_percent, "%");
-
-    // Check if drawdown exceeds the maximum allowed
+    
+    // Only log if drawdown is significant
     if (drawdown_percent >= MaxDrawdownPercent)
     {
-        Print("Maximum Drawdown Reached: Trading Halted");
-        Alert("Alert: Maximum Drawdown Reached. Trading Halted.");
-        return true; // Indicate that trading should be stopped
+        Print("ALERT: Maximum Drawdown Reached: ", drawdown_percent, "% - Trading Halted");
+        return true;
     }
-
-    // Alert when drawdown approaches the limit (e.g., 80% of max drawdown)
-    if (drawdown_percent >= MaxDrawdownPercent * 0.8)
+    else if (drawdown_percent >= MaxDrawdownPercent * 0.8) // Only log when approaching max drawdown
     {
-        Alert("Warning: Drawdown Approaching Limit.");
+        Print("WARNING: Significant Drawdown: ", drawdown_percent, "% - Approaching Limit");
     }
-
-    return false; // Indicate that trading can continue
+    
+    return false;
 }
 
 //+------------------------------------------------------------------+
@@ -520,25 +509,27 @@ bool IsWithinTradingHours()
 //+------------------------------------------------------------------+
 int TrendFollowingCore()
 {
-    double sma = CalculateSMA(100); // Shortened SMA period
-    double ema = CalculateEMA(20);  // Shortened EMA period
+    double sma = CalculateSMA(100);
+    double ema = CalculateEMA(20);
     double rsi = CalculateRSI(14);
-
+    
     double adx, plusDI, minusDI;
     CalculateADX(ADXPeriod, adx, plusDI, minusDI);
-
-    // Determine trend and generate signals
+    
+    // Only log when there's an actual trade signal and we have an open position or pending order
     if (ema > sma && rsi < RSIUpperThreshold && adx > TrendADXThreshold && plusDI > minusDI)
     {
-        Print("Trend Following: Buy Signal");
-        return 1; // Buy signal
+        if(HasActiveTradeOrPendingOrder(POSITION_TYPE_BUY))
+            Print("Trend Following: Buy Signal - Active Position");
+        return 1;
     }
     else if (ema < sma && rsi > RSILowerThreshold && adx > TrendADXThreshold && minusDI > plusDI)
     {
-        Print("Trend Following: Sell Signal");
-        return -1; // Sell signal
+        if(HasActiveTradeOrPendingOrder(POSITION_TYPE_SELL))
+            Print("Trend Following: Sell Signal - Active Position");
+        return -1;
     }
-    return 0; // Hold signal
+    return 0;
 }
 
 //+------------------------------------------------------------------+
@@ -838,13 +829,20 @@ int CheckRSIMACDSignal()
         rsi < RSI_Neutral &&                        // RSI below neutral
         macdHistogram > 0;                          // Positive momentum
     
-    // Log signals
-    if(buySignal) Print("RSI-MACD Buy Signal: RSI=", rsi, " MACD Hist=", macdHistogram);
-    if(sellSignal) Print("RSI-MACD Sell Signal: RSI=", rsi, " MACD Hist=", macdHistogram);
-    if(exitLong) Print("RSI-MACD Exit Long Signal");
-    if(exitShort) Print("RSI-MACD Exit Short Signal");
+    // Only log signals when there are active positions or when we're about to enter
+    if(buySignal && !HasActiveTradeOrPendingOrder(POSITION_TYPE_BUY)) 
+        Print("RSI-MACD Buy Signal: RSI=", rsi, " MACD Hist=", macdHistogram);
+    if(sellSignal && !HasActiveTradeOrPendingOrder(POSITION_TYPE_SELL)) 
+        Print("RSI-MACD Sell Signal: RSI=", rsi, " MACD Hist=", macdHistogram);
+    if(exitLong && HasActiveTradeOrPendingOrder(POSITION_TYPE_BUY)) 
+        Print("RSI-MACD Exit Long Signal - Active Position");
+    if(exitShort && HasActiveTradeOrPendingOrder(POSITION_TYPE_SELL)) 
+        Print("RSI-MACD Exit Short Signal - Active Position");
     
-    return buySignal ? 1 : (sellSignal ? -1 : 0);
+    // Return buy/sell signals
+    if(buySignal) return 1;
+    if(sellSignal) return -1;
+    return 0;
 }
 
 //+------------------------------------------------------------------+
@@ -1374,4 +1372,40 @@ void PlaceSellOrder()
         Print("Sell Limit Order Failed with Error: ", error);
         ResetLastError();
     }
+}
+
+//+------------------------------------------------------------------+
+//| Add helper function to check for active trades or pending orders |
+//+------------------------------------------------------------------+
+bool HasActiveTradeOrPendingOrder(int type)
+{
+    // Check positions
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(PositionSelectByTicket(ticket))
+        {
+            if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+               PositionGetInteger(POSITION_TYPE) == type)
+                return true;
+        }
+    }
+    
+    // Check pending orders
+    for(int i = 0; i < OrdersTotal(); i++)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(OrderSelect(ticket))
+        {
+            if(OrderGetString(ORDER_SYMBOL) == _Symbol)
+            {
+                int orderType = (int)OrderGetInteger(ORDER_TYPE);
+                if((type == POSITION_TYPE_BUY && (orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_BUY_STOP)) ||
+                   (type == POSITION_TYPE_SELL && (orderType == ORDER_TYPE_SELL_LIMIT || orderType == ORDER_TYPE_SELL_STOP)))
+                    return true;
+            }
+        }
+    }
+    
+    return false;
 }
