@@ -160,20 +160,22 @@ void ExecuteTradingLogic()
     // Additionally, it includes risk management features such as trailing stops, breakeven points, and drawdown checks to protect capital.
     // The goal is to maximize profits by capturing strong trends while minimizing losses during unfavorable market conditions.
 
+    // Get order flow signal
+    int orderFlowSignal = MonitorOrderFlow();
+    
     if (UseTrendStrategy)
     {
         int trendSignal = TrendFollowingCore();
         int rsiMacdSignal = CheckRSIMACDSignal();
         
-        // For BUY signals - only avoid if there's a clear bearish pattern
-        if ((trendSignal == 1 || rsiMacdSignal == 1))  // Changed from AND to OR
+        // For BUY signals
+        if ((trendSignal == 1 || rsiMacdSignal == 1) && orderFlowSignal == 1)
         {
-            // Check for strong bearish patterns that would contradict our buy signal
-            if (!IsBearishCandlePattern()) // Only check for opposing patterns
+            if (!IsBearishCandlePattern())
             {
                 if (!ManagePositions(POSITION_TYPE_BUY) && !HasPendingOrder(ORDER_TYPE_BUY_LIMIT))
                 {
-                    Print("Buy Signal - No contradicting bearish patterns found");
+                    Print("Buy Signal - Trend and Order Flow Aligned");
                     PlaceBuyOrder();
                 }
             }
@@ -183,15 +185,14 @@ void ExecuteTradingLogic()
             }
         }
         
-        // For SELL signals - only avoid if there's a clear bullish pattern
-        else if (AllowShortTrades && (trendSignal == -1 || rsiMacdSignal == -1))  // Changed from AND to OR
+        // For SELL signals
+        else if (AllowShortTrades && (trendSignal == -1 || rsiMacdSignal == -1) && orderFlowSignal == -1)
         {
-            // Check for strong bullish patterns that would contradict our sell signal
-            if (!IsBullishCandlePattern()) // Only check for opposing patterns
+            if (!IsBullishCandlePattern())
             {
                 if (!ManagePositions(POSITION_TYPE_SELL) && !HasPendingOrder(ORDER_TYPE_SELL_LIMIT))
                 {
-                    Print("Sell Signal - No contradicting bullish patterns found");
+                    Print("Sell Signal - Trend and Order Flow Aligned");
                     PlaceSellOrder();
                 }
             }
@@ -201,9 +202,6 @@ void ExecuteTradingLogic()
             }
         }
     }
-
-    // Monitor order flow
-    MonitorOrderFlow();
 }
 
 //+------------------------------------------------------------------+
@@ -737,10 +735,10 @@ int DetectOrderFlowImbalances(double buyVolume, double sellVolume, double imbala
 //+------------------------------------------------------------------+
 //| Monitor Order Flow                                               |
 //+------------------------------------------------------------------+
-void MonitorOrderFlow()
+int MonitorOrderFlow()
 {
     if (!UseDOMAnalysis)
-        return;
+        return 0;
 
     MqlBookInfo book_info[];
     int book_count = MarketBookGet(_Symbol, book_info);
@@ -765,28 +763,12 @@ void MonitorOrderFlow()
         // Detect order flow imbalances
         int imbalanceSignal = DetectOrderFlowImbalances(buyVolume, sellVolume, ImbalanceThreshold);
         
-        // Get current RSI value
-        double rsi = CalculateRSI(14);
-
-        if (imbalanceSignal == 1 && !ManagePositions(POSITION_TYPE_BUY) && rsi < RSILowerThreshold)
-        {
-            PlaceBuyOrder();
-        }
-        else if (AllowShortTrades && imbalanceSignal == -1 && !ManagePositions(POSITION_TYPE_SELL) && rsi > RSIUpperThreshold)
-        {
-            PlaceSellOrder();
-        }
-    }
-    else if (book_count == 0)
-    {
-        Print("No order flow data available.");
+        return imbalanceSignal;
     }
     else
     {
-        int error = GetLastError();
-        Print("MarketBookGet() failed with error: ", error);
-        ResetLastError();
-        // Skip this feature
+        Print("No order flow data available.");
+        return 0;
     }
 }
 
