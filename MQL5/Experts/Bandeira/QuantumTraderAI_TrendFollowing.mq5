@@ -153,18 +153,11 @@ void ExecuteTradingLogic()
 
     // Manage open positions
     ManagePositions();
-    
-    // This strategy combines multiple technical indicators and patterns to make trading decisions.
-    // It uses a trend-following approach, enhanced with RSI and MACD signals, to identify potential buy and sell opportunities.
-    // The strategy also incorporates dynamic thresholds and divergence checks to adapt to changing market conditions.
-    // Additionally, it includes risk management features such as trailing stops, breakeven points, and drawdown checks to protect capital.
-    // The goal is to maximize profits by capturing strong trends while minimizing losses during unfavorable market conditions.
-
-    // Get order flow signal
-    int orderFlowSignal = MonitorOrderFlow();
-    
+        
     if (UseTrendStrategy)
     {
+        // Get order flow signal
+        int orderFlowSignal = MonitorOrderFlow();
         int trendSignal = TrendFollowingCore();
         int rsiMacdSignal = CheckRSIMACDSignal();
         
