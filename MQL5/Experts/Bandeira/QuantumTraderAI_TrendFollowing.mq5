@@ -3,7 +3,7 @@
 //| VSol Software                                                    |
 //+------------------------------------------------------------------+
 #property copyright "VSol Software"
-#property version   "1.12"
+#property version   "1.14"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -153,8 +153,13 @@ void ExecuteTradingLogic()
 
     // Manage open positions
     ManagePositions();
+    
+    // This strategy combines multiple technical indicators and patterns to make trading decisions.
+    // It uses a trend-following approach, enhanced with RSI and MACD signals, to identify potential buy and sell opportunities.
+    // The strategy also incorporates dynamic thresholds and divergence checks to adapt to changing market conditions.
+    // Additionally, it includes risk management features such as trailing stops, breakeven points, and drawdown checks to protect capital.
+    // The goal is to maximize profits by capturing strong trends while minimizing losses during unfavorable market conditions.
 
-    // Execute Trend Strategy if enabled
     if (UseTrendStrategy)
     {
         int trendSignal = TrendFollowingCore();
@@ -516,17 +521,36 @@ int TrendFollowingCore()
     double adx, plusDI, minusDI;
     CalculateADX(ADXPeriod, adx, plusDI, minusDI);
     
-    // Only log when there's an actual trade signal and we have an open position or pending order
+    static datetime lastBuySignalTime = 0;
+    static datetime lastSellSignalTime = 0;
+    
+    // Define a minimum time interval between log messages (in seconds)
+    int minLogInterval = 300; // 5 minutes
+    
     if (ema > sma && rsi < RSIUpperThreshold && adx > TrendADXThreshold && plusDI > minusDI)
     {
-        if(HasActiveTradeOrPendingOrder(POSITION_TYPE_BUY))
-            Print("Trend Following: Buy Signal - Active Position");
+        if (HasActiveTradeOrPendingOrder(POSITION_TYPE_BUY))
+        {
+            datetime currentTime = TimeCurrent();
+            if (currentTime - lastBuySignalTime >= minLogInterval)
+            {
+                Print("Trend Following: Buy Signal - Active Position");
+                lastBuySignalTime = currentTime;
+            }
+        }
         return 1;
     }
     else if (ema < sma && rsi > RSILowerThreshold && adx > TrendADXThreshold && minusDI > plusDI)
     {
-        if(HasActiveTradeOrPendingOrder(POSITION_TYPE_SELL))
-            Print("Trend Following: Sell Signal - Active Position");
+        if (HasActiveTradeOrPendingOrder(POSITION_TYPE_SELL))
+        {
+            datetime currentTime = TimeCurrent();
+            if (currentTime - lastSellSignalTime >= minLogInterval)
+            {
+                Print("Trend Following: Sell Signal - Active Position");
+                lastSellSignalTime = currentTime;
+            }
+        }
         return -1;
     }
     return 0;
@@ -802,46 +826,43 @@ int CheckRSIMACDSignal()
     double macdMain, macdSignal, macdHistogram;
     CalculateMACD(macdMain, macdSignal, macdHistogram);
     
-    // Previous values for crossover detection
-    double prevMacdMain, prevMacdSignal, prevMacdHist;
-    CalculateMACD(prevMacdMain, prevMacdSignal, prevMacdHist, 1);
+    // Get dynamic thresholds
+    double dynamic_upper, dynamic_lower;
+    GetDynamicRSIThresholds(dynamic_upper, dynamic_lower);
     
-    // Buy Signal Conditions
+    // Check for divergence
+    bool bullish_div, bearish_div;
+    CheckRSIDivergence(bullish_div, bearish_div);
+    
+    // Enhanced Buy Signal Conditions
     bool buySignal = 
-        rsi < RSILowerThreshold &&                  // RSI oversold
-        macdMain > macdSignal &&                    // Current MACD above signal
-        prevMacdMain <= prevMacdSignal &&           // Previous MACD below signal (crossover)
-        macdHistogram > prevMacdHist;               // Increasing momentum
+        ((rsi < dynamic_lower) || bullish_div) &&    // RSI oversold OR bullish divergence
+        macdMain > macdSignal &&                     // MACD above signal
+        macdHistogram > 0 &&                         // Positive momentum
+        rsi > CalculateRSI(RSI_Period, 1);          // RSI increasing
         
-    // Sell Signal Conditions
+    // Enhanced Sell Signal Conditions    
     bool sellSignal = 
-        rsi > RSIUpperThreshold &&                  // RSI overbought
-        macdMain < macdSignal &&                    // Current MACD below signal
-        prevMacdMain >= prevMacdSignal &&           // Previous MACD above signal (crossover)
-        macdHistogram < prevMacdHist;               // Decreasing momentum
-        
-    // Exit Conditions
-    bool exitLong = 
-        rsi > RSI_Neutral &&                        // RSI above neutral
-        macdHistogram < 0;                          // Negative momentum
-        
-    bool exitShort = 
-        rsi < RSI_Neutral &&                        // RSI below neutral
-        macdHistogram > 0;                          // Positive momentum
+        ((rsi > dynamic_upper) || bearish_div) &&    // RSI overbought OR bearish divergence
+        macdMain < macdSignal &&                     // MACD below signal
+        macdHistogram < 0 &&                         // Negative momentum
+        rsi < CalculateRSI(RSI_Period, 1);          // RSI decreasing
     
-    // Only log signals when there are active positions or when we're about to enter
-    if(buySignal && !HasActiveTradeOrPendingOrder(POSITION_TYPE_BUY)) 
-        Print("RSI-MACD Buy Signal: RSI=", rsi, " MACD Hist=", macdHistogram);
-    if(sellSignal && !HasActiveTradeOrPendingOrder(POSITION_TYPE_SELL)) 
-        Print("RSI-MACD Sell Signal: RSI=", rsi, " MACD Hist=", macdHistogram);
-    if(exitLong && HasActiveTradeOrPendingOrder(POSITION_TYPE_BUY)) 
-        Print("RSI-MACD Exit Long Signal - Active Position");
-    if(exitShort && HasActiveTradeOrPendingOrder(POSITION_TYPE_SELL)) 
-        Print("RSI-MACD Exit Short Signal - Active Position");
-    
-    // Return buy/sell signals
-    if(buySignal) return 1;
-    if(sellSignal) return -1;
+    // Return signals with logging
+    if(buySignal)
+    {
+        Print("RSI Buy Signal - Value: ", rsi, 
+              " Dynamic Lower: ", dynamic_lower,
+              " Divergence: ", bullish_div);
+        return 1;
+    }
+    if(sellSignal)
+    {
+        Print("RSI Sell Signal - Value: ", rsi,
+              " Dynamic Upper: ", dynamic_upper,
+              " Divergence: ", bearish_div);
+        return -1;
+    }
     return 0;
 }
 
@@ -1408,4 +1429,80 @@ bool HasActiveTradeOrPendingOrder(int type)
     }
     
     return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check for RSI Divergence                                         |
+//+------------------------------------------------------------------+
+bool CheckRSIDivergence(bool &bullish, bool &bearish, int lookback = 10)
+{
+    double rsi_values[];
+    double price_values[];
+    ArrayResize(rsi_values, lookback);
+    ArrayResize(price_values, lookback);
+    
+    // Get RSI and price values
+    for(int i = 0; i < lookback; i++)
+    {
+        rsi_values[i] = CalculateRSI(RSI_Period, i);
+        price_values[i] = iLow(_Symbol, Timeframe, i);
+    }
+    
+    // Find local extremes
+    double rsi_low = rsi_values[ArrayMinimum(rsi_values)];
+    double rsi_high = rsi_values[ArrayMaximum(rsi_values)];
+    double price_low = price_values[ArrayMinimum(price_values)];
+    double price_high = price_values[ArrayMaximum(price_values)];
+    
+    // Check for bullish divergence (price lower, RSI higher)
+    bullish = (price_values[0] < price_low && rsi_values[0] > rsi_low);
+    
+    // Check for bearish divergence (price higher, RSI lower)
+    bearish = (price_values[0] > price_high && rsi_values[0] < rsi_high);
+    
+    return (bullish || bearish);
+}
+//+------------------------------------------------------------------+
+//| Calculate Dynamic RSI Thresholds                                 |
+//+------------------------------------------------------------------+
+void GetDynamicRSIThresholds(double &upper_threshold, double &lower_threshold)
+{
+    double atr = CalculateATR(14);
+    double avg_atr = 0;
+    
+    // Calculate average ATR for last 20 periods
+    for(int i = 0; i < 20; i++)
+    {
+        avg_atr += CalculateATR(14, i);
+    }
+    avg_atr /= 20;
+    
+    // Adjust thresholds based on relative volatility
+    double volatility_factor = atr / avg_atr;
+    
+    // More volatile market = wider thresholds
+    upper_threshold = RSIUpperThreshold + (volatility_factor - 1) * 10;
+    lower_threshold = RSILowerThreshold - (volatility_factor - 1) * 10;
+    
+    // Keep thresholds within reasonable bounds
+    upper_threshold = MathMin(MathMax(upper_threshold, 65), 85);
+    lower_threshold = MathMax(MathMin(lower_threshold, 35), 15);
+}
+//+------------------------------------------------------------------+
+//| Analyze RSI Trend Strength                                       |
+//+------------------------------------------------------------------+
+double GetRSITrendStrength(int periods = 5)
+{
+    double strength = 0;
+    double prev_rsi = CalculateRSI(RSI_Period, periods);
+    
+    // Calculate the strength of the RSI trend
+    for(int i = periods-1; i >= 0; i--)
+    {
+        double current_rsi = CalculateRSI(RSI_Period, i);
+        strength += (current_rsi - prev_rsi);
+        prev_rsi = current_rsi;
+    }
+    
+    return strength / periods;  // Positive = strengthening, Negative = weakening
 }
