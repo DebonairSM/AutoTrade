@@ -449,7 +449,14 @@ int MonitorOrderFlow()
     }
     else
     {
-        Print("No order flow data available.");
+        static datetime lastLogTime = 0;
+        datetime currentTime = TimeCurrent();
+        // Log the message only every 60 seconds to reduce log clutter
+        if (currentTime - lastLogTime >= 60)
+        {
+            Print("No order flow data available.");
+            lastLogTime = currentTime;
+        }
         return 0;
     }
 }
