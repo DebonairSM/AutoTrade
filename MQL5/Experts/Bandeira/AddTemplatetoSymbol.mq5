@@ -7,8 +7,7 @@
 // -----------------------------------------------------------------------------
 // User-Configurable Parameters
 // -----------------------------------------------------------------------------
-input string TemplateName      = "quantum_trends_ea.tpl";  // EA template filename
-input ENUM_TIMEFRAMES TimeFrame = PERIOD_H4;               // Desired timeframe
+input string TemplateName = "quantum_trends_ea.tpl";  // EA template filename
 
 // -----------------------------------------------------------------------------
 // OnStart: Script execution entry point

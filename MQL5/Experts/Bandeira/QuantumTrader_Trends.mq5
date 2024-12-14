@@ -9,6 +9,11 @@
 #include <Trade/Trade.mqh>
 #include <Bandeira/Utility.mqh>
 
+// Define threshold values
+input double ADX_THRESHOLD = 20.0;
+input double RSI_UPPER_THRESHOLD = 70.0;
+input double RSI_LOWER_THRESHOLD = 30.0;
+
 //+------------------------------------------------------------------+
 //| Input parameters                                                 |
 //+------------------------------------------------------------------+
@@ -23,8 +28,6 @@ input bool AllowShortTrades = true;         // Allow short (sell) trades
 input group "Risk Management"
 input double RiskPercent = 2.0;             // Percentage of account equity risked per trade
 input double MaxDrawdownPercent = 15.0;     // Maximum drawdown percentage allowed
-input double Aggressiveness = 1.0;          // Trade aggressiveness factor
-input double RecoveryFactor = 1.2;          // Recovery mode lot size multiplier
 input double ATRMultiplier = 1.5;           // ATR multiplier for dynamic SL/TP
 input double fixedStopLossPips = 20.0;      // Fixed Stop Loss in pips
 
@@ -86,6 +89,9 @@ double MinPriceChangeThreshold = 10;
 // Store the last modification price
 double LastModificationPrice = 0;
 
+// Declare a static variable to track the last log time
+static datetime lastLogTime = 0;
+
 //+------------------------------------------------------------------+
 //| Core EA Functions                                                 |
 //+------------------------------------------------------------------+
@@ -106,8 +112,6 @@ int OnInit()
     Print("  UseTrendStrategy=", UseTrendStrategy);
     Print("  RiskPercent=", RiskPercent);
     Print("  MaxDrawdownPercent=", MaxDrawdownPercent);
-    Print("  Aggressiveness=", Aggressiveness);
-    Print("  RecoveryFactor=", RecoveryFactor);
     Print("  ATRMultiplier=", ATRMultiplier);
     Print("  ADXPeriod=", ADXPeriod);
     Print("  TrendADXThreshold=", TrendADXThreshold);
@@ -133,6 +137,14 @@ void OnTick()
 {
     // Execute trading logic on each tick
     ExecuteTradingLogic();
+
+    // Check calendar events every hour
+    static datetime lastCheck = 0;
+    datetime currentTime = TimeCurrent();
+    if(currentTime - lastCheck >= PeriodSeconds(PERIOD_H1))
+    {
+        lastCheck = currentTime;
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -188,6 +200,48 @@ void ExecuteTradingLogic()
 
     if (UseTrendStrategy && shouldRecalculateSignals)
     {
+        // Calculate indicators
+        double rsi = CalculateRSI(RSI_Period, Timeframe);
+        double ema_short = CalculateEMA(EMA_PERIODS_SHORT, Timeframe);
+        double ema_medium = CalculateEMA(EMA_PERIODS_MEDIUM, Timeframe);
+        double ema_long = CalculateEMA(EMA_PERIODS_LONG, Timeframe);
+        double atr = CalculateATR(14, Timeframe);
+        double adx, plusDI, minusDI;
+        CalculateADX(ADXPeriod, Timeframe, adx, plusDI, minusDI);
+        double macdMain, macdSignal, macdHistogram;
+        CalculateMACD(macdMain, macdSignal, macdHistogram);
+
+        // Package the data for logging
+        MarketAnalysisData analysisData;
+        analysisData.currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        analysisData.ema_short = ema_short;
+        analysisData.ema_medium = ema_medium;
+        analysisData.ema_long = ema_long;
+        analysisData.adx = adx;
+        analysisData.plusDI = plusDI;
+        analysisData.minusDI = minusDI;
+        analysisData.rsi = rsi;
+        analysisData.macdMain = macdMain;
+        analysisData.macdSignal = macdSignal;
+        analysisData.macdHistogram = macdHistogram;
+        analysisData.atr = atr;
+        analysisData.bullishPattern = IsBullishCandlePattern();
+        analysisData.bearishPattern = IsBearishCandlePattern();
+
+        // Package the parameters
+        MarketAnalysisParameters params;
+        params.ema_period_short = EMA_PERIODS_SHORT;
+        params.ema_period_medium = EMA_PERIODS_MEDIUM;
+        params.ema_period_long = EMA_PERIODS_LONG;
+        params.adx_period = ADXPeriod;
+        params.rsi_period = RSI_Period;
+        params.trend_adx_threshold = TrendADXThreshold;
+        params.rsi_upper_threshold = RSIUpperThreshold;
+        params.rsi_lower_threshold = RSILowerThreshold;
+
+        // Log market analysis
+        LogMarketAnalysis(analysisData, params, Timeframe);
+
         // Calculate signals
         int orderFlowSignal = MonitorOrderFlow();
         int trendSignal = TrendFollowingCore();
@@ -237,6 +291,35 @@ void ExecuteTradingLogic()
             lastStopLoss = stopLoss;
             lastTakeProfit = takeProfit;
             lastCalculationTime = currentTime;
+
+            // If no trade signal is generated, log the reason
+            if (orderFlowSignal == 0)
+            {
+                if (TimeCurrent() - lastLogTime >= 3600) // Check if an hour has passed
+                {
+                    LogTradeRejection("No order flow signal detected.", SymbolInfoDouble(_Symbol, SYMBOL_BID), adx, rsi, ema_short, ema_medium, ema_long,
+                                      ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD);
+                    lastLogTime = TimeCurrent(); // Update last log time
+                }
+            }
+            if (trendSignal == 0)
+            {
+                if (TimeCurrent() - lastLogTime >= 3600)
+                {
+                    LogTradeRejection("No trend signal detected.", SymbolInfoDouble(_Symbol, SYMBOL_BID), adx, rsi, ema_short, ema_medium, ema_long,
+                                      ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD);
+                    lastLogTime = TimeCurrent();
+                }
+            }
+            if (rsiMacdSignal == 0)
+            {
+                if (TimeCurrent() - lastLogTime >= 3600)
+                {
+                    LogTradeRejection("No RSI/MACD signal detected.", SymbolInfoDouble(_Symbol, SYMBOL_BID), adx, rsi, ema_short, ema_medium, ema_long,
+                                      ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD);
+                    lastLogTime = TimeCurrent();
+                }
+            }
         }
     }
 }
@@ -817,45 +900,6 @@ double GetRSITrendStrength(int periods = 5)
     
     return strength / periods;  // Positive = strengthening, Negative = weakening
 }
-// Define the PlaceBuyLimitOrder function
-void PlaceBuyLimitOrder(double limitPrice, double tpPrice, double slPrice)
-{
-    double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-    double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double lot_size = CalculateDynamicLotSize(slPrice / _Point, accountBalance, RiskPercent, minVolume, maxVolume);
-    
-    if (trade.BuyLimit(lot_size, limitPrice, _Symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Buy Limit Order"))
-    {
-        LogTradeDetails(lot_size, slPrice, tpPrice);
-    }
-    else
-    {
-        int error = GetLastError();
-        Print("Buy Limit Order Failed with Error: ", error);
-        ResetLastError();
-    }
-}
-
-// Define the PlaceSellLimitOrder function
-void PlaceSellLimitOrder(double limitPrice, double tpPrice, double slPrice)
-{
-    double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-    double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double lot_size = CalculateDynamicLotSize(slPrice / _Point, accountBalance, RiskPercent, minVolume, maxVolume);
-    
-    if (trade.SellLimit(lot_size, limitPrice, _Symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Sell Limit Order"))
-    {
-        LogTradeDetails(lot_size, slPrice, tpPrice);
-    }
-    else
-    {
-        int error = GetLastError();
-        Print("Sell Limit Order Failed with Error: ", error);
-        ResetLastError();
-    }
-}
 
 //+------------------------------------------------------------------+
 //| Apply Trailing Stop                                              |
@@ -1100,6 +1144,45 @@ void PlaceAdditionalSellOrder()
     }
 }
 
+// Define the PlaceBuyLimitOrder function
+void PlaceBuyLimitOrder(double limitPrice, double tpPrice, double slPrice)
+{
+    double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+    double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double lot_size = CalculateDynamicLotSize(slPrice / _Point, accountBalance, RiskPercent, minVolume, maxVolume);
+    
+    if (trade.BuyLimit(lot_size, limitPrice, _Symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Buy Limit Order"))
+    {
+        LogTradeDetails(lot_size, slPrice, tpPrice);
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("Buy Limit Order Failed with Error: ", error);
+        ResetLastError();
+    }
+}
+
+// Define the PlaceSellLimitOrder function
+void PlaceSellLimitOrder(double limitPrice, double tpPrice, double slPrice)
+{
+    double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+    double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double lot_size = CalculateDynamicLotSize(slPrice / _Point, accountBalance, RiskPercent, minVolume, maxVolume);
+    
+    if (trade.SellLimit(lot_size, limitPrice, _Symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Sell Limit Order"))
+    {
+        LogTradeDetails(lot_size, slPrice, tpPrice);
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("Sell Limit Order Failed with Error: ", error);
+        ResetLastError();
+    }
+}
 //+------------------------------------------------------------------+
 //| Validate Input Parameters                                        |
 //+------------------------------------------------------------------+
@@ -1117,14 +1200,6 @@ void ValidateInputs()
     if (MaxDrawdownPercent <= 0.0 || MaxDrawdownPercent > 100.0)
     {
         Alert("MaxDrawdownPercent must be between 0.1 and 100.0");
-        ExpertRemove();
-        return;
-    }
-
-    // Validate RecoveryFactor
-    if (RecoveryFactor < 1.0 || RecoveryFactor > 2.0)
-    {
-        Alert("RecoveryFactor must be between 1.0 and 2.0");
         ExpertRemove();
         return;
     }

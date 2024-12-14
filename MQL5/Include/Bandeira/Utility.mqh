@@ -481,3 +481,252 @@ bool DetectLiquidityPoolsNearTPSL(MqlBookInfo &book_info[], int book_count, doub
 
     return liquidityPoolDetected;
 }
+
+//+------------------------------------------------------------------+
+//| Structure to hold market analysis data                           |
+//+------------------------------------------------------------------+
+struct MarketAnalysisData
+{
+    // Price data
+    double currentPrice;
+    
+    // EMAs
+    double ema_short;
+    double ema_medium;
+    double ema_long;
+    
+    // Trend indicators
+    double adx;
+    double plusDI;
+    double minusDI;
+    
+    // Momentum indicators
+    double rsi;
+    double macdMain;
+    double macdSignal;
+    double macdHistogram;
+    double atr;
+    
+    // Additional data
+    bool bullishPattern;
+    bool bearishPattern;
+};
+
+//+------------------------------------------------------------------+
+//| Structure to hold market analysis parameters                      |
+//+------------------------------------------------------------------+
+struct MarketAnalysisParameters
+{
+    // EMA Periods
+    int ema_period_short;
+    int ema_period_medium;
+    int ema_period_long;
+    
+    // ADX/RSI Parameters
+    int adx_period;
+    int rsi_period;
+    double trend_adx_threshold;
+    
+    // RSI Thresholds
+    double rsi_upper_threshold;
+    double rsi_lower_threshold;
+};
+
+//+------------------------------------------------------------------+
+//| Log Market Analysis using pre-calculated values                  |
+//+------------------------------------------------------------------+
+void LogMarketAnalysis(const MarketAnalysisData& data, 
+                      const MarketAnalysisParameters& params,
+                      ENUM_TIMEFRAMES timeframe)
+{
+    static datetime last_check = 0;
+    datetime current_time = TimeCurrent();
+    
+    // Check every 5 minutes (300 seconds)
+    if (current_time - last_check < 300) return;
+    last_check = current_time;
+    
+    // Create analysis message
+    string analysis = StringFormat(
+        "\n=== Market Analysis [%s] ===\n"
+        "Time: %s\n"
+        "Symbol: %s\n"
+        "Current Price: %.5f\n\n"
+        "Trend Indicators:\n"
+        "EMA(%d): %.5f\n"
+        "EMA(%d): %.5f\n"
+        "EMA(%d): %.5f\n"
+        "ADX(%d): %.2f (DI+ %.2f, DI- %.2f)\n\n"
+        "Momentum Indicators:\n"
+        "RSI(%d): %.2f\n"
+        "MACD: %.5f (Signal: %.5f, Hist: %.5f)\n"
+        "ATR(14): %.5f\n\n",
+        EnumToString(timeframe),
+        TimeToString(current_time, TIME_DATE|TIME_MINUTES|TIME_SECONDS),
+        _Symbol,
+        data.currentPrice,
+        params.ema_period_short, data.ema_short,
+        params.ema_period_medium, data.ema_medium,
+        params.ema_period_long, data.ema_long,
+        params.adx_period, data.adx, data.plusDI, data.minusDI,
+        params.rsi_period, data.rsi,
+        data.macdMain, data.macdSignal, data.macdHistogram,
+        data.atr
+    );
+    
+    // Add signal analysis
+    analysis += "Signal Analysis:\n";
+    analysis += "No Trade Signal Because:\n";
+    
+    // Check trend conditions
+    if (!(data.adx > params.trend_adx_threshold))
+        analysis += "- ADX ("+DoubleToString(data.adx,1)+") below threshold ("+
+                   DoubleToString(params.trend_adx_threshold,1)+")\n";
+        
+    // Check EMA alignment
+    if (!(data.ema_short > data.ema_medium && data.ema_medium > data.ema_long) && 
+        !(data.ema_short < data.ema_medium && data.ema_medium < data.ema_long))
+        analysis += "- EMAs not properly aligned for trend\n";
+    
+    // Check RSI
+    if (data.rsi > params.rsi_lower_threshold && data.rsi < params.rsi_upper_threshold)
+        analysis += "- RSI ("+DoubleToString(data.rsi,1)+") in neutral zone ("+
+                   DoubleToString(params.rsi_lower_threshold,1)+"-"+
+                   DoubleToString(params.rsi_upper_threshold,1)+")\n";
+    
+    // Check MACD
+    if (MathAbs(data.macdHistogram) < 0.0001)
+        analysis += "- MACD histogram too small (weak momentum)\n";
+    
+    // Check DI lines
+    if (MathAbs(data.plusDI - data.minusDI) < 5)
+        analysis += "- DI+ and DI- too close (no clear direction)\n";
+    
+    // Check candlestick patterns
+    if (data.bullishPattern)
+        analysis += "- Bullish candlestick pattern detected\n";
+    if (data.bearishPattern)
+        analysis += "- Bearish candlestick pattern detected\n";
+    
+    analysis += "\nMarket Conditions:\n";
+    analysis += "Trend Strength: " + (data.adx > params.trend_adx_threshold ? "Strong" : "Weak") + "\n";
+    analysis += "Volatility: " + (data.atr > CalculateATR(14, timeframe, 20) ? "High" : "Normal") + "\n";
+    analysis += "=====================\n";
+    
+    // Print to Experts tab
+    Print(analysis);
+    
+    // Write to file
+    string filename = "MarketAnalysis_" + _Symbol + ".log";
+    int filehandle = FileOpen(filename, FILE_WRITE|FILE_READ|FILE_TXT|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_ANSI);
+    
+    if(filehandle != INVALID_HANDLE)
+    {
+        FileSeek(filehandle, 0, SEEK_END);
+        FileWriteString(filehandle, analysis);
+        FileClose(filehandle);
+    }
+    else
+    {
+        Print("Failed to open market analysis log file: ", GetLastError());
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Log Trade Rejection Reasons with Detailed Explanation            |
+//+------------------------------------------------------------------+
+void LogTradeRejection(const string reason, double currentPrice, double adx, double rsi, double emaShort, double emaMedium, double emaLong, 
+                       double adxThreshold, double rsiUpperThreshold, double rsiLowerThreshold)
+{
+    string log_message = StringFormat(
+        "\n=== Trade Rejection Analysis [%s] ===\n"
+        "Time: %s\n"
+        "Symbol: %s\n\n"
+        "Market Conditions:\n"
+        "Current Price: %.5f\n"
+        "ADX: %.2f\n"
+        "RSI: %.2f\n"
+        "EMA Short: %.5f\n"
+        "EMA Medium: %.5f\n"
+        "EMA Long: %.5f\n\n"
+        "Trade Criteria:\n",
+        __FUNCTION__,
+        TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS),
+        _Symbol,
+        currentPrice,
+        adx,
+        rsi,
+        emaShort,
+        emaMedium,
+        emaLong
+    );
+    
+    // Check ADX criterion
+    if (adx < adxThreshold)
+    {
+        log_message += StringFormat(
+            "- ADX (%.2f) is below the required threshold of %.2f, indicating a weak trend.\n",
+            adx, adxThreshold
+        );
+    }
+    else
+    {
+        log_message += StringFormat(
+            "- ADX (%.2f) meets the required threshold of %.2f, confirming a strong trend.\n",
+            adx, adxThreshold
+        );
+    }
+    
+    // Check RSI criterion
+    if (rsi > rsiLowerThreshold && rsi < rsiUpperThreshold)
+    {
+        log_message += StringFormat(
+            "- RSI (%.2f) is between the lower threshold of %.2f and upper threshold of %.2f, indicating a ranging market.\n",
+            rsi, rsiLowerThreshold, rsiUpperThreshold
+        );
+    }
+    else
+    {
+        log_message += StringFormat(
+            "- RSI (%.2f) is outside the range of %.2f to %.2f, suggesting a potential trend.\n",
+            rsi, rsiLowerThreshold, rsiUpperThreshold
+        );
+    }
+    
+    // Check EMA alignment
+    if (emaShort > emaMedium && emaMedium > emaLong)
+    {
+        log_message += "- EMAs are aligned in a bullish order (short > medium > long), supporting an uptrend.\n";
+    }
+    else if (emaShort < emaMedium && emaMedium < emaLong)
+    {
+        log_message += "- EMAs are aligned in a bearish order (short < medium < long), supporting a downtrend.\n";
+    }
+    else
+    {
+        log_message += "- EMAs are not aligned in a clear bullish or bearish order, indicating a lack of trend confirmation.\n";
+    }
+    
+    log_message += "\nConclusion:\n";
+    log_message += reason + "\n";
+    log_message += "The trade setup does not meet all the required criteria for entry at this time.\n";
+    log_message += "===================\n";
+
+    // Print to Experts tab
+    Print(log_message);
+
+    // Write to file
+    string filename = "TradeRejection_" + _Symbol + ".log";
+    int filehandle = FileOpen(filename, FILE_WRITE|FILE_READ|FILE_TXT|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_ANSI);
+
+    if(filehandle != INVALID_HANDLE)
+    {
+        FileSeek(filehandle, 0, SEEK_END);
+        FileWriteString(filehandle, log_message);
+        FileClose(filehandle);
+    }
+    else
+    {
+        Print("Failed to open trade rejection log file: ", GetLastError());
+    }
+}
