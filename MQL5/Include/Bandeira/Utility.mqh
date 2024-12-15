@@ -212,22 +212,41 @@ bool CheckDrawdown(double maxDrawdownPercent, double accountBalance, double acco
 //+------------------------------------------------------------------+
 void CalculateDynamicSLTP(double &stop_loss, double &take_profit, double atr_multiplier, ENUM_TIMEFRAMES timeframe, double fixedStopLossPips)
 {
-    double atr = CalculateATR(14, timeframe); // 14-period ATR with specified timeframe
+    double atr = CalculateATR(14, timeframe);
 
     if (atr <= 0)
     {
         Print("ATR calculation failed or returned zero. Using default SL/TP values.");
-        stop_loss = fixedStopLossPips * _Point; // Use fixed stop loss
-        take_profit = 40 * _Point; // Default take profit
+        stop_loss = fixedStopLossPips * _Point;
+        take_profit = 40 * _Point;
         return;
     }
 
-    // Define SL/TP based on ATR
     double dynamicStopLoss = atr * atr_multiplier;
-    stop_loss = MathMax(dynamicStopLoss, fixedStopLossPips * _Point); // Use the larger of dynamic or fixed SL
-    take_profit = atr * atr_multiplier * 2.0; // Example: TP is twice the SL distance
+    stop_loss = MathMax(dynamicStopLoss, fixedStopLossPips * _Point);
+    take_profit = atr * atr_multiplier * 2.0;
 
-    Print("Dynamic SL: ", stop_loss, " | Dynamic TP: ", take_profit);
+    // Use the new logging function
+    LogDynamicSLTP(stop_loss, take_profit, _Symbol, timeframe);
+}
+
+void LogDynamicSLTP(double stopLoss, double takeProfit, string symbol, ENUM_TIMEFRAMES timeframe)
+{
+    static double lastSL = 0;
+    static double lastTP = 0;
+    static datetime lastLogTime = 0;
+    datetime currentTime = TimeCurrent();
+    
+    // Only log if SL/TP changed by more than 1% or after 5 minutes
+    if (MathAbs(stopLoss - lastSL)/lastSL > 0.01 || 
+        MathAbs(takeProfit - lastTP)/lastTP > 0.01 || 
+        currentTime - lastLogTime >= 300)
+    {
+        Print(symbol, ",", EnumToString(timeframe), " Dynamic SL: ", stopLoss, " | Dynamic TP: ", takeProfit);
+        lastSL = stopLoss;
+        lastTP = takeProfit;
+        lastLogTime = currentTime;
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -416,32 +435,119 @@ double GetBestLimitOrderPrice(ENUM_ORDER_TYPE orderType, double &tpPrice, double
     
     if (book_count > 0)
     {
-        double poolPrice, poolVolume;
-        bool liquidityPoolDetected = DetectLiquidityPoolsNearTPSL(book_info, book_count, liquidityThreshold, tpPrice, slPrice, poolPrice, poolVolume);
-        
-        if (liquidityPoolDetected)
+        Print("Failed to get market depth data - Error: ", GetLastError());
+        return 0.0;
+    }
+    
+    int book_count = ArraySize(book_info);
+    if (book_count == 0)
+    {
+        Print("Empty market depth data");
+        return 0.0;
+    }
+    
+    double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double spread = currentAsk - currentBid;
+    double atr = CalculateATR(14, PERIOD_CURRENT); // Use ATR for dynamic pricing
+    
+    // Initialize variables for liquidity analysis
+    double bestPrice = 0.0;
+    double maxVolume = 0.0;
+    
+    // For buy limit orders
+    if (orderType == ORDER_TYPE_BUY_LIMIT)
+    {
+        // Look for significant buy orders (support levels)
+        for (int i = 0; i < book_count; i++)
         {
-            if (orderType == ORDER_TYPE_BUY_LIMIT)
+            if (book_info[i].type == BOOK_TYPE_BUY)
             {
-                // Place buy limit order slightly below the liquidity pool price
-                double limitPrice = poolPrice - (10 * _Point);
-                
-                // Adjust TP/SL prices based on the detected liquidity pool
-                tpPrice = poolPrice + (takeProfitPips * _Point);
-                slPrice = limitPrice - (stopLossPips * _Point);
-                
-                return limitPrice;
+                if (book_info[i].volume > liquidityThreshold && 
+                    book_info[i].volume > maxVolume &&
+                    book_info[i].price < currentBid)  // Look for prices below current bid
+                {
+                    maxVolume = book_info[i].volume;
+                    bestPrice = book_info[i].price + (spread / 2); // Place order slightly above support
+                }
             }
-            else if (orderType == ORDER_TYPE_SELL_LIMIT)
+        }
+        
+        // If no significant liquidity found, use ATR-based placement
+        if (bestPrice == 0.0)
+        {
+            bestPrice = currentBid - (atr * 0.1); // Place 10% of ATR below current bid
+        }
+        
+        // Adjust TP/SL based on the limit price
+        if (bestPrice > 0.0)
+        {
+            tpPrice = bestPrice + (takeProfitPips * _Point);
+            slPrice = bestPrice - (stopLossPips * _Point);
+            
+            Print("Buy Limit Analysis - Price: ", bestPrice, 
+                  " Volume: ", maxVolume,
+                  " ATR: ", atr,
+                  " Spread: ", spread);
+        }
+    }
+    
+    // For sell limit orders
+    else if (orderType == ORDER_TYPE_SELL_LIMIT)
+    {
+        // Look for significant sell orders (resistance levels)
+        for (int i = 0; i < book_count; i++)
+        {
+            if (book_info[i].type == BOOK_TYPE_SELL)
             {
-                // Place sell limit order slightly above the liquidity pool price
-                double limitPrice = poolPrice + (10 * _Point);
-                
-                // Adjust TP/SL prices based on the detected liquidity pool
-                tpPrice = poolPrice - (takeProfitPips * _Point);
-                slPrice = limitPrice + (stopLossPips * _Point);
-                
-                return limitPrice;
+                if (book_info[i].volume > liquidityThreshold && 
+                    book_info[i].volume > maxVolume &&
+                    book_info[i].price > currentAsk)  // Look for prices above current ask
+                {
+                    maxVolume = book_info[i].volume;
+                    bestPrice = book_info[i].price - (spread / 2); // Place order slightly below resistance
+                }
+            }
+        }
+        
+        // If no significant liquidity found, use ATR-based placement
+        if (bestPrice == 0.0)
+        {
+            bestPrice = currentAsk + (atr * 0.1); // Place 10% of ATR above current ask
+        }
+        
+        // Adjust TP/SL based on the limit price
+        if (bestPrice > 0.0)
+        {
+            tpPrice = bestPrice - (takeProfitPips * _Point);
+            slPrice = bestPrice + (stopLossPips * _Point);
+            
+            Print("Sell Limit Analysis - Price: ", bestPrice,
+                  " Volume: ", maxVolume,
+                  " ATR: ", atr,
+                  " Spread: ", spread);
+        }
+    }
+    
+    // Validate the price
+    if (bestPrice > 0.0)
+    {
+        // Ensure the price is within reasonable bounds
+        double maxDeviation = atr * 2; // Maximum 2x ATR deviation
+        if (orderType == ORDER_TYPE_BUY_LIMIT)
+        {
+            if (bestPrice > currentBid || bestPrice < (currentBid - maxDeviation))
+            {
+                Print("Buy limit price outside reasonable bounds");
+                return 0.0;
+            }
+        }
+        else if (orderType == ORDER_TYPE_SELL_LIMIT)
+        {
+            if (bestPrice < currentAsk || bestPrice > (currentAsk + maxDeviation))
+            {
+                Print("Sell limit price outside reasonable bounds");
+                return 0.0;
             }
         }
     }

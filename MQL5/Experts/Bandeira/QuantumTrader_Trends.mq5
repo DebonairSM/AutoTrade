@@ -460,9 +460,7 @@ int TrendFollowingCore()
     
     // Calculate DI difference
     double diDifference = MathAbs(plusDI - minusDI);
-    
-    // Log DI difference for debugging
-    Print("DI Difference: ", diDifference, " (Threshold: ", DI_DIFFERENCE_THRESHOLD, ")");
+
     
     if (ema > sma && rsi < RSIUpperThreshold && adx > TrendADXThreshold && 
         plusDI > minusDI && diDifference > DI_DIFFERENCE_THRESHOLD)
