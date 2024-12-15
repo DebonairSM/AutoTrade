@@ -537,7 +537,8 @@ struct MarketAnalysisParameters
 //+------------------------------------------------------------------+
 void LogMarketAnalysis(const MarketAnalysisData& data, 
                       const MarketAnalysisParameters& params,
-                      ENUM_TIMEFRAMES timeframe)
+                      ENUM_TIMEFRAMES timeframe,
+                      bool useDOMAnalysis)
 {
     static datetime last_check = 0;
     datetime current_time = TimeCurrent();
@@ -546,7 +547,7 @@ void LogMarketAnalysis(const MarketAnalysisData& data,
     if (current_time - last_check < 300) return;
     last_check = current_time;
     
-    // Create analysis message
+    // Create base analysis message
     string analysis = StringFormat(
         "\n=== Market Analysis [%s] ===\n"
         "Time: %s\n"
@@ -574,15 +575,41 @@ void LogMarketAnalysis(const MarketAnalysisData& data,
         data.atr
     );
     
+    // Add DOM analysis if enabled
+    if (useDOMAnalysis)
+    {
+        MqlBookInfo book_info[];
+        if (MarketBookGet(_Symbol, book_info))
+        {
+            double buyVolume = 0.0, sellVolume = 0.0;
+            for (int i = 0; i < ArraySize(book_info); i++)
+            {
+                if (book_info[i].type == BOOK_TYPE_BUY)
+                    buyVolume += book_info[i].volume;
+                else if (book_info[i].type == BOOK_TYPE_SELL)
+                    sellVolume += book_info[i].volume;
+            }
+            
+            analysis += StringFormat(
+                "Order Flow Analysis:\n"
+                "Buy Volume: %.2f\n"
+                "Sell Volume: %.2f\n"
+                "Volume Ratio: %.2f\n\n",
+                buyVolume,
+                sellVolume,
+                sellVolume > 0 ? buyVolume/sellVolume : 0
+            );
+        }
+    }
+    
     // Add signal analysis
     analysis += "Signal Analysis:\n";
-    analysis += "No Trade Signal Because:\n";
     
     // Check trend conditions
     if (!(data.adx > params.trend_adx_threshold))
         analysis += "- ADX ("+DoubleToString(data.adx,1)+") below threshold ("+
                    DoubleToString(params.trend_adx_threshold,1)+")\n";
-        
+    
     // Check EMA alignment
     if (!(data.ema_short > data.ema_medium && data.ema_medium > data.ema_long) && 
         !(data.ema_short < data.ema_medium && data.ema_medium < data.ema_long))
@@ -613,7 +640,6 @@ void LogMarketAnalysis(const MarketAnalysisData& data,
     analysis += "Volatility: " + (data.atr > CalculateATR(14, timeframe, 20) ? "High" : "Normal") + "\n";
     analysis += "=====================\n";
     
-    // Print to Experts tab
     Print(analysis);
     
     // Write to file
@@ -636,7 +662,8 @@ void LogMarketAnalysis(const MarketAnalysisData& data,
 //| Log Trade Rejection Reasons with Detailed Explanation            |
 //+------------------------------------------------------------------+
 void LogTradeRejection(const string reason, double currentPrice, double adx, double rsi, double emaShort, double emaMedium, double emaLong, 
-                       double adxThreshold, double rsiUpperThreshold, double rsiLowerThreshold)
+                       double adxThreshold, double rsiUpperThreshold, double rsiLowerThreshold,
+                       bool useDOMAnalysis)
 {
     string log_message = StringFormat(
         "\n=== Trade Rejection Analysis [%s] ===\n"
@@ -648,8 +675,7 @@ void LogTradeRejection(const string reason, double currentPrice, double adx, dou
         "RSI: %.2f\n"
         "EMA Short: %.5f\n"
         "EMA Medium: %.5f\n"
-        "EMA Long: %.5f\n\n"
-        "Trade Criteria:\n",
+        "EMA Long: %.5f\n\n",
         __FUNCTION__,
         TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS),
         _Symbol,
@@ -661,18 +687,41 @@ void LogTradeRejection(const string reason, double currentPrice, double adx, dou
         emaLong
     );
     
+    // Add DOM analysis if enabled
+    if (useDOMAnalysis)
+    {
+        MqlBookInfo book_info[];
+        if (MarketBookGet(_Symbol, book_info))
+        {
+            double buyVolume = 0.0, sellVolume = 0.0;
+            for (int i = 0; i < ArraySize(book_info); i++)
+            {
+                if (book_info[i].type == BOOK_TYPE_BUY)
+                    buyVolume += book_info[i].volume;
+                else if (book_info[i].type == BOOK_TYPE_SELL)
+                    sellVolume += book_info[i].volume;
+            }
+            
+            log_message += StringFormat(
+                "Order Flow Analysis:\n"
+                "Buy Volume: %.2f\n"
+                "Sell Volume: %.2f\n"
+                "Volume Ratio: %.2f\n\n",
+                buyVolume,
+                sellVolume,
+                sellVolume > 0 ? buyVolume/sellVolume : 0
+            );
+        }
+    }
+    
+    // Add trade criteria analysis
+    log_message += "Trade Criteria:\n";
+    
     // Check ADX criterion
     if (adx < adxThreshold)
     {
         log_message += StringFormat(
             "- ADX (%.2f) is below the required threshold of %.2f, indicating a weak trend.\n",
-            adx, adxThreshold
-        );
-    }
-    else
-    {
-        log_message += StringFormat(
-            "- ADX (%.2f) meets the required threshold of %.2f, confirming a strong trend.\n",
             adx, adxThreshold
         );
     }
@@ -712,10 +761,8 @@ void LogTradeRejection(const string reason, double currentPrice, double adx, dou
     log_message += "The trade setup does not meet all the required criteria for entry at this time.\n";
     log_message += "===================\n";
 
-    // Print to Experts tab
     Print(log_message);
 
-    // Write to file
     string filename = "TradeRejection_" + _Symbol + ".log";
     int filehandle = FileOpen(filename, FILE_WRITE|FILE_READ|FILE_TXT|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_ANSI);
 

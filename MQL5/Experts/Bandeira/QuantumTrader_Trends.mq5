@@ -2,6 +2,9 @@
 //| QuantumTraderAI_TrendFollowing.mq5                               |
 //| VSol Software                                                    |
 //+------------------------------------------------------------------+
+// Define constants for version and copyright
+const string EA_VERSION = "1.14";
+const string EA_COPYRIGHT = "VSol Software";
 #property copyright "VSol Software"
 #property version   "1.14"
 #property strict
@@ -9,10 +12,12 @@
 #include <Trade/Trade.mqh>
 #include <Bandeira/Utility.mqh>
 
+
 // Define threshold values
 input double ADX_THRESHOLD = 20.0;
 input double RSI_UPPER_THRESHOLD = 70.0;
 input double RSI_LOWER_THRESHOLD = 30.0;
+input double DI_DIFFERENCE_THRESHOLD = 2.0; // Minimum difference between DI+ and DI-
 
 //+------------------------------------------------------------------+
 //| Input parameters                                                 |
@@ -92,6 +97,9 @@ double LastModificationPrice = 0;
 // Declare a static variable to track the last log time
 static datetime lastLogTime = 0;
 
+// Declare the lastCalculationTime variable
+datetime lastCalculationTime = 0;
+
 //+------------------------------------------------------------------+
 //| Core EA Functions                                                 |
 //+------------------------------------------------------------------+
@@ -101,6 +109,12 @@ static datetime lastLogTime = 0;
 //+------------------------------------------------------------------+
 int OnInit()
 {
+    // Log version and copyright information
+    Print("=== Expert Advisor Initialized ===");
+    Print("Version: ", EA_VERSION);
+    Print("Copyright: ", EA_COPYRIGHT);
+    Print("===================================");
+
     // Validate input parameters
     ValidateInputs();
 
@@ -126,6 +140,9 @@ int OnInit()
     Print("  LiquidityThreshold=", LiquidityThreshold);
     Print("  ImbalanceThreshold=", ImbalanceThreshold);
     Print("  Timeframe=", EnumToString(Timeframe));
+
+    // Set the initial value of lastCalculationTime to ensure signals are calculated on the first tick
+    lastCalculationTime = 0;
 
     return INIT_SUCCEEDED;
 }
@@ -190,14 +207,6 @@ void ExecuteTradingLogic()
         ManagePositions();
     }
 
-    // If we have active positions and we're not using trailing stop or breakeven,
-    // no need to continue with calculations
-    if (!shouldRecalculateSignals && !UseTrailingStop && !UseBreakeven && 
-        (ManagePositions(POSITION_TYPE_BUY) || ManagePositions(POSITION_TYPE_SELL)))
-    {
-        return;
-    }
-
     if (UseTrendStrategy && shouldRecalculateSignals)
     {
         // Calculate indicators
@@ -240,87 +249,119 @@ void ExecuteTradingLogic()
         params.rsi_lower_threshold = RSILowerThreshold;
 
         // Log market analysis
-        LogMarketAnalysis(analysisData, params, Timeframe);
+        
+        LogMarketAnalysis(analysisData, params, Timeframe, UseDOMAnalysis);
 
         // Calculate signals
         int orderFlowSignal = MonitorOrderFlow();
         int trendSignal = TrendFollowingCore();
         int rsiMacdSignal = CheckRSIMACDSignal();
         
-        // Only proceed if signals have changed or it's first calculation
-        if (orderFlowSignal != lastOrderFlowSignal || 
-            trendSignal != lastTrendSignal || 
-            rsiMacdSignal != lastRsiMacdSignal || 
-            lastCalculationTime == 0)
+        // Use a local variable for RiskPercent modification
+        double localRiskPercent = RiskPercent;
+
+        // Double the risk if RSI/MACD signal is triggered
+        if (rsiMacdSignal != 0)
         {
-            // Use a local variable for RiskPercent modification
-            double localRiskPercent = RiskPercent;
+            localRiskPercent *= 2;
+            Print("Doubling Risk: New RiskPercent = ", localRiskPercent);
+        }
 
-            // Double the risk if RSI/MACD signal is triggered
-            if (rsiMacdSignal != 0)
+        // Calculate stop loss and take profit only when needed
+        double stopLoss, takeProfit;
+        CalculateDynamicSLTP(stopLoss, takeProfit, ATRMultiplier, PERIOD_H1, fixedStopLossPips);
+
+        // Calculate lot size using the now-defined stopLoss
+        double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) * 10;
+        double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+        double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+        double lotSize = CalculateDynamicLotSize(stopLoss / _Point, accountBalance, localRiskPercent, minVolume, maxVolume);
+
+        // For BUY signals
+        if (trendSignal == 1 && rsiMacdSignal == 1 && orderFlowSignal == 1)
+        {
+            // Buy logic
+            if (!HasActiveTradeOrPendingOrder(POSITION_TYPE_BUY))
             {
-                localRiskPercent *= 2;
-                Print("Doubling Risk: New RiskPercent = ", localRiskPercent);
+                double stopLoss, takeProfit;
+                CalculateDynamicSLTP(stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
+
+                double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+                double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+                double lotSize = CalculateDynamicLotSize(stopLoss / _Point, accountBalance, RiskPercent, minVolume, maxVolume);
+
+                Print("Placing Buy Trade...");
+                PlaceBuyOrder();  // Direct market order
             }
-
-            // Calculate stop loss and take profit only when needed
-            double stopLoss, takeProfit;
-            CalculateDynamicSLTP(stopLoss, takeProfit, ATRMultiplier, PERIOD_H1, fixedStopLossPips);
-
-            // Calculate lot size using the now-defined stopLoss
-            double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) * 10;
-            double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-            double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-            double lotSize = CalculateDynamicLotSize(stopLoss / _Point, accountBalance, localRiskPercent, minVolume, maxVolume);
-
-            // For BUY signals
-            if ((trendSignal == 1 || rsiMacdSignal == 1) && orderFlowSignal == 1)
+        }
+        // For SELL signals
+        else if (AllowShortTrades && trendSignal == -1 && rsiMacdSignal == -1 && orderFlowSignal == -1)
+        {
+            if (!HasActiveTradeOrPendingOrder(POSITION_TYPE_SELL))
             {
-                ProcessBuySignal(lotSize, stopLoss, takeProfit);
-            }
-            // For SELL signals
-            else if (AllowShortTrades && (trendSignal == -1 || rsiMacdSignal == -1) && orderFlowSignal == -1)
-            {
-                ProcessSellSignal(lotSize, stopLoss, takeProfit);
-            }
+                double stopLoss, takeProfit;
+                CalculateDynamicSLTP(stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
 
-            // Update last values
-            lastOrderFlowSignal = orderFlowSignal;
-            lastTrendSignal = trendSignal;
-            lastRsiMacdSignal = rsiMacdSignal;
-            lastStopLoss = stopLoss;
-            lastTakeProfit = takeProfit;
-            lastCalculationTime = currentTime;
+                double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+                double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+                double lotSize = CalculateDynamicLotSize(stopLoss / _Point, accountBalance, RiskPercent, minVolume, maxVolume);
 
-            // If no trade signal is generated, log the reason
-            if (orderFlowSignal == 0)
-            {
-                if (TimeCurrent() - lastLogTime >= 3600) // Check if an hour has passed
+                double bidPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                double tpPrice = bidPrice - takeProfit;
+                double slPrice = bidPrice + stopLoss;
+                
+                double limitPrice = GetBestLimitOrderPrice(ORDER_TYPE_SELL_LIMIT, tpPrice, slPrice, LiquidityThreshold, TakeProfitPips, StopLossPips);
+                
+                if (limitPrice > 0.0)
                 {
-                    LogTradeRejection("No order flow signal detected.", SymbolInfoDouble(_Symbol, SYMBOL_BID), adx, rsi, ema_short, ema_medium, ema_long,
-                                      ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD);
-                    lastLogTime = TimeCurrent(); // Update last log time
+                    Print("Placing Sell Limit Order - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
+                    PlaceSellLimitOrder(limitPrice, tpPrice, slPrice);
                 }
-            }
-            if (trendSignal == 0)
-            {
-                if (TimeCurrent() - lastLogTime >= 3600)
+                else
                 {
-                    LogTradeRejection("No trend signal detected.", SymbolInfoDouble(_Symbol, SYMBOL_BID), adx, rsi, ema_short, ema_medium, ema_long,
-                                      ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD);
-                    lastLogTime = TimeCurrent();
-                }
-            }
-            if (rsiMacdSignal == 0)
-            {
-                if (TimeCurrent() - lastLogTime >= 3600)
-                {
-                    LogTradeRejection("No RSI/MACD signal detected.", SymbolInfoDouble(_Symbol, SYMBOL_BID), adx, rsi, ema_short, ema_medium, ema_long,
-                                      ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD);
-                    lastLogTime = TimeCurrent();
+                    Print("Falling back to market order - TP: ", tpPrice, " SL: ", slPrice);
+                    PlaceSellOrder();
                 }
             }
         }
+
+        // Update last values
+        lastOrderFlowSignal = orderFlowSignal;
+        lastTrendSignal = trendSignal;
+        lastRsiMacdSignal = rsiMacdSignal;
+        lastStopLoss = stopLoss;
+        lastTakeProfit = takeProfit;
+        lastCalculationTime = currentTime;
+
+        // If no trade signal is generated, log the reason
+        if (orderFlowSignal == 0)
+        {
+            if (TimeCurrent() - lastLogTime >= 3600) // Check if an hour has passed
+            {
+                LogTradeRejection("No order flow signal detected.", SymbolInfoDouble(_Symbol, SYMBOL_BID), adx, rsi, ema_short, ema_medium, ema_long,
+                                    ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
+                lastLogTime = TimeCurrent(); // Update last log time
+            }
+        }
+        if (trendSignal == 0)
+        {
+            if (TimeCurrent() - lastLogTime >= 3600)
+            {
+                LogTradeRejection("No trend signal detected.", SymbolInfoDouble(_Symbol, SYMBOL_BID), adx, rsi, ema_short, ema_medium, ema_long,
+                                    ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
+                lastLogTime = TimeCurrent();
+            }
+        }
+        if (rsiMacdSignal == 0)
+        {
+            if (TimeCurrent() - lastLogTime >= 3600)
+            {
+                LogTradeRejection("No RSI/MACD signal detected.", SymbolInfoDouble(_Symbol, SYMBOL_BID), adx, rsi, ema_short, ema_medium, ema_long,
+                                    ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
+                lastLogTime = TimeCurrent();
+            }
+        }
+        
     }
 }
 
@@ -402,7 +443,14 @@ int TrendFollowingCore()
     // Define a minimum time interval between log messages (in seconds)
     int minLogInterval = 300; // 5 minutes
     
-    if (ema > sma && rsi < RSIUpperThreshold && adx > TrendADXThreshold && plusDI > minusDI)
+    // Calculate DI difference
+    double diDifference = MathAbs(plusDI - minusDI);
+    
+    // Log DI difference for debugging
+    Print("DI Difference: ", diDifference, " (Threshold: ", DI_DIFFERENCE_THRESHOLD, ")");
+    
+    if (ema > sma && rsi < RSIUpperThreshold && adx > TrendADXThreshold && 
+        plusDI > minusDI && diDifference > DI_DIFFERENCE_THRESHOLD)
     {
         if (HasActiveTradeOrPendingOrder(POSITION_TYPE_BUY))
         {
@@ -410,12 +458,14 @@ int TrendFollowingCore()
             if (currentTime - lastBuySignalTime >= minLogInterval)
             {
                 Print("Trend Following: Buy Signal - Active Position");
+                Print("DI+ (", plusDI, ") > DI- (", minusDI, "), Difference: ", diDifference);
                 lastBuySignalTime = currentTime;
             }
         }
         return 1;
     }
-    else if (ema < sma && rsi > RSILowerThreshold && adx > TrendADXThreshold && minusDI > plusDI)
+    else if (ema < sma && rsi > RSILowerThreshold && adx > TrendADXThreshold && 
+             minusDI > plusDI && diDifference > DI_DIFFERENCE_THRESHOLD)
     {
         if (HasActiveTradeOrPendingOrder(POSITION_TYPE_SELL))
         {
@@ -423,11 +473,26 @@ int TrendFollowingCore()
             if (currentTime - lastSellSignalTime >= minLogInterval)
             {
                 Print("Trend Following: Sell Signal - Active Position");
+                Print("DI- (", minusDI, ") > DI+ (", plusDI, "), Difference: ", diDifference);
                 lastSellSignalTime = currentTime;
             }
         }
         return -1;
     }
+    
+    // Log rejection reason if DI difference is too small
+    if (diDifference <= DI_DIFFERENCE_THRESHOLD)
+    {
+        static datetime lastDILogTime = 0;
+        datetime currentTime = TimeCurrent();
+        if (currentTime - lastDILogTime >= minLogInterval)
+        {
+            Print("Trade rejected: DI difference (", diDifference, 
+                  ") below threshold (", DI_DIFFERENCE_THRESHOLD, ")");
+            lastDILogTime = currentTime;
+        }
+    }
+    
     return 0;
 }
 
@@ -506,42 +571,112 @@ int DetectOrderFlowImbalances(double buyVolume, double sellVolume, double imbala
 int MonitorOrderFlow()
 {
     if (!UseDOMAnalysis)
-        return 0;
+        return 1; // Return neutral signal if DOM analysis is disabled
 
     MqlBookInfo book_info[];
     int book_count = MarketBookGet(_Symbol, book_info);
-    if (book_count > 0)
+    
+    if (book_count <= 0)
     {
-        double buyVolume = 0.0;
-        double sellVolume = 0.0;
-
-        // Loop through DOM data and analyze order flow
-        for (int i = 0; i < book_count; i++)
-        {
-            // Accumulate buy and sell volumes
-            if (book_info[i].type == BOOK_TYPE_BUY)
-                buyVolume += book_info[i].volume;
-            else if (book_info[i].type == BOOK_TYPE_SELL)
-                sellVolume += book_info[i].volume;
-        }
-
-        // Detect order flow imbalances
-        int imbalanceSignal = DetectOrderFlowImbalances(buyVolume, sellVolume, ImbalanceThreshold);
-        
-        return imbalanceSignal;
-    }
-    else
-    {
-        static datetime lastLogTime = 0;
+        static datetime lastWarningTime = 0;
         datetime currentTime = TimeCurrent();
-        // Log the message only every 60 seconds to reduce log clutter
-        if (currentTime - lastLogTime >= 60)
+        if (currentTime - lastWarningTime >= 300) // Log warning every 5 minutes
         {
-            Print("No order flow data available.");
-            lastLogTime = currentTime;
+            Print("Warning: No DOM data available. Returning neutral signal.");
+            lastWarningTime = currentTime;
         }
-        return 0;
+        return 1; // Return neutral instead of 0 to not block trades
     }
+
+    double buyVolume = 0.0;
+    double sellVolume = 0.0;
+    double totalVolume = 0.0;
+    double maxBuyPrice = 0.0;
+    double minSellPrice = DBL_MAX;
+    double largestBuyOrder = 0.0;
+    double largestSellOrder = 0.0;
+    int buyLevels = 0;
+    int sellLevels = 0;
+    
+    // Calculate average order size for normalization
+    double totalOrderSize = 0.0;
+    int orderCount = 0;
+
+    // First pass - calculate averages
+    for (int i = 0; i < book_count; i++)
+    {
+        totalOrderSize += book_info[i].volume;
+        orderCount++;
+    }
+    double avgOrderSize = (orderCount > 0) ? totalOrderSize / orderCount : 0;
+
+    // Second pass - analyze order flow with normalized volumes
+    for (int i = 0; i < book_count; i++)
+    {
+        double normalizedVolume = (avgOrderSize > 0) ? book_info[i].volume / avgOrderSize : book_info[i].volume;
+        
+        if (book_info[i].type == BOOK_TYPE_BUY)
+        {
+            buyVolume += normalizedVolume;
+            buyLevels++;
+            maxBuyPrice = MathMax(maxBuyPrice, book_info[i].price);
+            largestBuyOrder = MathMax(largestBuyOrder, normalizedVolume);
+        }
+        else if (book_info[i].type == BOOK_TYPE_SELL)
+        {
+            sellVolume += normalizedVolume;
+            sellLevels++;
+            minSellPrice = MathMin(minSellPrice, book_info[i].price);
+            largestSellOrder = MathMax(largestSellOrder, normalizedVolume);
+        }
+    }
+
+    totalVolume = buyVolume + sellVolume;
+    double buyPercentage = (totalVolume > 0) ? (buyVolume / totalVolume) * 100 : 0;
+    double sellPercentage = (totalVolume > 0) ? (sellVolume / totalVolume) * 100 : 0;
+    double imbalanceRatio = (sellVolume > 0) ? buyVolume / sellVolume : 1.0;
+
+    // Reduced imbalance threshold for more frequent signals
+    double adjustedImbalanceThreshold = ImbalanceThreshold * 0.8; // 20% more lenient
+
+    // More lenient liquidity check
+    bool sufficientLiquidity = (totalVolume >= LiquidityThreshold * 0.7); // 30% more lenient
+
+    // Log order flow analysis
+    static datetime lastDetailedLog = 0;
+    datetime currentTime = TimeCurrent();
+    
+    if (currentTime - lastDetailedLog >= 300) // Log details every 5 minutes
+    {
+        string flowDirection = "NEUTRAL";
+        if (imbalanceRatio > adjustedImbalanceThreshold) flowDirection = "BUY";
+        else if (imbalanceRatio < 1/adjustedImbalanceThreshold) flowDirection = "SELL";
+
+        Print("=== Order Flow Analysis ===");
+        Print("Buy Volume: ", buyVolume, " (", buyPercentage, "%)");
+        Print("Sell Volume: ", sellVolume, " (", sellPercentage, "%)");
+        Print("Imbalance Ratio: ", imbalanceRatio);
+        Print("Adjusted Threshold: ", adjustedImbalanceThreshold);
+        Print("Flow Direction: ", flowDirection);
+        Print("Liquidity Status: ", (sufficientLiquidity ? "Sufficient" : "Insufficient"));
+        Print("========================");
+        
+        lastDetailedLog = currentTime;
+    }
+
+    // Return signals with more lenient conditions
+    if (sufficientLiquidity)
+    {
+        if (imbalanceRatio > adjustedImbalanceThreshold)
+            return 1;  // Buy signal
+        else if (imbalanceRatio < 1/adjustedImbalanceThreshold)
+            return -1; // Sell signal
+        else
+            return 1;  // Return neutral signal instead of 0 when no clear imbalance
+    }
+    
+    // Even with insufficient liquidity, return neutral instead of blocking
+    return 1;
 }
 
 //+------------------------------------------------------------------+
