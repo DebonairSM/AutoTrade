@@ -290,8 +290,23 @@ void ExecuteTradingLogic()
                 double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
                 double lotSize = CalculateDynamicLotSize(stopLoss / _Point, accountBalance, RiskPercent, minVolume, maxVolume);
 
-                Print("Placing Buy Trade...");
-                PlaceBuyOrder();  // Direct market order
+                double askPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                double tpPrice = askPrice + takeProfit;
+                double slPrice = askPrice - stopLoss;
+                
+                // Get the best limit order price
+                double limitPrice = GetBestLimitOrderPrice(ORDER_TYPE_BUY_LIMIT, tpPrice, slPrice, LiquidityThreshold, TakeProfitPips, StopLossPips);
+                
+                if (limitPrice > 0.0)
+                {
+                    Print("Placing Buy Limit Order - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
+                    PlaceBuyLimitOrder(limitPrice, tpPrice, slPrice);
+                }
+                else
+                {
+                    Print("Falling back to market order - TP: ", tpPrice, " SL: ", slPrice);
+                    PlaceBuyOrder();
+                }
             }
         }
         // For SELL signals
