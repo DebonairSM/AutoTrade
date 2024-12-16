@@ -44,6 +44,12 @@ struct PatternResult {
     double rsi_value;
     double macd_value;
     double adx_value;
+    double currentPrice;
+    double ema_short;
+    double ema_medium;
+    double ema_long;
+    double volume;
+    double avgVolume;
 };
 
 struct MarketAnalysisData {
@@ -112,53 +118,47 @@ void OnStart()
     if(SaveToFile)
     {
         // Open TXT file for detailed logging (new file for each scan)
-        logHandle = FileOpen(files.txtFile, FILE_WRITE|FILE_TXT);
+        logHandle = FileOpen(files.txtFile, FILE_WRITE|FILE_TXT|FILE_COMMON);
         if(logHandle == INVALID_HANDLE)
         {
             Print("Failed to open log file");
             return;
         }
         
-        // Open CSV file in append mode
-        csvHandle = FileOpen(files.csvFile, FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI);
-        if(csvHandle == INVALID_HANDLE)
-        {
-            // If file doesn't exist, create it with headers
-            csvHandle = FileOpen(files.csvFile, FILE_WRITE|FILE_CSV|FILE_ANSI);
-            if(csvHandle != INVALID_HANDLE)
-            {
-                FileWrite(csvHandle, 
-                    "Scan Time",
-                    "Symbol",
-                    "Pattern Type",
-                    "Strength",
-                    "Confidence",
-                    "Volume Confirmed",
-                    "RSI",
-                    "MACD",
-                    "ADX",
-                    "Timeframe"
-                );
-            }
-        }
-        else
-        {
-            // File exists, seek to end for appending
-            FileSeek(csvHandle, 0, SEEK_END);
-        }
-        
+        // Always create a new CSV file
+        csvHandle = FileOpen(files.csvFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON);
         if(csvHandle == INVALID_HANDLE)
         {
             Print("Failed to open CSV file");
             FileClose(logHandle);
             return;
         }
+        
+        // Write CSV headers
+        FileWrite(csvHandle, 
+            "Scan Time",
+            "Symbol",
+            "Pattern Type",
+            "Strength",
+            "Confidence",
+            "Volume Confirmed",
+            "RSI",
+            "MACD",
+            "ADX",
+            "Current Price",
+            "EMA Short",
+            "EMA Medium",
+            "EMA Long",
+            "Volume",
+            "Avg Volume",
+            "Timeframe"
+        );
+        FileFlush(csvHandle);
     }
 
     // Log scan start
     string scanStartTime = TimeToString(TimeCurrent());
-    Print("Starting pattern scan...");
-    LogMessage("=== Pattern Scan Started at " + scanStartTime + " ===");
+    LogMessage("=== Pattern Scan Started at " + scanStartTime + " ===", true);
     LogMessage("Timeframe: " + EnumToString(ScanTimeframe));
 
     string symbols[];
@@ -167,12 +167,26 @@ void OnStart()
     
     int patternsFound = 0;
     
+    // In OnStart(), add more detailed progress logging
+    LogMessage("=== Pattern Scan Configuration ===", true);
+    LogMessage("Timeframe: " + EnumToString(ScanTimeframe));
+    LogMessage("EMA Periods: " + IntegerToString(EMA_PERIODS_SHORT) + "/" + 
+              IntegerToString(EMA_PERIODS_MEDIUM) + "/" + 
+              IntegerToString(EMA_PERIODS_LONG));
+    LogMessage("ADX Threshold: " + DoubleToString(ADX_THRESHOLD, 1));
+    LogMessage("RSI Thresholds: " + DoubleToString(RSI_LOWER_THRESHOLD, 1) + 
+              "/" + DoubleToString(RSI_UPPER_THRESHOLD, 1));
+    LogMessage("Volume Confirmation: " + (USE_VOLUME_CONFIRMATION ? "Yes" : "No"));
+    LogMessage("=== Scan Progress ===", true);
+
     for(int i = 0; i < symbolCount; i++)
     {
         // Log progress every 10 symbols
-        if(i % 10 == 0)
+        if(i % 5 == 0) // Every 5 symbols instead of 10
         {
-            LogMessage("Scanning progress: " + IntegerToString(i) + "/" + IntegerToString(symbolCount) + " symbols");
+            double progress = (double)i / symbolCount * 100;
+            LogMessage(StringFormat("Progress: %.1f%% (%d/%d symbols)", 
+                      progress, i, symbolCount), true);
         }
         
         PatternResult result = AnalyzePattern(symbols[i], ScanTimeframe);
@@ -180,25 +194,32 @@ void OnStart()
         {
             patternsFound++;
             string message = FormatPatternResult(symbols[i], result);
-            Print(message);
-            LogMessage("Pattern Found: " + symbols[i]);
+            LogMessage("Pattern Found: " + symbols[i], true);
             LogMessage(message);
             
             // Write to CSV
             if(csvHandle != INVALID_HANDLE)
             {
+                string currentTime = TimeToString(TimeCurrent());
                 FileWrite(csvHandle,
-                    scanStartTime,
+                    currentTime,
                     symbols[i],
                     result.pattern_type,
-                    IntegerToString(result.strength),
+                    result.strength,
                     DoubleToString(result.confidence, 2),
                     result.volume_confirmed ? "Yes" : "No",
                     DoubleToString(result.rsi_value, 2),
                     DoubleToString(result.macd_value, 5),
                     DoubleToString(result.adx_value, 2),
+                    DoubleToString(result.currentPrice, 5),
+                    DoubleToString(result.ema_short, 5),
+                    DoubleToString(result.ema_medium, 5),
+                    DoubleToString(result.ema_long, 5),
+                    DoubleToString(result.volume, 2),
+                    DoubleToString(result.avgVolume, 2),
                     EnumToString(ScanTimeframe)
                 );
+                FileFlush(csvHandle);
             }
         }
     }
@@ -209,9 +230,10 @@ void OnStart()
         symbolCount,
         patternsFound
     );
-    LogMessage("=== " + completionMessage + " ===");
-    LogMessage("Results saved to CSV: " + files.csvFile);
+    LogMessage("=== " + completionMessage + " ===", false);
+    LogMessage("Results saved to CSV: " + files.csvFile, false);
 
+    // Close files
     if(SaveToFile)
     {
         if(logHandle != INVALID_HANDLE)
@@ -219,10 +241,6 @@ void OnStart()
         if(csvHandle != INVALID_HANDLE)
             FileClose(csvHandle);
     }
-    
-    Print(completionMessage);
-    Print("Detailed log: " + files.txtFile);
-    Print("Results CSV: " + files.csvFile);
 }
 
 //+------------------------------------------------------------------+
@@ -285,6 +303,14 @@ PatternResult AnalyzePattern(string symbol, ENUM_TIMEFRAMES timeframe)
         result.details = GenerateAnalysisDetails(analysisData, params);
     }
 
+    // Add new field assignments
+    result.currentPrice = analysisData.currentPrice;
+    result.ema_short = analysisData.ema_short;
+    result.ema_medium = analysisData.ema_medium;
+    result.ema_long = analysisData.ema_long;
+    result.volume = analysisData.volume;
+    result.avgVolume = analysisData.avgVolume;
+    
     return result;
 }
 
@@ -343,55 +369,68 @@ double CalculateConfidence(int strength, bool volumeConfirmed)
 //+------------------------------------------------------------------+
 int IdentifyTrendPattern(MarketAnalysisData &data, MarketAnalysisParameters &params)
 {
-    // Initialize scoring system
-    double bullishScore = 0;
-    double bearishScore = 0;
+    struct TrendScore {
+        double bullish;
+        double bearish;
+        string reasons[];
+    } score;
+    score.bullish = 0;
+    score.bearish = 0;
     
-    // 1. EMA Analysis
-    if(data.ema_short > data.ema_medium && data.ema_medium > data.ema_long)
-    {
-        bullishScore += 2.0;
+    // 1. EMA Alignment Analysis
+    if(data.ema_short > data.ema_medium && data.ema_medium > data.ema_long) {
+        score.bullish += 2.5;
+        ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+        score.reasons[ArraySize(score.reasons)-1] = "Bullish EMA alignment";
     }
-    else if(data.ema_short < data.ema_medium && data.ema_medium < data.ema_long)
-    {
-        bearishScore += 2.0;
+    else if(data.ema_short < data.ema_medium && data.ema_medium < data.ema_long) {
+        score.bearish += 2.5;
+        ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+        score.reasons[ArraySize(score.reasons)-1] = "Bearish EMA alignment";
     }
-    
-    // 2. ADX and DI Analysis
-    if(data.adx > params.trend_adx_threshold)
-    {
-        if(data.plusDI > data.minusDI && (data.plusDI - data.minusDI) > DI_DIFFERENCE_THRESHOLD)
-            bullishScore += 1.5;
-        else if(data.minusDI > data.plusDI && (data.minusDI - data.plusDI) > DI_DIFFERENCE_THRESHOLD)
-            bearishScore += 1.5;
+
+    // 2. Cross Detection
+    double cross_strength = MathAbs(data.ema_short - data.ema_long) / _Point;
+    if(cross_strength > GOLDEN_CROSS_THRESHOLD) {
+        if(data.ema_short > data.ema_long) {
+            score.bullish += 3.0 * (cross_strength / GOLDEN_CROSS_THRESHOLD);
+            ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+            score.reasons[ArraySize(score.reasons)-1] = "Golden Cross";
+        }
+        else {
+            score.bearish += 3.0 * (cross_strength / GOLDEN_CROSS_THRESHOLD);
+            ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+            score.reasons[ArraySize(score.reasons)-1] = "Death Cross";
+        }
     }
+
+    // 3. Volume Analysis
+    if(data.volume > data.avgVolume * VOLUME_THRESHOLD) {
+        if(score.bullish > score.bearish)
+            score.bullish += 1.5;
+        else if(score.bearish > score.bullish)
+            score.bearish += 1.5;
+    }
+
+    // 4. Additional Technical Indicators
+    if(data.adx > ADX_THRESHOLD) {
+        if(data.plusDI > data.minusDI)
+            score.bullish += 1.5;
+        else
+            score.bearish += 1.5;
+    }
+
+    // Final Decision Making
+    const double MIN_SCORE_THRESHOLD = 5.0;
+    const double SCORE_DIFFERENCE_THRESHOLD = 2.0;
     
-    // 3. RSI Analysis
-    if(data.rsi < params.rsi_lower_threshold)
-        bullishScore += 1.0;
-    else if(data.rsi > params.rsi_upper_threshold)
-        bearishScore += 1.0;
+    if(score.bullish >= MIN_SCORE_THRESHOLD && 
+       score.bullish - score.bearish >= SCORE_DIFFERENCE_THRESHOLD)
+        return (int)MathRound(score.bullish);
+    else if(score.bearish >= MIN_SCORE_THRESHOLD && 
+            score.bearish - score.bullish >= SCORE_DIFFERENCE_THRESHOLD)
+        return -(int)MathRound(score.bearish);
     
-    // 4. MACD Analysis
-    if(data.macdMain > data.macdSignal && data.macdHistogram > 0)
-        bullishScore += 1.5;
-    else if(data.macdMain < data.macdSignal && data.macdHistogram < 0)
-        bearishScore += 1.5;
-    
-    // 5. Pattern Confirmation
-    if(data.bullishPattern)
-        bullishScore += 2.0;
-    if(data.bearishPattern)
-        bearishScore += 2.0;
-    
-    // Calculate final signal
-    const double SIGNAL_THRESHOLD = 4.0;
-    
-    if(bullishScore > SIGNAL_THRESHOLD && bullishScore > bearishScore * 1.5)
-        return (int)MathRound(bullishScore);
-    else if(bearishScore > SIGNAL_THRESHOLD && bearishScore > bullishScore * 1.5)
-        return -(int)MathRound(bearishScore);
-        
     return 0;
 }
 
@@ -646,14 +685,14 @@ int GetTradeableSymbols(string &symbols[])
 //+------------------------------------------------------------------+
 //| Log Message with Timestamp                                         |
 //+------------------------------------------------------------------+
-void LogMessage(string message)
+void LogMessage(string message, bool showInTerminal = false)
 {
-    string timestampedMessage = TimeToString(TimeCurrent()) + ": " + message;
     if(SaveToFile && logHandle != INVALID_HANDLE)
     {
+        string timestampedMessage = TimeToString(TimeCurrent()) + ": " + message;
         FileWriteString(logHandle, timestampedMessage + "\n");
+        FileFlush(logHandle);
     }
-    Print(timestampedMessage);
 }
 
 //+------------------------------------------------------------------+
@@ -661,33 +700,14 @@ void LogMessage(string message)
 //+------------------------------------------------------------------+
 string FormatPatternResult(string symbol, PatternResult &result)
 {
-    string message = StringFormat(
-        "%s: %s pattern detected (Strength: %d, Confidence: %.2f%%)",
+    return StringFormat(
+        "%s: %s pattern (Strength: %d, Conf: %.1f%%, Vol: %s)",
         symbol,
         result.pattern_type,
         result.strength,
-        result.confidence
+        result.confidence,
+        result.volume_confirmed ? "Yes" : "No"
     );
-    
-    if(USE_VOLUME_CONFIRMATION)
-    {
-        message += StringFormat(", Volume Confirmed: %s", 
-            result.volume_confirmed ? "Yes" : "No"
-        );
-    }
-    
-    message += StringFormat("\nRSI: %.2f, MACD: %.5f, ADX: %.2f",
-        result.rsi_value,
-        result.macd_value,
-        result.adx_value
-    );
-    
-    if(result.details != "")
-    {
-        message += "\nDetails:\n" + result.details;
-    }
-    
-    return message;
 }
 
 //+------------------------------------------------------------------+

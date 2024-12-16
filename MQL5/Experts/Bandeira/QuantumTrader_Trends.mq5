@@ -312,7 +312,7 @@ void ExecuteTradingLogic()
         Print("  Last Order Flow Signal: ", lastOrderFlowSignal);
         Print("  Last Trend Signal: ", lastTrendSignal);
         Print("  Last RSI/MACD Signal: ", lastRsiMacdSignal);
-        Print("  Last Pattern Signal: ", patternSignal); // Added patternSignal logging
+        Print("  Last Pattern Signal: ", patternSignal); 
         Print("  Last Stop Loss: ", lastStopLoss);
         Print("  Last Take Profit: ", lastTakeProfit);
         Print("  Last Calculation Time: ", TimeToString(lastCalculationTime, TIME_DATE | TIME_MINUTES));
