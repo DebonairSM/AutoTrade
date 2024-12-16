@@ -2,7 +2,7 @@
 //| Pattern Scanner                                                    |
 //+------------------------------------------------------------------+
 #property copyright "VSol Software"
-#property version   "1.14"
+#property version   "1.15"
 #property strict
 
 // Input parameters
@@ -112,62 +112,63 @@ ScanFiles CreateUniqueFileNames()
 //+------------------------------------------------------------------+
 void OnStart()
 {
+    // Create files immediately and verify they're ready
     ScanFiles files = CreateUniqueFileNames();
-    int csvHandle = INVALID_HANDLE;
+    Print("Attempting to create log files...");
     
-    if(SaveToFile)
+    // Create and verify TXT file
+    logHandle = FileOpen(files.txtFile, FILE_WRITE|FILE_TXT|FILE_COMMON);
+    if(logHandle == INVALID_HANDLE)
     {
-        // Open TXT file for detailed logging (new file for each scan)
-        logHandle = FileOpen(files.txtFile, FILE_WRITE|FILE_TXT|FILE_COMMON);
-        if(logHandle == INVALID_HANDLE)
-        {
-            Print("Failed to open log file");
-            return;
-        }
-        
-        // Always create a new CSV file
-        csvHandle = FileOpen(files.csvFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON);
-        if(csvHandle == INVALID_HANDLE)
-        {
-            Print("Failed to open CSV file");
-            FileClose(logHandle);
-            return;
-        }
-        
-        // Write CSV headers
-        FileWrite(csvHandle, 
-            "Scan Time",
-            "Symbol",
-            "Pattern Type",
-            "Strength",
-            "Confidence",
-            "Volume Confirmed",
-            "RSI",
-            "MACD",
-            "ADX",
-            "Current Price",
-            "EMA Short",
-            "EMA Medium",
-            "EMA Long",
-            "Volume",
-            "Avg Volume",
-            "Timeframe"
-        );
-        FileFlush(csvHandle);
+        Print("ERROR: Failed to create log file: ", files.txtFile);
+        return;
     }
+    Print("Successfully created log file: ", files.txtFile);
+    
+    // Create and verify CSV file
+    int csvHandle = FileOpen(files.csvFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON);
+    if(csvHandle == INVALID_HANDLE)
+    {
+        Print("ERROR: Failed to create CSV file: ", files.csvFile);
+        FileClose(logHandle);
+        return;
+    }
+    Print("Successfully created CSV file: ", files.csvFile);
+    
+    // Write CSV headers immediately
+    FileWrite(csvHandle, 
+        "Scan Time",
+        "Symbol",
+        "Pattern Type",
+        "Strength",
+        "Confidence",
+        "Volume Confirmed",
+        "RSI",
+        "MACD",
+        "ADX",
+        "Current Price",
+        "EMA Short",
+        "EMA Medium",
+        "EMA Long",
+        "Volume",
+        "Avg Volume",
+        "Timeframe"
+    );
+    FileFlush(csvHandle);
 
-    // Log scan start
+    // Log scan start immediately
     string scanStartTime = TimeToString(TimeCurrent());
     LogMessage("=== Pattern Scan Started at " + scanStartTime + " ===", true);
     LogMessage("Timeframe: " + EnumToString(ScanTimeframe));
+    FileFlush(logHandle);
 
+    // Get symbols and log count immediately
     string symbols[];
     int symbolCount = GetTradeableSymbols(symbols);
     LogMessage("Found " + IntegerToString(symbolCount) + " tradeable symbols");
+    FileFlush(logHandle);
     
-    int patternsFound = 0;
-    
-    // In OnStart(), add more detailed progress logging
+    // Log configuration
     LogMessage("=== Pattern Scan Configuration ===", true);
     LogMessage("Timeframe: " + EnumToString(ScanTimeframe));
     LogMessage("EMA Periods: " + IntegerToString(EMA_PERIODS_SHORT) + "/" + 
@@ -178,16 +179,18 @@ void OnStart()
               "/" + DoubleToString(RSI_UPPER_THRESHOLD, 1));
     LogMessage("Volume Confirmation: " + (USE_VOLUME_CONFIRMATION ? "Yes" : "No"));
     LogMessage("=== Scan Progress ===", true);
+    FileFlush(logHandle);
 
+    int patternsFound = 0;
+    
+    // Process each symbol and log immediately
     for(int i = 0; i < symbolCount; i++)
     {
-        // Log progress every 10 symbols
-        if(i % 5 == 0) // Every 5 symbols instead of 10
-        {
-            double progress = (double)i / symbolCount * 100;
-            LogMessage(StringFormat("Progress: %.1f%% (%d/%d symbols)", 
-                      progress, i, symbolCount), true);
-        }
+        // Log progress for EVERY symbol
+        double progress = (double)i / symbolCount * 100;
+        LogMessage(StringFormat("Analyzing %s (%.1f%%, %d/%d)", 
+                  symbols[i], progress, i, symbolCount), true);
+        FileFlush(logHandle);
         
         PatternResult result = AnalyzePattern(symbols[i], ScanTimeframe);
         if(result.strength > 0)
@@ -196,8 +199,9 @@ void OnStart()
             string message = FormatPatternResult(symbols[i], result);
             LogMessage("Pattern Found: " + symbols[i], true);
             LogMessage(message);
+            FileFlush(logHandle);
             
-            // Write to CSV
+            // Write to CSV and flush immediately
             if(csvHandle != INVALID_HANDLE)
             {
                 string currentTime = TimeToString(TimeCurrent());
@@ -224,23 +228,23 @@ void OnStart()
         }
     }
 
-    // Log scan completion
+    // Log completion
     string completionMessage = StringFormat(
         "Scan completed. Analyzed %d symbols, found %d patterns.",
         symbolCount,
         patternsFound
     );
-    LogMessage("=== " + completionMessage + " ===", false);
-    LogMessage("Results saved to CSV: " + files.csvFile, false);
+    LogMessage("=== " + completionMessage + " ===", true);
+    LogMessage("Results saved to CSV: " + files.csvFile, true);
+    FileFlush(logHandle);
 
     // Close files
-    if(SaveToFile)
-    {
-        if(logHandle != INVALID_HANDLE)
-            FileClose(logHandle);
-        if(csvHandle != INVALID_HANDLE)
-            FileClose(csvHandle);
-    }
+    if(logHandle != INVALID_HANDLE)
+        FileClose(logHandle);
+    if(csvHandle != INVALID_HANDLE)
+        FileClose(csvHandle);
+        
+    Print("Scan complete. Check files: ", files.txtFile, " and ", files.csvFile);
 }
 
 //+------------------------------------------------------------------+
