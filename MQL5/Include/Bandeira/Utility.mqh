@@ -286,20 +286,20 @@ bool CheckDrawdown(double maxDrawdownPercent, double accountBalance, double acco
 //+------------------------------------------------------------------+
 //| Calculate Dynamic SL/TP Levels Based on ATR                      |
 //+------------------------------------------------------------------+
-void CalculateDynamicSLTP(double &stop_loss, double &take_profit, double atr_multiplier, ENUM_TIMEFRAMES timeframe, double fixedStopLossPips)
+void CalculateDynamicSLTP(double &stop_loss, double &take_profit, double atr_multiplier, ENUM_TIMEFRAMES timeframe, double inFixedStopLossPips)
 {
     double atr = CalculateATR(14, timeframe);
 
     if (atr <= 0)
     {
         Print("ATR calculation failed or returned zero. Using default SL/TP values.");
-        stop_loss = fixedStopLossPips * _Point;
+        stop_loss = inFixedStopLossPips * _Point;
         take_profit = 40 * _Point;
         return;
     }
 
     double dynamicStopLoss = atr * atr_multiplier;
-    stop_loss = MathMax(dynamicStopLoss, fixedStopLossPips * _Point);
+    stop_loss = MathMax(dynamicStopLoss, inFixedStopLossPips * _Point);
     take_profit = atr * atr_multiplier * 2.0;
 
     // Use the new logging function
@@ -311,24 +311,22 @@ void CalculateDynamicSLTP(double &stop_loss, double &take_profit, double atr_mul
 //+------------------------------------------------------------------+
 void LogDynamicSLTP(double stopLoss, double takeProfit, string symbol, ENUM_TIMEFRAMES timeframe)
 {
-    static double lastSL = 0;
-    static double lastTP = 0;
-    static datetime lastLogTime = 0;
+    static datetime utilityLastLogTime = 0;
+    static datetime utilityLastCalculationTime = 0;
     datetime currentTime = TimeCurrent();
     
     // Prevent division by zero
-    if (lastSL == 0) lastSL = stopLoss;
-    if (lastTP == 0) lastTP = takeProfit;
+    if (utilityLastLogTime == 0) utilityLastLogTime = stopLoss;
+    if (utilityLastCalculationTime == 0) utilityLastCalculationTime = currentTime;
     
     // Only log if SL/TP changed by more than 1% or after 5 minutes
-    if (MathAbs(stopLoss - lastSL)/lastSL > 0.01 || 
-        MathAbs(takeProfit - lastTP)/lastTP > 0.01 || 
-        currentTime - lastLogTime >= 300)
+    if (MathAbs(stopLoss - utilityLastLogTime)/utilityLastLogTime > 0.01 || 
+        MathAbs(takeProfit - utilityLastCalculationTime)/utilityLastCalculationTime > 0.01 || 
+        currentTime - utilityLastCalculationTime >= 300)
     {
         Print(symbol, ",", EnumToString(timeframe), " Dynamic SL: ", stopLoss, " | Dynamic TP: ", takeProfit);
-        lastSL = stopLoss;
-        lastTP = takeProfit;
-        lastLogTime = currentTime;
+        utilityLastLogTime = stopLoss;
+        utilityLastCalculationTime = currentTime;
     }
 }
 
@@ -338,15 +336,15 @@ void LogDynamicSLTP(double stopLoss, double takeProfit, string symbol, ENUM_TIME
 void LogDIDifference(double diDifference, double threshold, string symbol, ENUM_TIMEFRAMES timeframe)
 {
     static double lastDIDifference = 0;
-    static datetime lastLogTime = 0;
+    static datetime utilityLastLogTime = 0;
     datetime currentTime = TimeCurrent();
     
     // Only log if the difference has changed by more than 0.5 or after 5 minutes
-    if (MathAbs(diDifference - lastDIDifference) > 0.5 || currentTime - lastLogTime >= 300)
+    if (MathAbs(diDifference - lastDIDifference) > 0.5 || currentTime - utilityLastLogTime >= 300)
     {
         Print(symbol, ",", EnumToString(timeframe), " DI Difference: ", diDifference, " (Threshold: ", threshold, ")");
         lastDIDifference = diDifference;
-        lastLogTime = currentTime;
+        utilityLastLogTime = currentTime;
     }
 }
 
@@ -747,12 +745,12 @@ void LogMarketAnalysis(const MarketAnalysisData& data,
                       ENUM_TIMEFRAMES timeframe,
                       bool useDOMAnalysis)
 {
-    static datetime last_check = 0;
+    static datetime utilityLastLogTime = 0;
     datetime current_time = TimeCurrent();
     
     // Check every 5 minutes (300 seconds)
-    if (current_time - last_check < 300) return;
-    last_check = current_time;
+    if (current_time - utilityLastLogTime < 300) return;
+    utilityLastLogTime = current_time;
     
     // Create base analysis message
     string analysis = StringFormat(

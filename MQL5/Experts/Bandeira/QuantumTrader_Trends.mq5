@@ -53,7 +53,7 @@ input group "Position Management"
 input bool UseTrailingStop = false;         // Enable trailing stops
 input double TrailingStopPips = 20.0;       // Trailing stop distance in pips
 input bool UseBreakeven = false;             // Enable breakeven
-input double BreakevenActivationPips = 30.0;   // Breakeven activation distance
+input double BreakevenActivationPips = 30.0;// Breakeven activation distance
 input double BreakevenOffsetPips = 5.0;     // Breakeven offset distance
 
 // Order Flow Analysis
@@ -189,7 +189,6 @@ void ExecuteTradingLogic()
         return;
 
     // Static variables to track last calculation time and signals
-    static datetime lastCalculationTime = 0;
     static int lastTrendSignal = 0;
     static int lastOrderFlowSignal = 0;
     static int lastRsiMacdSignal = 0;
@@ -198,7 +197,7 @@ void ExecuteTradingLogic()
 
     datetime currentTime = TimeCurrent();
     
-    // Only recalculate signals every X seconds (e.g., 30 seconds)
+    // Use the global lastCalculationTime
     bool shouldRecalculateSignals = (currentTime - lastCalculationTime >= 30);
     
     // Always manage existing positions
