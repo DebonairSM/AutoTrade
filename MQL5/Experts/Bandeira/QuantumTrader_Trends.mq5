@@ -862,92 +862,147 @@ bool IsBearishCandlePattern()
 //+------------------------------------------------------------------+
 int IdentifyTrendPattern()
 {
-    // 1. Multiple EMA Crossover Analysis
+    // Initialize scoring system
+    struct TrendScore {
+        double bullish;
+        double bearish;
+        string reasons[];
+    } score;
+    score.bullish = 0;
+    score.bearish = 0;
+    
+    // 1. Multiple EMA Analysis with validation
     double current_ema_short = CalculateEMA(EMA_PERIODS_SHORT, Timeframe, 0);
     double current_ema_medium = CalculateEMA(EMA_PERIODS_MEDIUM, Timeframe, 0);
     double current_ema_long = CalculateEMA(EMA_PERIODS_LONG, Timeframe, 0);
     
-    // Store historical EMA values
-    double past_ema_short[5], past_ema_medium[5], past_ema_long[5];
-    for(int i = 0; i < PATTERN_LOOKBACK; i++)
-    {
+    // Validate EMA values
+    if(current_ema_short == 0 || current_ema_medium == 0 || current_ema_long == 0) {
+        Print("Warning: Invalid EMA values detected");
+        return 0;
+    }
+    
+    // Store historical EMA values with validation
+    double past_ema_short[], past_ema_medium[], past_ema_long[];
+    ArrayResize(past_ema_short, PATTERN_LOOKBACK);
+    ArrayResize(past_ema_medium, PATTERN_LOOKBACK);
+    ArrayResize(past_ema_long, PATTERN_LOOKBACK);
+    
+    for(int i = 0; i < PATTERN_LOOKBACK; i++) {
         past_ema_short[i] = CalculateEMA(EMA_PERIODS_SHORT, Timeframe, i+1);
         past_ema_medium[i] = CalculateEMA(EMA_PERIODS_MEDIUM, Timeframe, i+1);
         past_ema_long[i] = CalculateEMA(EMA_PERIODS_LONG, Timeframe, i+1);
+        
+        if(past_ema_short[i] == 0 || past_ema_medium[i] == 0 || past_ema_long[i] == 0) {
+            Print("Warning: Historical EMA data incomplete");
+            return 0;
+        }
     }
 
-    // 2. Trend Strength Analysis
-    int bullish_signals = 0;
-    int bearish_signals = 0;
+    // 2. Enhanced Trend Strength Analysis
+    
+    // Check EMA alignment with weighted scoring
+    if(current_ema_short > current_ema_medium && current_ema_medium > current_ema_long) {
+        score.bullish += 2.5;
+        ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+        score.reasons[ArraySize(score.reasons)-1] = "Bullish EMA alignment";
+    }
+    else if(current_ema_short < current_ema_medium && current_ema_medium < current_ema_long) {
+        score.bearish += 2.5;
+        ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+        score.reasons[ArraySize(score.reasons)-1] = "Bearish EMA alignment";
+    }
 
-    // Check EMA alignment (strongest when short > medium > long for bullish)
-    if(current_ema_short > current_ema_medium && current_ema_medium > current_ema_long)
-        bullish_signals += 2;
-    else if(current_ema_short < current_ema_medium && current_ema_medium < current_ema_long)
-        bearish_signals += 2;
-
-    // 3. Golden/Death Cross Detection
+    // 3. Enhanced Golden/Death Cross Detection with Confirmation
     bool golden_cross = false;
     bool death_cross = false;
+    double cross_strength = 0;
 
-    // Check for recent golden cross (short EMA crossing above long EMA)
-    if(current_ema_short > current_ema_long && past_ema_short[0] < past_ema_long[0])
-    {
-        if(MathAbs(current_ema_short - current_ema_long) > GOLDEN_CROSS_THRESHOLD * _Point)
+    // Check for golden cross with momentum confirmation
+    if(current_ema_short > current_ema_long && past_ema_short[0] < past_ema_long[0]) {
+        cross_strength = MathAbs(current_ema_short - current_ema_long) / _Point;
+        if(cross_strength > GOLDEN_CROSS_THRESHOLD) {
             golden_cross = true;
+            score.bullish += 3.0 * (cross_strength / GOLDEN_CROSS_THRESHOLD);
+            ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+            score.reasons[ArraySize(score.reasons)-1] = "Golden Cross - Strength: " + DoubleToString(cross_strength);
+        }
     }
-    // Check for recent death cross (short EMA crossing below long EMA)
-    else if(current_ema_short < current_ema_long && past_ema_short[0] > past_ema_long[0])
-    {
-        if(MathAbs(current_ema_short - current_ema_long) > GOLDEN_CROSS_THRESHOLD * _Point)
+    // Check for death cross with momentum confirmation
+    else if(current_ema_short < current_ema_long && past_ema_short[0] > past_ema_long[0]) {
+        cross_strength = MathAbs(current_ema_short - current_ema_long) / _Point;
+        if(cross_strength > GOLDEN_CROSS_THRESHOLD) {
             death_cross = true;
+            score.bearish += 3.0 * (cross_strength / GOLDEN_CROSS_THRESHOLD);
+            ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+            score.reasons[ArraySize(score.reasons)-1] = "Death Cross - Strength: " + DoubleToString(cross_strength);
+        }
     }
 
-    // 4. Trend Continuation Pattern
-    bool bullish_continuation = true;
-    bool bearish_continuation = true;
-
-    // Check if EMAs maintained their order for several periods
-    for(int i = 0; i < PATTERN_LOOKBACK - 1; i++)
-    {
-        if(!(past_ema_short[i] > past_ema_medium[i] && past_ema_medium[i] > past_ema_long[i]))
-            bullish_continuation = false;
-            
-        if(!(past_ema_short[i] < past_ema_medium[i] && past_ema_medium[i] < past_ema_long[i]))
-            bearish_continuation = false;
+    // 4. Enhanced Trend Continuation Pattern
+    int consecutive_bullish = 0;
+    int consecutive_bearish = 0;
+    
+    for(int i = 0; i < PATTERN_LOOKBACK - 1; i++) {
+        if(past_ema_short[i] > past_ema_medium[i] && past_ema_medium[i] > past_ema_long[i])
+            consecutive_bullish++;
+        else if(past_ema_short[i] < past_ema_medium[i] && past_ema_medium[i] < past_ema_long[i])
+            consecutive_bearish++;
+    }
+    
+    // Add trend consistency score
+    if(consecutive_bullish >= PATTERN_LOOKBACK * 0.8) {
+        score.bullish += 2.0;
+        ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+        score.reasons[ArraySize(score.reasons)-1] = "Strong Bullish Trend Consistency";
+    }
+    if(consecutive_bearish >= PATTERN_LOOKBACK * 0.8) {
+        score.bearish += 2.0;
+        ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+        score.reasons[ArraySize(score.reasons)-1] = "Strong Bearish Trend Consistency";
     }
 
-    // 5. Volume Confirmation
+    // 5. Volume Analysis with Trend Confirmation
     double current_volume = iVolume(_Symbol, Timeframe, 0);
     double avg_volume = 0;
-    for(int i = 1; i <= PATTERN_LOOKBACK; i++)
-    {
+    for(int i = 1; i <= PATTERN_LOOKBACK; i++) {
         avg_volume += iVolume(_Symbol, Timeframe, i);
     }
     avg_volume /= PATTERN_LOOKBACK;
 
-    bool volume_confirmation = (current_volume > avg_volume * 1.2); // 20% above average
+    // Volume trend confirmation
+    if(current_volume > avg_volume * 1.5) {
+        if(score.bullish > score.bearish)
+            score.bullish += 1.5;
+        else if(score.bearish > score.bullish)
+            score.bearish += 1.5;
+            
+        ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+        score.reasons[ArraySize(score.reasons)-1] = "Strong Volume Confirmation: " + DoubleToString(current_volume/avg_volume);
+    }
 
-    // 6. Combine All Signals
-    if(golden_cross && bullish_continuation && volume_confirmation)
-        bullish_signals += 3;
-    if(death_cross && bearish_continuation && volume_confirmation)
-        bearish_signals += 3;
+    // 6. Log detailed analysis
+    string analysis = "=== Trend Pattern Analysis ===\n";
+    analysis += "Bullish Score: " + DoubleToString(score.bullish, 2) + "\n";
+    analysis += "Bearish Score: " + DoubleToString(score.bearish, 2) + "\n";
+    analysis += "Reasons:\n";
+    for(int i = 0; i < ArraySize(score.reasons); i++) {
+        analysis += "- " + score.reasons[i] + "\n";
+    }
+    Print(analysis);
 
-    // Add momentum confirmation
-    double rsi = CalculateRSI(14, 0);
-    if(rsi > 50 && rsi < 70) bullish_signals++;
-    if(rsi < 50 && rsi > 30) bearish_signals++;
-
-    // 7. Final Decision Making
-    LogPatternAnalysis(bullish_signals, bearish_signals, _Symbol, Timeframe);
-
-    if(bullish_signals >= 3 && bullish_signals > bearish_signals)
-        return 1;  // Bullish pattern
-    else if(bearish_signals >= 3 && bearish_signals > bullish_signals)
-        return -1; // Bearish pattern
+    // 7. Final Decision Making with Minimum Threshold
+    const double MIN_SCORE_THRESHOLD = 5.0; // Minimum score required for signal
+    const double SCORE_DIFFERENCE_THRESHOLD = 2.0; // Minimum difference between bull/bear scores
     
-    return 0;     // No clear pattern
+    if(score.bullish >= MIN_SCORE_THRESHOLD && 
+       score.bullish - score.bearish >= SCORE_DIFFERENCE_THRESHOLD)
+        return 1;  // Strong bullish pattern
+    else if(score.bearish >= MIN_SCORE_THRESHOLD && 
+            score.bearish - score.bullish >= SCORE_DIFFERENCE_THRESHOLD)
+        return -1; // Strong bearish pattern
+    
+    return 0;     // No clear pattern or insufficient strength
 }
 
 //+------------------------------------------------------------------+

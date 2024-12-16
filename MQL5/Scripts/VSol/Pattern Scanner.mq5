@@ -2,7 +2,7 @@
 //| Pattern Scanner                                                    |
 //+------------------------------------------------------------------+
 #property copyright "VSol Software"
-#property version   "1.00"
+#property version   "1.14"
 #property strict
 
 // Input parameters
@@ -13,6 +13,21 @@ input int EMA_PERIODS_LONG = 200;                    // Long EMA period
 input int PATTERN_LOOKBACK = 5;                      // Pattern lookback periods
 input double GOLDEN_CROSS_THRESHOLD = 0.001;         // Golden cross threshold
 input bool SaveToFile = true;                        // Save results to file
+
+// Enhanced Analysis Parameters
+input double ADX_THRESHOLD = 20.0;                   // ADX threshold
+input double RSI_UPPER_THRESHOLD = 70.0;             // RSI upper threshold
+input double RSI_LOWER_THRESHOLD = 30.0;             // RSI lower threshold
+input double DI_DIFFERENCE_THRESHOLD = 2.0;          // DI difference threshold
+input int RSI_Period = 14;                           // RSI period
+input int MACD_Fast = 12;                           // MACD fast period
+input int MACD_Slow = 26;                           // MACD slow period
+input int MACD_Signal = 9;                          // MACD signal period
+input double RSI_Neutral = 50.0;                    // RSI neutral level
+
+// Volume Analysis Parameters
+input double VOLUME_THRESHOLD = 1.5;                // Volume threshold multiplier
+input bool USE_VOLUME_CONFIRMATION = true;          // Use volume confirmation
 
 enum CrossType {
     CROSS_NONE,
@@ -26,161 +41,192 @@ struct PatternResult {
     string details;
     bool volume_confirmed;
     double confidence;
+    double rsi_value;
+    double macd_value;
+    double adx_value;
 };
+
+struct MarketAnalysisData {
+    double currentPrice;
+    double ema_short;
+    double ema_medium;
+    double ema_long;
+    double adx;
+    double plusDI;
+    double minusDI;
+    double rsi;
+    double macdMain;
+    double macdSignal;
+    double macdHistogram;
+    double atr;
+    bool bullishPattern;
+    bool bearishPattern;
+    double volume;
+    double avgVolume;
+};
+
+struct MarketAnalysisParameters {
+    int ema_period_short;
+    int ema_period_medium;
+    int ema_period_long;
+    int adx_period;
+    int rsi_period;
+    double trend_adx_threshold;
+    double rsi_upper_threshold;
+    double rsi_lower_threshold;
+};
+
+// Global variables for logging
+datetime lastLogTime = 0;
+int logHandle = INVALID_HANDLE;
+
+//+------------------------------------------------------------------+
+//| Create unique filenames for this scan                              |
+//+------------------------------------------------------------------+
+struct ScanFiles {
+    string txtFile;
+    string csvFile;
+};
+
+ScanFiles CreateUniqueFileNames()
+{
+    ScanFiles files;
+    string baseFileName = "PatternScan_" + TimeToString(TimeCurrent(), TIME_DATE);
+    string timeStamp = "_" + TimeToString(TimeCurrent(), TIME_MINUTES);
+    timeStamp = StringReplace(timeStamp, ":", "-");
+    
+    files.txtFile = baseFileName + timeStamp + ".txt";
+    files.csvFile = baseFileName + timeStamp + ".csv";
+    
+    return files;
+}
 
 //+------------------------------------------------------------------+
 //| Script program start function                                      |
 //+------------------------------------------------------------------+
 void OnStart()
 {
-    // Create or clear the results file
-    string results_filename = "PatternScan_Results_" + TimeToString(TimeCurrent(), TIME_DATE) + ".csv";
+    ScanFiles files = CreateUniqueFileNames();
+    int csvHandle = INVALID_HANDLE;
+    
     if(SaveToFile)
     {
-        // First create/clear the file with headers
-        int handle = FileOpen(results_filename, FILE_WRITE|FILE_CSV);
-        if(handle != INVALID_HANDLE)
+        // Open TXT file for detailed logging (new file for each scan)
+        logHandle = FileOpen(files.txtFile, FILE_WRITE|FILE_TXT);
+        if(logHandle == INVALID_HANDLE)
         {
-            // Write header
-            FileWrite(handle, "Symbol", "Pattern", "Signal Strength", "EMA Alignment", 
-                     "Cross Type", "Volume Confirmation", "Current Price", "TimeStamp");
-            FileClose(handle);
+            Print("Failed to open log file");
+            return;
         }
-    }
-
-    // Create detailed log file
-    string log_filename = "PatternScan_Log_" + TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES) + ".txt";
-    int log_handle = FileOpen(log_filename, FILE_WRITE|FILE_TXT);
-    if(log_handle != INVALID_HANDLE)
-    {
-        FileWrite(log_handle, "Pattern Scanner Log - Started at " + TimeToString(TimeCurrent()));
-        FileWrite(log_handle, "Scanning Timeframe: " + EnumToString(ScanTimeframe));
-        FileWrite(log_handle, "EMA Periods: " + IntegerToString(EMA_PERIODS_SHORT) + ", " + 
-                             IntegerToString(EMA_PERIODS_MEDIUM) + ", " + 
-                             IntegerToString(EMA_PERIODS_LONG));
-        FileWrite(log_handle, "----------------------------------------");
-        FileClose(log_handle);
-    }
-
-    // Get all symbols
-    string symbols[];
-    int symbolsTotal = GetAllSymbols(symbols);
-    
-    Print("Starting scan of ", symbolsTotal, " symbols...");
-    
-    // Scan each symbol
-    for(int i = 0; i < symbolsTotal; i++)
-    {
-        string symbol = symbols[i];
-        if(!SymbolSelect(symbol, true)) continue;
         
-        // Log scanning progress
-        if(log_handle != INVALID_HANDLE)
+        // Open CSV file in append mode
+        csvHandle = FileOpen(files.csvFile, FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI);
+        if(csvHandle == INVALID_HANDLE)
         {
-            log_handle = FileOpen(log_filename, FILE_WRITE|FILE_TXT|FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE);
-            if(log_handle != INVALID_HANDLE)
+            // If file doesn't exist, create it with headers
+            csvHandle = FileOpen(files.csvFile, FILE_WRITE|FILE_CSV|FILE_ANSI);
+            if(csvHandle != INVALID_HANDLE)
             {
-                FileSeek(log_handle, 0, SEEK_END);
-                FileWrite(log_handle, "Scanning " + symbol + " (" + IntegerToString(i+1) + "/" + IntegerToString(symbolsTotal) + ")");
-                FileClose(log_handle);
+                FileWrite(csvHandle, 
+                    "Scan Time",
+                    "Symbol",
+                    "Pattern Type",
+                    "Strength",
+                    "Confidence",
+                    "Volume Confirmed",
+                    "RSI",
+                    "MACD",
+                    "ADX",
+                    "Timeframe"
+                );
             }
         }
+        else
+        {
+            // File exists, seek to end for appending
+            FileSeek(csvHandle, 0, SEEK_END);
+        }
         
-        ScanSymbol(symbol, results_filename, log_filename);
-        
-        // Show progress
+        if(csvHandle == INVALID_HANDLE)
+        {
+            Print("Failed to open CSV file");
+            FileClose(logHandle);
+            return;
+        }
+    }
+
+    // Log scan start
+    string scanStartTime = TimeToString(TimeCurrent());
+    Print("Starting pattern scan...");
+    LogMessage("=== Pattern Scan Started at " + scanStartTime + " ===");
+    LogMessage("Timeframe: " + EnumToString(ScanTimeframe));
+
+    string symbols[];
+    int symbolCount = GetTradeableSymbols(symbols);
+    LogMessage("Found " + IntegerToString(symbolCount) + " tradeable symbols");
+    
+    int patternsFound = 0;
+    
+    for(int i = 0; i < symbolCount; i++)
+    {
+        // Log progress every 10 symbols
         if(i % 10 == 0)
         {
-            Print("Scanned ", i, " of ", symbolsTotal, " symbols");
+            LogMessage("Scanning progress: " + IntegerToString(i) + "/" + IntegerToString(symbolCount) + " symbols");
         }
-    }
-    
-    // Log completion
-    log_handle = FileOpen(log_filename, FILE_WRITE|FILE_TXT|FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE);
-    if(log_handle != INVALID_HANDLE)
-    {
-        FileSeek(log_handle, 0, SEEK_END);
-        FileWrite(log_handle, "----------------------------------------");
-        FileWrite(log_handle, "Scan completed at " + TimeToString(TimeCurrent()));
-        FileWrite(log_handle, "Total symbols scanned: " + IntegerToString(symbolsTotal));
-        FileClose(log_handle);
-    }
-    
-    Print("Scan completed! Results saved to: ", results_filename);
-    Print("Detailed log saved to: ", log_filename);
-}
-
-//+------------------------------------------------------------------+
-//| Get all available symbols                                         |
-//+------------------------------------------------------------------+
-int GetAllSymbols(string &symbols[])
-{
-    ArrayResize(symbols, 0);
-    
-    for(int i = 0; i < SymbolsTotal(false); i++)
-    {
-        string symbol = SymbolName(i, false);
-        ArrayResize(symbols, ArraySize(symbols) + 1);
-        symbols[ArraySize(symbols) - 1] = symbol;
-    }
-    
-    return ArraySize(symbols);
-}
-
-//+------------------------------------------------------------------+
-//| Scan individual symbol                                            |
-//+------------------------------------------------------------------+
-void ScanSymbol(string symbol, string results_filename, string log_filename)
-{
-    PatternResult pattern = AnalyzePattern(symbol, ScanTimeframe);
-    
-    if(pattern.pattern_type != "None")
-    {
-        // Save to results file
-        if(SaveToFile)
+        
+        PatternResult result = AnalyzePattern(symbols[i], ScanTimeframe);
+        if(result.strength > 0)
         {
-            int results_handle = FileOpen(results_filename, FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
-            if(results_handle != INVALID_HANDLE)
+            patternsFound++;
+            string message = FormatPatternResult(symbols[i], result);
+            Print(message);
+            LogMessage("Pattern Found: " + symbols[i]);
+            LogMessage(message);
+            
+            // Write to CSV
+            if(csvHandle != INVALID_HANDLE)
             {
-                FileSeek(results_handle, 0, SEEK_END);
-                FileWrite(results_handle, 
-                         symbol,
-                         pattern.pattern_type,
-                         pattern.strength,
-                         pattern.confidence,
-                         pattern.details,
-                         pattern.volume_confirmed ? "Yes" : "No",
-                         SymbolInfoDouble(symbol, SYMBOL_BID),
-                         TimeToString(TimeCurrent())
-                         );
-                FileClose(results_handle);
+                FileWrite(csvHandle,
+                    scanStartTime,
+                    symbols[i],
+                    result.pattern_type,
+                    IntegerToString(result.strength),
+                    DoubleToString(result.confidence, 2),
+                    result.volume_confirmed ? "Yes" : "No",
+                    DoubleToString(result.rsi_value, 2),
+                    DoubleToString(result.macd_value, 5),
+                    DoubleToString(result.adx_value, 2),
+                    EnumToString(ScanTimeframe)
+                );
             }
         }
-        
-        // Save detailed analysis to log file
-        int log_handle = FileOpen(log_filename, FILE_WRITE|FILE_TXT|FILE_READ|FILE_SHARE_READ|FILE_SHARE_WRITE);
-        if(log_handle != INVALID_HANDLE)
-        {
-            FileSeek(log_handle, 0, SEEK_END);
-            FileWrite(log_handle, "----------------------------------------");
-            FileWrite(log_handle, "Pattern detected for " + symbol);
-            FileWrite(log_handle, "Type: " + pattern.pattern_type);
-            FileWrite(log_handle, "Strength: " + IntegerToString(pattern.strength));
-            FileWrite(log_handle, "Confidence: " + DoubleToString(pattern.confidence, 1) + "%");
-            FileWrite(log_handle, "Details: " + pattern.details);
-            FileWrite(log_handle, "Volume Confirmed: " + (pattern.volume_confirmed ? "Yes" : "No"));
-            FileWrite(log_handle, "Current Price: " + DoubleToString(SymbolInfoDouble(symbol, SYMBOL_BID), _Digits));
-            FileWrite(log_handle, "Time: " + TimeToString(TimeCurrent()));
-            FileClose(log_handle);
-        }
-        
-        Print(StringFormat("%s: %s pattern detected (Strength: %d, Confidence: %.1f%%)", 
-              symbol, pattern.pattern_type, pattern.strength, pattern.confidence));
     }
+
+    // Log scan completion
+    string completionMessage = StringFormat(
+        "Scan completed. Analyzed %d symbols, found %d patterns.",
+        symbolCount,
+        patternsFound
+    );
+    LogMessage("=== " + completionMessage + " ===");
+    LogMessage("Results saved to CSV: " + files.csvFile);
+
+    if(SaveToFile)
+    {
+        if(logHandle != INVALID_HANDLE)
+            FileClose(logHandle);
+        if(csvHandle != INVALID_HANDLE)
+            FileClose(csvHandle);
+    }
+    
+    Print(completionMessage);
+    Print("Detailed log: " + files.txtFile);
+    Print("Results CSV: " + files.csvFile);
 }
 
 //+------------------------------------------------------------------+
-//| Enhanced Pattern Analysis                                          |
+//| Analyze pattern for a single symbol                                |
 //+------------------------------------------------------------------+
 PatternResult AnalyzePattern(string symbol, ENUM_TIMEFRAMES timeframe)
 {
@@ -189,192 +235,575 @@ PatternResult AnalyzePattern(string symbol, ENUM_TIMEFRAMES timeframe)
     result.strength = 0;
     result.confidence = 0;
     
-    // Initialize indicator handles
-    int handle_short = iMA(symbol, timeframe, EMA_PERIODS_SHORT, 0, MODE_EMA, PRICE_CLOSE);
-    int handle_medium = iMA(symbol, timeframe, EMA_PERIODS_MEDIUM, 0, MODE_EMA, PRICE_CLOSE);
-    int handle_long = iMA(symbol, timeframe, EMA_PERIODS_LONG, 0, MODE_EMA, PRICE_CLOSE);
+    // Initialize market analysis data
+    MarketAnalysisData analysisData;
+    MarketAnalysisParameters params;
     
-    // Check if indicators were created successfully
-    if(handle_short == INVALID_HANDLE || 
-       handle_medium == INVALID_HANDLE || 
-       handle_long == INVALID_HANDLE)
+    // Set parameters
+    params.ema_period_short = EMA_PERIODS_SHORT;
+    params.ema_period_medium = EMA_PERIODS_MEDIUM;
+    params.ema_period_long = EMA_PERIODS_LONG;
+    params.adx_period = 14;
+    params.rsi_period = RSI_Period;
+    params.trend_adx_threshold = ADX_THRESHOLD;
+    params.rsi_upper_threshold = RSI_UPPER_THRESHOLD;
+    params.rsi_lower_threshold = RSI_LOWER_THRESHOLD;
+
+    // Get current market data
+    if(!PopulateMarketData(symbol, timeframe, analysisData))
     {
-        Print("Failed to create indicator handles for ", symbol);
-        return result;
+        return result; // Return empty result if data collection fails
     }
-    
-    // Calculate EMAs and store historical values
-    double ema_data[3][10]; // [short,medium,long][lookback periods]
-    
-    // Arrays for copying indicator data
-    double short_buffer[];
-    double medium_buffer[];
-    double long_buffer[];
-    
-    ArraySetAsSeries(short_buffer, true);
-    ArraySetAsSeries(medium_buffer, true);
-    ArraySetAsSeries(long_buffer, true);
-    
-    // Copy indicator data
-    if(CopyBuffer(handle_short, 0, 0, 10, short_buffer) <= 0 ||
-       CopyBuffer(handle_medium, 0, 0, 10, medium_buffer) <= 0 ||
-       CopyBuffer(handle_long, 0, 0, 10, long_buffer) <= 0)
+
+    // Perform comprehensive analysis
+    int patternSignal = IdentifyTrendPattern(analysisData, params);
+    int rsiMacdSignal = AnalyzeRSIMACD(analysisData);
+    bool volumeConfirmed = USE_VOLUME_CONFIRMATION ? 
+        CheckVolumeConfirmation(analysisData) : true;
+
+    // Calculate final strength and confidence
+    if(patternSignal != 0 && rsiMacdSignal != 0 && volumeConfirmed)
     {
-        Print("Failed to copy indicator data for ", symbol);
-        return result;
+        if(patternSignal > 0 && rsiMacdSignal > 0)
+        {
+            result.pattern_type = "Bullish";
+            result.strength = (patternSignal + rsiMacdSignal) / 2;
+        }
+        else if(patternSignal < 0 && rsiMacdSignal < 0)
+        {
+            result.pattern_type = "Bearish";
+            result.strength = MathAbs((patternSignal + rsiMacdSignal) / 2);
+        }
+
+        result.confidence = CalculateConfidence(result.strength, volumeConfirmed);
+        result.volume_confirmed = volumeConfirmed;
+        result.rsi_value = analysisData.rsi;
+        result.macd_value = analysisData.macdMain;
+        result.adx_value = analysisData.adx;
+        
+        // Add detailed analysis
+        result.details = GenerateAnalysisDetails(analysisData, params);
     }
-    
-    // Fill the ema_data array
-    for(int i = 0; i < 10; i++)
-    {
-        ema_data[0][i] = short_buffer[i];
-        ema_data[1][i] = medium_buffer[i];
-        ema_data[2][i] = long_buffer[i];
-    }
-    
-    // Release indicator handles
-    IndicatorRelease(handle_short);
-    IndicatorRelease(handle_medium);
-    IndicatorRelease(handle_long);
-    
-    // Pattern Analysis
-    int bull_score = 0;
-    int bear_score = 0;
-    
-    // 1. EMA Alignment Analysis
-    if(IsStrongEMAAlignment(ema_data, true)) bull_score += 3;
-    if(IsStrongEMAAlignment(ema_data, false)) bear_score += 3;
-    
-    // 2. Cross Detection
-    CrossType cross = DetectCross(ema_data);
-    switch(cross) {
-        case CROSS_GOLDEN: bull_score += 4; break;
-        case CROSS_DEATH:  bear_score += 4; break;
-    }
-    
-    // 3. Volume Analysis
-    bool volume_confirmed = AnalyzeVolume(symbol, timeframe);
-    if(volume_confirmed) {
-        bull_score += (bull_score > bear_score) ? 2 : 0;
-        bear_score += (bear_score > bull_score) ? 2 : 0;
-    }
-    
-    // 4. Momentum Confirmation
-    int rsi_handle = iRSI(symbol, timeframe, 14, PRICE_CLOSE);
-    if(rsi_handle == INVALID_HANDLE)
-    {
-        Print("Failed to create RSI handle for ", symbol);
-        return result;
-    }
-    
-    double rsi_buffer[];
-    ArraySetAsSeries(rsi_buffer, true);
-    
-    if(CopyBuffer(rsi_handle, 0, 0, 1, rsi_buffer) <= 0)
-    {
-        Print("Failed to copy RSI data for ", symbol);
-        IndicatorRelease(rsi_handle);
-        return result;
-    }
-    
-    double rsi = rsi_buffer[0];
-    IndicatorRelease(rsi_handle);
-    
-    if(rsi > 50 && rsi < 70) bull_score++;
-    if(rsi < 50 && rsi > 30) bear_score++;
-    
-    // Determine Pattern Type and Strength
-    result.volume_confirmed = volume_confirmed;
-    
-    if(bull_score >= 5 && bull_score > bear_score * 1.5) {
-        result.pattern_type = "Bullish";
-        result.strength = bull_score;
-        result.confidence = CalculateConfidence(bull_score, volume_confirmed);
-        result.details = FormatPatternDetails(cross, rsi, volume_confirmed);
-    }
-    else if(bear_score >= 5 && bear_score > bull_score * 1.5) {
-        result.pattern_type = "Bearish";
-        result.strength = bear_score;
-        result.confidence = CalculateConfidence(bear_score, volume_confirmed);
-        result.details = FormatPatternDetails(cross, rsi, volume_confirmed);
-    }
-    
+
     return result;
 }
 
 //+------------------------------------------------------------------+
-//| Helper Functions                                                   |
+//| Populate Market Data                                               |
 //+------------------------------------------------------------------+
-bool IsStrongEMAAlignment(double &ema_data[][], bool bullish)
+bool PopulateMarketData(string symbol, ENUM_TIMEFRAMES timeframe, MarketAnalysisData &data)
 {
-    if(bullish) {
-        return ema_data[0][0] > ema_data[1][0] && 
-               ema_data[1][0] > ema_data[2][0] &&
-               ema_data[0][1] > ema_data[1][1] && 
-               ema_data[1][1] > ema_data[2][1];
-    }
-    return ema_data[0][0] < ema_data[1][0] && 
-           ema_data[1][0] < ema_data[2][0] &&
-           ema_data[0][1] < ema_data[1][1] && 
-           ema_data[1][1] < ema_data[2][1];
-}
-
-double CalculateConfidence(int score, bool volume_confirmed)
-{
-    double confidence = score * 10.0;
-    if(volume_confirmed) confidence *= 1.2;
-    return MathMin(confidence, 100.0);
-}
-
-//+------------------------------------------------------------------+
-//| Detect EMA crosses                                                 |
-//+------------------------------------------------------------------+
-CrossType DetectCross(double &ema_data[][])
-{
-    // Check for Golden Cross (short crosses above long)
-    if(ema_data[0][1] < ema_data[2][1] && ema_data[0][0] > ema_data[2][0])
-        return CROSS_GOLDEN;
+    data.currentPrice = SymbolInfoDouble(symbol, SYMBOL_BID);
+    data.ema_short = CalculateEMA(symbol, timeframe, EMA_PERIODS_SHORT);
+    data.ema_medium = CalculateEMA(symbol, timeframe, EMA_PERIODS_MEDIUM);
+    data.ema_long = CalculateEMA(symbol, timeframe, EMA_PERIODS_LONG);
     
-    // Check for Death Cross (short crosses below long)
-    if(ema_data[0][1] > ema_data[2][1] && ema_data[0][0] < ema_data[2][0])
-        return CROSS_DEATH;
+    // Calculate ADX
+    CalculateADX(symbol, timeframe, 14, data.adx, data.plusDI, data.minusDI);
+    
+    // Calculate RSI
+    data.rsi = CalculateRSI(symbol, timeframe, RSI_Period);
+    
+    // Calculate MACD
+    CalculateMACD(symbol, timeframe, data.macdMain, data.macdSignal, data.macdHistogram);
+    
+    // Calculate ATR
+    data.atr = CalculateATR(symbol, timeframe, 14);
+    
+    // Calculate Volume metrics
+    data.volume = iVolume(symbol, timeframe, 0);
+    data.avgVolume = CalculateAverageVolume(symbol, timeframe, 20);
+    
+    // Check for patterns
+    data.bullishPattern = IsBullishCandlePattern(symbol, timeframe);
+    data.bearishPattern = IsBearishCandlePattern(symbol, timeframe);
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Confidence Score                                         |
+//+------------------------------------------------------------------+
+double CalculateConfidence(int strength, bool volumeConfirmed)
+{
+    double confidence = strength * 10.0; // Base confidence from strength
+    
+    if(volumeConfirmed)
+        confidence *= 1.2; // 20% boost for volume confirmation
         
-    return CROSS_NONE;
+    // Normalize to 0-100 range
+    confidence = MathMin(confidence, 100.0);
+    confidence = MathMax(confidence, 0.0);
+    
+    return NormalizeDouble(confidence, 2);
 }
 
 //+------------------------------------------------------------------+
-//| Analyze volume confirmation                                        |
+//| Identify Trend Pattern                                             |
 //+------------------------------------------------------------------+
-bool AnalyzeVolume(string symbol, ENUM_TIMEFRAMES timeframe)
+int IdentifyTrendPattern(MarketAnalysisData &data, MarketAnalysisParameters &params)
 {
-    double current_volume = iVolume(symbol, timeframe, 0);
-    double avg_volume = 0;
+    // Initialize scoring system
+    double bullishScore = 0;
+    double bearishScore = 0;
     
-    // Calculate average volume over last 5 periods
-    for(int i = 1; i <= 5; i++)
+    // 1. EMA Analysis
+    if(data.ema_short > data.ema_medium && data.ema_medium > data.ema_long)
     {
-        avg_volume += iVolume(symbol, timeframe, i);
+        bullishScore += 2.0;
     }
-    avg_volume /= 5;
+    else if(data.ema_short < data.ema_medium && data.ema_medium < data.ema_long)
+    {
+        bearishScore += 2.0;
+    }
     
-    return (current_volume > avg_volume * 1.2); // 20% above average
+    // 2. ADX and DI Analysis
+    if(data.adx > params.trend_adx_threshold)
+    {
+        if(data.plusDI > data.minusDI && (data.plusDI - data.minusDI) > DI_DIFFERENCE_THRESHOLD)
+            bullishScore += 1.5;
+        else if(data.minusDI > data.plusDI && (data.minusDI - data.plusDI) > DI_DIFFERENCE_THRESHOLD)
+            bearishScore += 1.5;
+    }
+    
+    // 3. RSI Analysis
+    if(data.rsi < params.rsi_lower_threshold)
+        bullishScore += 1.0;
+    else if(data.rsi > params.rsi_upper_threshold)
+        bearishScore += 1.0;
+    
+    // 4. MACD Analysis
+    if(data.macdMain > data.macdSignal && data.macdHistogram > 0)
+        bullishScore += 1.5;
+    else if(data.macdMain < data.macdSignal && data.macdHistogram < 0)
+        bearishScore += 1.5;
+    
+    // 5. Pattern Confirmation
+    if(data.bullishPattern)
+        bullishScore += 2.0;
+    if(data.bearishPattern)
+        bearishScore += 2.0;
+    
+    // Calculate final signal
+    const double SIGNAL_THRESHOLD = 4.0;
+    
+    if(bullishScore > SIGNAL_THRESHOLD && bullishScore > bearishScore * 1.5)
+        return (int)MathRound(bullishScore);
+    else if(bearishScore > SIGNAL_THRESHOLD && bearishScore > bullishScore * 1.5)
+        return -(int)MathRound(bearishScore);
+        
+    return 0;
 }
 
 //+------------------------------------------------------------------+
-//| Format pattern details as string                                   |
+//| Analyze RSI and MACD Combination                                   |
 //+------------------------------------------------------------------+
-string FormatPatternDetails(CrossType cross, double rsi, bool volume_confirmed)
+int AnalyzeRSIMACD(MarketAnalysisData &data)
 {
-    string cross_str = "";
-    switch(cross)
+    // RSI Trend Analysis
+    bool rsiOversold = data.rsi < RSI_LOWER_THRESHOLD;
+    bool rsiOverbought = data.rsi > RSI_UPPER_THRESHOLD;
+    bool rsiTrendUp = data.rsi > RSI_Neutral && data.rsi < RSI_UPPER_THRESHOLD;
+    bool rsiTrendDown = data.rsi < RSI_Neutral && data.rsi > RSI_LOWER_THRESHOLD;
+    
+    // MACD Signal Analysis
+    bool macdBullish = data.macdMain > data.macdSignal && data.macdHistogram > 0;
+    bool macdBearish = data.macdMain < data.macdSignal && data.macdHistogram < 0;
+    
+    // Combined Signal Analysis
+    if((rsiOversold || rsiTrendUp) && macdBullish)
     {
-        case CROSS_GOLDEN: cross_str = "Golden Cross"; break;
-        case CROSS_DEATH:  cross_str = "Death Cross";  break;
-        default:           cross_str = "No Cross";     break;
+        return 1;  // Bullish signal
+    }
+    else if((rsiOverbought || rsiTrendDown) && macdBearish)
+    {
+        return -1; // Bearish signal
     }
     
-    return StringFormat("Cross: %s, RSI: %.1f, Volume: %s", 
-                       cross_str, 
-                       rsi,
-                       volume_confirmed ? "Confirmed" : "Weak");
+    return 0;  // No clear signal
+}
+
+//+------------------------------------------------------------------+
+//| Check Volume Confirmation                                          |
+//+------------------------------------------------------------------+
+bool CheckVolumeConfirmation(MarketAnalysisData &data)
+{
+    if(!USE_VOLUME_CONFIRMATION)
+        return true;
+        
+    return (data.volume > data.avgVolume * VOLUME_THRESHOLD);
+}
+
+//+------------------------------------------------------------------+
+//| Generate Analysis Details                                          |
+//+------------------------------------------------------------------+
+string GenerateAnalysisDetails(MarketAnalysisData &data, MarketAnalysisParameters &params)
+{
+    string details = "";
+    
+    // Add EMA Analysis
+    details += "EMA Analysis:\n";
+    details += "Short(" + IntegerToString(params.ema_period_short) + "): " + DoubleToString(data.ema_short, 5) + "\n";
+    details += "Medium(" + IntegerToString(params.ema_period_medium) + "): " + DoubleToString(data.ema_medium, 5) + "\n";
+    details += "Long(" + IntegerToString(params.ema_period_long) + "): " + DoubleToString(data.ema_long, 5) + "\n\n";
+    
+    // Add Indicator Analysis
+    details += "Indicators:\n";
+    details += "ADX: " + DoubleToString(data.adx, 2) + "\n";
+    details += "DI+: " + DoubleToString(data.plusDI, 2) + "\n";
+    details += "DI-: " + DoubleToString(data.minusDI, 2) + "\n";
+    details += "RSI: " + DoubleToString(data.rsi, 2) + "\n";
+    details += "MACD: " + DoubleToString(data.macdMain, 5) + "\n";
+    details += "Signal: " + DoubleToString(data.macdSignal, 5) + "\n";
+    details += "Histogram: " + DoubleToString(data.macdHistogram, 5) + "\n\n";
+    
+    // Add Volume Analysis
+    details += "Volume Analysis:\n";
+    details += "Current Volume: " + DoubleToString(data.volume, 2) + "\n";
+    details += "Average Volume: " + DoubleToString(data.avgVolume, 2) + "\n";
+    details += "Volume Ratio: " + DoubleToString(data.volume/data.avgVolume, 2) + "\n";
+    
+    return details;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Average Volume                                           |
+//+------------------------------------------------------------------+
+double CalculateAverageVolume(string symbol, ENUM_TIMEFRAMES timeframe, int periods)
+{
+    double totalVolume = 0;
+    for(int i = 1; i <= periods; i++)
+    {
+        totalVolume += iVolume(symbol, timeframe, i);
+    }
+    return totalVolume / periods;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate EMA                                                      |
+//+------------------------------------------------------------------+
+double CalculateEMA(string symbol, ENUM_TIMEFRAMES timeframe, int period, int shift = 0)
+{
+    double ema[];
+    ArraySetAsSeries(ema, true);
+    
+    int handle = iMA(symbol, timeframe, period, 0, MODE_EMA, PRICE_CLOSE);
+    if(handle == INVALID_HANDLE)
+    {
+        Print("Error creating EMA indicator handle");
+        return 0;
+    }
+    
+    if(CopyBuffer(handle, 0, shift, 1, ema) != 1)
+    {
+        Print("Error copying EMA data");
+        return 0;
+    }
+    
+    IndicatorRelease(handle);
+    return ema[0];
+}
+
+//+------------------------------------------------------------------+
+//| Calculate ADX                                                      |
+//+------------------------------------------------------------------+
+void CalculateADX(string symbol, ENUM_TIMEFRAMES timeframe, int period, 
+                 double &adx, double &plusDI, double &minusDI)
+{
+    double adxBuffer[];
+    double plusBuffer[];
+    double minusBuffer[];
+    ArraySetAsSeries(adxBuffer, true);
+    ArraySetAsSeries(plusBuffer, true);
+    ArraySetAsSeries(minusBuffer, true);
+    
+    int handle = iADX(symbol, timeframe, period);
+    if(handle == INVALID_HANDLE)
+    {
+        Print("Error creating ADX indicator handle");
+        return;
+    }
+    
+    if(CopyBuffer(handle, 0, 0, 1, adxBuffer) != 1 ||
+       CopyBuffer(handle, 1, 0, 1, plusBuffer) != 1 ||
+       CopyBuffer(handle, 2, 0, 1, minusBuffer) != 1)
+    {
+        Print("Error copying ADX data");
+        return;
+    }
+    
+    adx = adxBuffer[0];
+    plusDI = plusBuffer[0];
+    minusDI = minusBuffer[0];
+    
+    IndicatorRelease(handle);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate RSI                                                      |
+//+------------------------------------------------------------------+
+double CalculateRSI(string symbol, ENUM_TIMEFRAMES timeframe, int period, int shift = 0)
+{
+    double rsi[];
+    ArraySetAsSeries(rsi, true);
+    
+    int handle = iRSI(symbol, timeframe, period, PRICE_CLOSE);
+    if(handle == INVALID_HANDLE)
+    {
+        Print("Error creating RSI indicator handle");
+        return 0;
+    }
+    
+    if(CopyBuffer(handle, 0, shift, 1, rsi) != 1)
+    {
+        Print("Error copying RSI data");
+        return 0;
+    }
+    
+    IndicatorRelease(handle);
+    return rsi[0];
+}
+
+//+------------------------------------------------------------------+
+//| Calculate MACD                                                     |
+//+------------------------------------------------------------------+
+void CalculateMACD(string symbol, ENUM_TIMEFRAMES timeframe, 
+                  double &macdMain, double &macdSignal, double &macdHistogram)
+{
+    double macdBuffer[];
+    double signalBuffer[];
+    ArraySetAsSeries(macdBuffer, true);
+    ArraySetAsSeries(signalBuffer, true);
+    
+    int handle = iMACD(symbol, timeframe, MACD_Fast, MACD_Slow, MACD_Signal, PRICE_CLOSE);
+    if(handle == INVALID_HANDLE)
+    {
+        Print("Error creating MACD indicator handle");
+        return;
+    }
+    
+    if(CopyBuffer(handle, 0, 0, 1, macdBuffer) != 1 ||
+       CopyBuffer(handle, 1, 0, 1, signalBuffer) != 1)
+    {
+        Print("Error copying MACD data");
+        return;
+    }
+    
+    macdMain = macdBuffer[0];
+    macdSignal = signalBuffer[0];
+    macdHistogram = macdMain - macdSignal;
+    
+    IndicatorRelease(handle);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate ATR                                                      |
+//+------------------------------------------------------------------+
+double CalculateATR(string symbol, ENUM_TIMEFRAMES timeframe, int period, int shift = 0)
+{
+    double atr[];
+    ArraySetAsSeries(atr, true);
+    
+    int handle = iATR(symbol, timeframe, period);
+    if(handle == INVALID_HANDLE)
+    {
+        Print("Error creating ATR indicator handle");
+        return 0;
+    }
+    
+    if(CopyBuffer(handle, 0, shift, 1, atr) != 1)
+    {
+        Print("Error copying ATR data");
+        return 0;
+    }
+    
+    IndicatorRelease(handle);
+    return atr[0];
+}
+
+//+------------------------------------------------------------------+
+//| Get Tradeable Symbols                                             |
+//+------------------------------------------------------------------+
+int GetTradeableSymbols(string &symbols[])
+{
+    int total = SymbolsTotal(true);
+    ArrayResize(symbols, total);
+    int count = 0;
+    
+    for(int i = 0; i < total; i++)
+    {
+        string symbol = SymbolName(i, true);
+        if(SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_FULL)
+        {
+            symbols[count++] = symbol;
+        }
+    }
+    
+    ArrayResize(symbols, count);
+    return count;
+}
+
+//+------------------------------------------------------------------+
+//| Log Message with Timestamp                                         |
+//+------------------------------------------------------------------+
+void LogMessage(string message)
+{
+    string timestampedMessage = TimeToString(TimeCurrent()) + ": " + message;
+    if(SaveToFile && logHandle != INVALID_HANDLE)
+    {
+        FileWriteString(logHandle, timestampedMessage + "\n");
+    }
+    Print(timestampedMessage);
+}
+
+//+------------------------------------------------------------------+
+//| Format Pattern Result                                             |
+//+------------------------------------------------------------------+
+string FormatPatternResult(string symbol, PatternResult &result)
+{
+    string message = StringFormat(
+        "%s: %s pattern detected (Strength: %d, Confidence: %.2f%%)",
+        symbol,
+        result.pattern_type,
+        result.strength,
+        result.confidence
+    );
+    
+    if(USE_VOLUME_CONFIRMATION)
+    {
+        message += StringFormat(", Volume Confirmed: %s", 
+            result.volume_confirmed ? "Yes" : "No"
+        );
+    }
+    
+    message += StringFormat("\nRSI: %.2f, MACD: %.5f, ADX: %.2f",
+        result.rsi_value,
+        result.macd_value,
+        result.adx_value
+    );
+    
+    if(result.details != "")
+    {
+        message += "\nDetails:\n" + result.details;
+    }
+    
+    return message;
+}
+
+//+------------------------------------------------------------------+
+//| Check for Bullish Candlestick Pattern                             |
+//+------------------------------------------------------------------+
+bool IsBullishCandlePattern(string symbol, ENUM_TIMEFRAMES timeframe)
+{
+    double open[3], high[3], low[3], close[3];
+    ArraySetAsSeries(open, true);
+    ArraySetAsSeries(high, true);
+    ArraySetAsSeries(low, true);
+    ArraySetAsSeries(close, true);
+    
+    if(CopyOpen(symbol, timeframe, 0, 3, open) != 3 ||
+       CopyHigh(symbol, timeframe, 0, 3, high) != 3 ||
+       CopyLow(symbol, timeframe, 0, 3, low) != 3 ||
+       CopyClose(symbol, timeframe, 0, 3, close) != 3)
+    {
+        Print("Error copying price data");
+        return false;
+    }
+    
+    // Calculate average candle size for reference
+    double avgCandleSize = 0;
+    for(int i = 0; i < 3; i++)
+    {
+        avgCandleSize += (high[i] - low[i]);
+    }
+    avgCandleSize /= 3;
+    
+    // Current candle properties
+    double currentBody = close[0] - open[0];
+    double currentUpperWick = high[0] - MathMax(open[0], close[0]);
+    double currentLowerWick = MathMin(open[0], close[0]) - low[0];
+    
+    // Previous candle properties
+    double previousBody = close[1] - open[1];
+    
+    // Check for bullish engulfing
+    bool isBullishEngulfing = 
+        currentBody > 0 &&  // Current candle is bullish
+        previousBody < 0 && // Previous candle is bearish
+        open[0] < close[1] && // Opens below previous close
+        close[0] > open[1];   // Closes above previous open
+        
+    // Check for hammer
+    bool isHammer = 
+        currentBody > 0 && // Bullish candle
+        currentLowerWick > currentBody * 2 && // Long lower wick
+        currentUpperWick < currentBody * 0.5; // Short upper wick
+        
+    // Check for morning star
+    bool isMorningStar = 
+        close[2] < open[2] && // First candle bearish
+        MathAbs(open[1] - close[1]) < avgCandleSize * 0.3 && // Doji
+        close[0] > open[0] && // Current candle bullish
+        close[0] > (open[2] + close[2]) / 2; // Closes above midpoint of first candle
+        
+    return isBullishEngulfing || isHammer || isMorningStar;
+}
+
+//+------------------------------------------------------------------+
+//| Check for Bearish Candlestick Pattern                             |
+//+------------------------------------------------------------------+
+bool IsBearishCandlePattern(string symbol, ENUM_TIMEFRAMES timeframe)
+{
+    double open[3], high[3], low[3], close[3];
+    ArraySetAsSeries(open, true);
+    ArraySetAsSeries(high, true);
+    ArraySetAsSeries(low, true);
+    ArraySetAsSeries(close, true);
+    
+    if(CopyOpen(symbol, timeframe, 0, 3, open) != 3 ||
+       CopyHigh(symbol, timeframe, 0, 3, high) != 3 ||
+       CopyLow(symbol, timeframe, 0, 3, low) != 3 ||
+       CopyClose(symbol, timeframe, 0, 3, close) != 3)
+    {
+        Print("Error copying price data");
+        return false;
+    }
+    
+    // Calculate average candle size for reference
+    double avgCandleSize = 0;
+    for(int i = 0; i < 3; i++)
+    {
+        avgCandleSize += (high[i] - low[i]);
+    }
+    avgCandleSize /= 3;
+    
+    // Current candle properties
+    double currentBody = close[0] - open[0];
+    double currentUpperWick = high[0] - MathMax(open[0], close[0]);
+    double currentLowerWick = MathMin(open[0], close[0]) - low[0];
+    
+    // Previous candle properties
+    double previousBody = close[1] - open[1];
+    
+    // Check for bearish engulfing
+    bool isBearishEngulfing = 
+        currentBody < 0 &&  // Current candle is bearish
+        previousBody > 0 && // Previous candle is bullish
+        open[0] > close[1] && // Opens above previous close
+        close[0] < open[1];   // Closes below previous open
+        
+    // Check for shooting star
+    bool isShootingStar = 
+        currentBody < 0 && // Bearish candle
+        currentUpperWick > MathAbs(currentBody) * 2 && // Long upper wick
+        currentLowerWick < MathAbs(currentBody) * 0.5; // Short lower wick
+        
+    // Check for evening star
+    bool isEveningStar = 
+        close[2] > open[2] && // First candle bullish
+        MathAbs(open[1] - close[1]) < avgCandleSize * 0.3 && // Doji
+        close[0] < open[0] && // Current candle bearish
+        close[0] < (open[2] + close[2]) / 2; // Closes below midpoint of first candle
+        
+    return isBearishEngulfing || isShootingStar || isEveningStar;
 }
