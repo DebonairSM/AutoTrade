@@ -37,6 +37,7 @@ void OnStart()
     string results_filename = "PatternScan_Results_" + TimeToString(TimeCurrent(), TIME_DATE) + ".csv";
     if(SaveToFile)
     {
+        // First create/clear the file with headers
         int handle = FileOpen(results_filename, FILE_WRITE|FILE_CSV);
         if(handle != INVALID_HANDLE)
         {
@@ -138,7 +139,7 @@ void ScanSymbol(string symbol, string results_filename, string log_filename)
         // Save to results file
         if(SaveToFile)
         {
-            int results_handle = FileOpen(results_filename, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+            int results_handle = FileOpen(results_filename, FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
             if(results_handle != INVALID_HANDLE)
             {
                 FileSeek(results_handle, 0, SEEK_END);
