@@ -53,7 +53,7 @@ input group "Position Management"
 input bool UseTrailingStop = false;         // Enable trailing stops
 input double TrailingStopPips = 20.0;       // Trailing stop distance in pips
 input bool UseBreakeven = false;             // Enable breakeven
-input double BreakevenActivationPips = 30.0;// Breakeven activation distance
+input double BreakevenActivationPips = 30.0;   // Breakeven activation distance
 input double BreakevenOffsetPips = 5.0;     // Breakeven offset distance
 
 // Order Flow Analysis
@@ -255,6 +255,7 @@ void ExecuteTradingLogic()
         // Calculate signals
         int orderFlowSignal = MonitorOrderFlow();
         int trendSignal = TrendFollowingCore();
+        int patternSignal = IdentifyTrendPattern();
         int rsiMacdSignal = CheckRSIMACDSignal();
         
         // Use a local variable for RiskPercent modification
@@ -275,69 +276,28 @@ void ExecuteTradingLogic()
         double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) * 10;
         double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
         double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-        double lotSize = CalculateDynamicLotSize(stopLoss / _Point, accountBalance, localRiskPercent, minVolume, maxVolume);
+        double volumeStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+        double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+        double lotSize = CalculateLotSize(
+            RiskPercent,              // risk percent (e.g., 2.0)
+            stopLoss / _Point,        // stop loss in pips
+            accountEquity,            // current account equity
+            tickValue,                // tick value
+            minVolume,                // minimum volume
+            maxVolume,                // maximum volume
+            volumeStep                // volume step
+        );
 
         // For BUY signals
-        if (trendSignal == 1 && rsiMacdSignal == 1 && orderFlowSignal == 1)
+        if (trendSignal == 1 && patternSignal == 1 && rsiMacdSignal == 1 && orderFlowSignal == 1)
         {
-            // Buy logic
-            if (!HasActiveTradeOrPendingOrder(POSITION_TYPE_BUY))
-            {
-                double stopLoss, takeProfit;
-                CalculateDynamicSLTP(stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
-
-                double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-                double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-                double lotSize = CalculateDynamicLotSize(stopLoss / _Point, accountBalance, RiskPercent, minVolume, maxVolume);
-
-                double askPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                double tpPrice = askPrice + takeProfit;
-                double slPrice = askPrice - stopLoss;
-                
-                // Get the best limit order price
-                double limitPrice = GetBestLimitOrderPrice(ORDER_TYPE_BUY_LIMIT, tpPrice, slPrice, LiquidityThreshold, TakeProfitPips, StopLossPips);
-                
-                if (limitPrice > 0.0)
-                {
-                    Print("Placing Buy Limit Order - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
-                    PlaceBuyLimitOrder(limitPrice, tpPrice, slPrice);
-                }
-                else
-                {
-                    Print("Falling back to market order - TP: ", tpPrice, " SL: ", slPrice);
-                    PlaceBuyOrder();
-                }
-            }
+            ProcessBuySignal(lotSize, stopLoss, takeProfit);
         }
         // For SELL signals
-        else if (AllowShortTrades && trendSignal == -1 && rsiMacdSignal == -1 && orderFlowSignal == -1)
+        else if (AllowShortTrades && trendSignal == -1 && patternSignal == -1 && 
+                 rsiMacdSignal == -1 && orderFlowSignal == -1)
         {
-            if (!HasActiveTradeOrPendingOrder(POSITION_TYPE_SELL))
-            {
-                double stopLoss, takeProfit;
-                CalculateDynamicSLTP(stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
-
-                double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-                double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-                double lotSize = CalculateDynamicLotSize(stopLoss / _Point, accountBalance, RiskPercent, minVolume, maxVolume);
-
-                double bidPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                double tpPrice = bidPrice - takeProfit;
-                double slPrice = bidPrice + stopLoss;
-                
-                double limitPrice = GetBestLimitOrderPrice(ORDER_TYPE_SELL_LIMIT, tpPrice, slPrice, LiquidityThreshold, TakeProfitPips, StopLossPips);
-                
-                if (limitPrice > 0.0)
-                {
-                    Print("Placing Sell Limit Order - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
-                    PlaceSellLimitOrder(limitPrice, tpPrice, slPrice);
-                }
-                else
-                {
-                    Print("Falling back to market order - TP: ", tpPrice, " SL: ", slPrice);
-                    PlaceSellOrder();
-                }
-            }
+            ProcessSellSignal(lotSize, stopLoss, takeProfit);
         }
 
         // Update last values
@@ -347,6 +307,16 @@ void ExecuteTradingLogic()
         lastStopLoss = stopLoss;
         lastTakeProfit = takeProfit;
         lastCalculationTime = currentTime;
+
+        // Log the updated state of signals and trading parameters
+        Print("Updated Signals and Parameters:");
+        Print("  Last Order Flow Signal: ", lastOrderFlowSignal);
+        Print("  Last Trend Signal: ", lastTrendSignal);
+        Print("  Last RSI/MACD Signal: ", lastRsiMacdSignal);
+        Print("  Last Pattern Signal: ", patternSignal); // Added patternSignal logging
+        Print("  Last Stop Loss: ", lastStopLoss);
+        Print("  Last Take Profit: ", lastTakeProfit);
+        Print("  Last Calculation Time: ", TimeToString(lastCalculationTime, TIME_DATE | TIME_MINUTES));
 
         // If no trade signal is generated, log the reason
         if (orderFlowSignal == 0)
@@ -376,11 +346,19 @@ void ExecuteTradingLogic()
                 lastLogTime = TimeCurrent();
             }
         }
+        if (patternSignal == 0)
+        {
+            if (TimeCurrent() - lastLogTime >= 3600)
+            {
+                LogTradeRejection("No pattern signal detected.", SymbolInfoDouble(_Symbol, SYMBOL_BID), adx, rsi, ema_short, ema_medium, ema_long,
+                                    ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
+                lastLogTime = TimeCurrent();
+            }
+        }
         
     }
 }
 
-// New helper functions to process signals
 void ProcessBuySignal(double lotSize, double stopLoss, double takeProfit)
 {
     if (!IsBearishCandlePattern())
@@ -963,12 +941,12 @@ int IdentifyTrendPattern()
     if(rsi < 50 && rsi > 30) bearish_signals++;
 
     // 7. Final Decision Making
-    Print("Pattern Analysis - Bullish Signals: ", bullish_signals, " Bearish Signals: ", bearish_signals);
+    LogPatternAnalysis(bullish_signals, bearish_signals, _Symbol, Timeframe);
 
-    if(bullish_signals >= 4 && bullish_signals > bearish_signals * 2)
-        return 1;  // Strong bullish pattern
-    else if(bearish_signals >= 4 && bearish_signals > bullish_signals * 2)
-        return -1; // Strong bearish pattern
+    if(bullish_signals >= 3 && bullish_signals > bearish_signals)
+        return 1;  // Bullish pattern
+    else if(bearish_signals >= 3 && bearish_signals > bullish_signals)
+        return -1; // Bearish pattern
     
     return 0;     // No clear pattern
 }

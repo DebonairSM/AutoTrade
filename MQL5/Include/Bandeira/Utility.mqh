@@ -135,51 +135,127 @@ int GetVolumeStepDigits(double volume_step)
 //+------------------------------------------------------------------+
 //| Calculate Lot Size Based on Risk Percentage and Stop Loss        |
 //+------------------------------------------------------------------+
-double CalculateLotSize(double risk_percent, double stop_loss_pips, double accountEquity, double tickValue, double minVolume, double maxVolume, double volumeStep)
+double CalculateLotSize(double risk_percent, double stop_loss_pips, double accountEquity, 
+                       double tickValue, double minVolume, double maxVolume, double volumeStep)
 {
+    // Convert risk percentage to decimal
+    double risk_decimal = risk_percent / 100.0;
+    
     // Calculate the risk amount in account currency
-    double risk_amount = accountEquity * risk_percent / 100.0;
-
-    // Calculate the lot size based on risk and stop-loss distance
-    double lot_size = risk_amount / (stop_loss_pips * tickValue);
-
-    // Ensure the lot size is within broker constraints
-    lot_size = MathMax(minVolume, MathMin(lot_size, maxVolume));
-
-    // Adjust lot size to valid volume step
+    double risk_amount = accountEquity * risk_decimal;
+    
+    // Calculate pip value (how much one pip is worth per lot)
+    double pip_value = tickValue * 10; // Multiply by 10 because tickValue is per 0.1 pip
+    
+    // Calculate the lot size
+    double lot_size = risk_amount / (stop_loss_pips * pip_value);
+    
+    // Round to nearest volume step
     lot_size = MathFloor(lot_size / volumeStep) * volumeStep;
-
-    // Ensure the adjusted lot size is not less than minimum lot
-    lot_size = MathMax(lot_size, minVolume);
-
-    // Normalize lot size to avoid floating-point issues
+    
+    // Ensure lot size is within allowed range
+    lot_size = MathMax(minVolume, MathMin(lot_size, maxVolume));
+    
+    // Normalize to avoid floating point issues
     int volume_step_digits = GetVolumeStepDigits(volumeStep);
     lot_size = NormalizeDouble(lot_size, volume_step_digits);
-
-    Print("Calculated Lot Size: ", lot_size);
+    
+    Print("Risk Amount: ", risk_amount, 
+          " Stop Loss Pips: ", stop_loss_pips,
+          " Pip Value: ", pip_value,
+          " Calculated Lot Size: ", lot_size);
+          
     return lot_size;
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Dynamic Lot Size                                       |
+//| Calculate Dynamic Lot Size with improved safety and logging       |
 //+------------------------------------------------------------------+
-double CalculateDynamicLotSize(double stop_loss_points, double accountBalance, double riskPercent, double minVolume, double maxVolume)
+double CalculateDynamicLotSize(double stop_loss_points, double accountBalance, 
+                              double riskPercent, double minVolume, double maxVolume)
 {
-    double risk_amount = accountBalance * (riskPercent / 100.0);
+    // Input validation
+    if(stop_loss_points <= 0)
+    {
+        Print("Error: Invalid stop loss points (", stop_loss_points, ")");
+        return minVolume;
+    }
+    
+    if(accountBalance <= 0)
+    {
+        Print("Error: Invalid account balance (", accountBalance, ")");
+        return minVolume;
+    }
+    
+    if(riskPercent <= 0 || riskPercent > 100)
+    {
+        Print("Error: Invalid risk percent (", riskPercent, ")");
+        return minVolume;
+    }
+
+    // Get symbol properties
     double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
     double tick_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
     double lot_step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-
-    if (tick_value == 0.0 || tick_size == 0.0 || lot_step == 0.0)
+    
+    // Validate symbol properties
+    if(tick_value <= 0 || tick_size <= 0 || lot_step <= 0)
     {
-        Print("Error: Invalid symbol properties for lot size calculation.");
-        return 0.0;
+        string error = StringFormat("Invalid symbol properties - Tick Value: %.5f, Tick Size: %.5f, Lot Step: %.5f",
+                                  tick_value, tick_size, lot_step);
+        Print(error);
+        return minVolume;
     }
 
-    double lot_size = (risk_amount / stop_loss_points) / (tick_value / tick_size);
+    // Calculate risk amount
+    double risk_amount = accountBalance * (riskPercent / 100.0);
+    
+    // Calculate lot size
+    double lot_size = 0;
+    
+    // Prevent division by zero
+    if(tick_value > 0 && tick_size > 0)
+    {
+        lot_size = (risk_amount / stop_loss_points) / (tick_value / tick_size);
+    }
+    else
+    {
+        Print("Error: Invalid tick value or size");
+        return minVolume;
+    }
+
+    // Round to nearest lot step
     lot_size = MathRound(lot_size / lot_step) * lot_step;
+    
+    // Ensure lot size is within allowed range
     lot_size = MathMax(lot_size, minVolume);
     lot_size = MathMin(lot_size, maxVolume);
+    
+    // Normalize lot size to avoid floating point issues
+    int digits = (int)SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    lot_size = NormalizeDouble(lot_size, digits);
+
+    // Log calculation details
+    string log_message = StringFormat(
+        "Lot Size Calculation:\n" +
+        "Account Balance: %.2f\n" +
+        "Risk Percent: %.2f%%\n" +
+        "Risk Amount: %.2f\n" +
+        "Stop Loss Points: %.2f\n" +
+        "Tick Value: %.5f\n" +
+        "Tick Size: %.5f\n" +
+        "Calculated Lot Size: %.2f\n" +
+        "Final Lot Size (after limits): %.2f",
+        accountBalance,
+        riskPercent,
+        risk_amount,
+        stop_loss_points,
+        tick_value,
+        tick_size,
+        lot_size,
+        lot_size
+    );
+    Print(log_message);
 
     return lot_size;
 }
@@ -230,12 +306,19 @@ void CalculateDynamicSLTP(double &stop_loss, double &take_profit, double atr_mul
     LogDynamicSLTP(stop_loss, take_profit, _Symbol, timeframe);
 }
 
+//+------------------------------------------------------------------+
+//| Log Dynamic SL/TP values with reduced noise                      |
+//+------------------------------------------------------------------+
 void LogDynamicSLTP(double stopLoss, double takeProfit, string symbol, ENUM_TIMEFRAMES timeframe)
 {
     static double lastSL = 0;
     static double lastTP = 0;
     static datetime lastLogTime = 0;
     datetime currentTime = TimeCurrent();
+    
+    // Prevent division by zero
+    if (lastSL == 0) lastSL = stopLoss;
+    if (lastTP == 0) lastTP = takeProfit;
     
     // Only log if SL/TP changed by more than 1% or after 5 minutes
     if (MathAbs(stopLoss - lastSL)/lastSL > 0.01 || 
@@ -245,6 +328,24 @@ void LogDynamicSLTP(double stopLoss, double takeProfit, string symbol, ENUM_TIME
         Print(symbol, ",", EnumToString(timeframe), " Dynamic SL: ", stopLoss, " | Dynamic TP: ", takeProfit);
         lastSL = stopLoss;
         lastTP = takeProfit;
+        lastLogTime = currentTime;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Log DI Difference values with reduced noise                      |
+//+------------------------------------------------------------------+
+void LogDIDifference(double diDifference, double threshold, string symbol, ENUM_TIMEFRAMES timeframe)
+{
+    static double lastDIDifference = 0;
+    static datetime lastLogTime = 0;
+    datetime currentTime = TimeCurrent();
+    
+    // Only log if the difference has changed by more than 0.5 or after 5 minutes
+    if (MathAbs(diDifference - lastDIDifference) > 0.5 || currentTime - lastLogTime >= 300)
+    {
+        Print(symbol, ",", EnumToString(timeframe), " DI Difference: ", diDifference, " (Threshold: ", threshold, ")");
+        lastDIDifference = diDifference;
         lastLogTime = currentTime;
     }
 }
@@ -431,9 +532,9 @@ bool HasActiveTradeOrPendingOrder(int type)
 double GetBestLimitOrderPrice(ENUM_ORDER_TYPE orderType, double &tpPrice, double &slPrice, double liquidityThreshold, double takeProfitPips, double stopLossPips)
 {
     MqlBookInfo book_info[];
-    int book_count = MarketBookGet(_Symbol, book_info);
     
-    if (book_count > 0)
+    // Get market depth data
+    if (!MarketBookGet(_Symbol, book_info))
     {
         Print("Failed to get market depth data - Error: ", GetLastError());
         return 0.0;
@@ -449,7 +550,7 @@ double GetBestLimitOrderPrice(ENUM_ORDER_TYPE orderType, double &tpPrice, double
     double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
     double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double spread = currentAsk - currentBid;
-    double atr = CalculateATR(14, PERIOD_CURRENT); // Use ATR for dynamic pricing
+    double atr = CalculateATR(14, PERIOD_CURRENT);
     
     // Initialize variables for liquidity analysis
     double bestPrice = 0.0;
@@ -767,9 +868,10 @@ void LogMarketAnalysis(const MarketAnalysisData& data,
 //+------------------------------------------------------------------+
 //| Log Trade Rejection Reasons with Detailed Explanation            |
 //+------------------------------------------------------------------+
-void LogTradeRejection(const string reason, double currentPrice, double adx, double rsi, double emaShort, double emaMedium, double emaLong, 
-                       double adxThreshold, double rsiUpperThreshold, double rsiLowerThreshold,
-                       bool useDOMAnalysis)
+void LogTradeRejection(const string reason, double currentPrice, double adx, double rsi, 
+                      double emaShort, double emaMedium, double emaLong, 
+                      double adxThreshold, double rsiUpperThreshold, double rsiLowerThreshold,
+                      bool useDOMAnalysis)
 {
     string log_message = StringFormat(
         "\n=== Trade Rejection Analysis [%s] ===\n"
@@ -792,86 +894,105 @@ void LogTradeRejection(const string reason, double currentPrice, double adx, dou
         emaMedium,
         emaLong
     );
+
+    // Add Trend Pattern Analysis
+    log_message += "\nTrend Pattern Analysis:\n";
     
-    // Add DOM analysis if enabled
+    // 1. EMA Analysis
+    log_message += "EMA Analysis:\n";
+    double emaGap = MathAbs(emaShort - emaMedium) / _Point;
+    log_message += StringFormat("- EMA Gap: %.1f points\n", emaGap);
+    
+    if (emaShort > emaMedium && emaMedium > emaLong)
+    {
+        log_message += "- EMAs are in bullish alignment (Short > Medium > Long)\n";
+        log_message += StringFormat("- Trend Strength: %.1f%%\n", (emaShort - emaLong) / emaLong * 100);
+    }
+    else if (emaShort < emaMedium && emaMedium < emaLong)
+    {
+        log_message += "- EMAs are in bearish alignment (Short < Medium < Long)\n";
+        log_message += StringFormat("- Trend Strength: %.1f%%\n", (emaLong - emaShort) / emaLong * 100);
+    }
+    else
+    {
+        log_message += "- EMAs show no clear trend alignment\n";
+    }
+
+    // 2. Golden/Death Cross Analysis
+    log_message += "\nCross Analysis:\n";
+    if (MathAbs(emaMedium - emaLong) < 0.0001)
+    {
+        log_message += "- Potential Golden/Death Cross forming\n";
+        log_message += StringFormat("- Cross Distance: %.5f\n", MathAbs(emaMedium - emaLong));
+    }
+
+    // 3. Momentum Analysis
+    log_message += "\nMomentum Analysis:\n";
+    log_message += StringFormat("- ADX: %.2f (Threshold: %.2f)\n", adx, adxThreshold);
+    log_message += StringFormat("- RSI: %.2f (Upper: %.2f, Lower: %.2f)\n", rsi, rsiUpperThreshold, rsiLowerThreshold);
+
+    // 4. Volume Analysis (if DOM is enabled)
     if (useDOMAnalysis)
     {
         MqlBookInfo book_info[];
         if (MarketBookGet(_Symbol, book_info))
         {
             double buyVolume = 0.0, sellVolume = 0.0;
+            double buyValue = 0.0, sellValue = 0.0;
+            
             for (int i = 0; i < ArraySize(book_info); i++)
             {
                 if (book_info[i].type == BOOK_TYPE_BUY)
+                {
                     buyVolume += book_info[i].volume;
+                    buyValue += book_info[i].volume * book_info[i].price;
+                }
                 else if (book_info[i].type == BOOK_TYPE_SELL)
+                {
                     sellVolume += book_info[i].volume;
+                    sellValue += book_info[i].volume * book_info[i].price;
+                }
             }
             
-            log_message += StringFormat(
-                "Order Flow Analysis:\n"
-                "Buy Volume: %.2f\n"
-                "Sell Volume: %.2f\n"
-                "Volume Ratio: %.2f\n\n",
-                buyVolume,
-                sellVolume,
-                sellVolume > 0 ? buyVolume/sellVolume : 0
-            );
+            log_message += "\nOrder Flow Analysis:\n";
+            log_message += StringFormat("- Buy Volume: %.2f (Value: %.2f)\n", buyVolume, buyValue);
+            log_message += StringFormat("- Sell Volume: %.2f (Value: %.2f)\n", sellVolume, sellValue);
+            log_message += StringFormat("- Volume Imbalance: %.2f%%\n", 
+                          ((buyVolume - sellVolume) / (buyVolume + sellVolume)) * 100);
+            log_message += StringFormat("- Value Imbalance: %.2f%%\n",
+                          ((buyValue - sellValue) / (buyValue + sellValue)) * 100);
         }
     }
+
+    // 5. Pattern Recognition
+    log_message += "\nPattern Recognition:\n";
+    CandleData currentCandle = GetCandleData(0, PERIOD_CURRENT);
+    CandleData prevCandle = GetCandleData(1, PERIOD_CURRENT);
     
-    // Add trade criteria analysis
-    log_message += "Trade Criteria:\n";
+    // Body/Wick Analysis
+    double bodyToWickRatio = currentCandle.body / (currentCandle.upperWick + currentCandle.lowerWick + 0.000001);
+    log_message += StringFormat("- Body/Wick Ratio: %.2f\n", bodyToWickRatio);
     
-    // Check ADX criterion
-    if (adx < adxThreshold)
-    {
-        log_message += StringFormat(
-            "- ADX (%.2f) is below the required threshold of %.2f, indicating a weak trend.\n",
-            adx, adxThreshold
-        );
-    }
-    
-    // Check RSI criterion
-    if (rsi > rsiLowerThreshold && rsi < rsiUpperThreshold)
-    {
-        log_message += StringFormat(
-            "- RSI (%.2f) is between the lower threshold of %.2f and upper threshold of %.2f, indicating a ranging market.\n",
-            rsi, rsiLowerThreshold, rsiUpperThreshold
-        );
-    }
-    else
-    {
-        log_message += StringFormat(
-            "- RSI (%.2f) is outside the range of %.2f to %.2f, suggesting a potential trend.\n",
-            rsi, rsiLowerThreshold, rsiUpperThreshold
-        );
-    }
-    
-    // Check EMA alignment
-    if (emaShort > emaMedium && emaMedium > emaLong)
-    {
-        log_message += "- EMAs are aligned in a bullish order (short > medium > long), supporting an uptrend.\n";
-    }
-    else if (emaShort < emaMedium && emaMedium < emaLong)
-    {
-        log_message += "- EMAs are aligned in a bearish order (short < medium < long), supporting a downtrend.\n";
-    }
-    else
-    {
-        log_message += "- EMAs are not aligned in a clear bullish or bearish order, indicating a lack of trend confirmation.\n";
-    }
-    
+    // Candlestick Patterns
+    if (currentCandle.body > prevCandle.body * 1.5)
+        log_message += "- Strong momentum candle detected\n";
+    if (currentCandle.upperWick > currentCandle.body * 2)
+        log_message += "- Long upper wick indicates selling pressure\n";
+    if (currentCandle.lowerWick > currentCandle.body * 2)
+        log_message += "- Long lower wick indicates buying pressure\n";
+
+    // Add conclusion
     log_message += "\nConclusion:\n";
     log_message += reason + "\n";
     log_message += "The trade setup does not meet all the required criteria for entry at this time.\n";
     log_message += "===================\n";
 
+    // Print and save to file
     Print(log_message);
-
+    
     string filename = "TradeRejection_" + _Symbol + ".log";
     int filehandle = FileOpen(filename, FILE_WRITE|FILE_READ|FILE_TXT|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_ANSI);
-
+    
     if(filehandle != INVALID_HANDLE)
     {
         FileSeek(filehandle, 0, SEEK_END);
@@ -881,5 +1002,21 @@ void LogTradeRejection(const string reason, double currentPrice, double adx, dou
     else
     {
         Print("Failed to open trade rejection log file: ", GetLastError());
+    }
+}
+
+void LogPatternAnalysis(int bullishSignals, int bearishSignals, string symbol, ENUM_TIMEFRAMES timeframe, int threshold = 2)
+{
+    // Only log if the number of signals exceeds the threshold
+    if (bullishSignals > threshold || bearishSignals > threshold)
+    {
+        string log_message = StringFormat(
+            "%s (%s) Pattern Analysis - Bullish Signals: %d Bearish Signals: %d",
+            symbol,
+            EnumToString(timeframe),
+            bullishSignals,
+            bearishSignals
+        );
+        Print(log_message);
     }
 }
