@@ -135,59 +135,100 @@ int GetVolumeStepDigits(double volume_step)
 //+------------------------------------------------------------------+
 //| Calculate Lot Size Based on Risk Percentage and Stop Loss        |
 //+------------------------------------------------------------------+
-double CalculateLotSize(double risk_percent, double stop_loss_pips, double accountEquity, 
-                       double tickValue, double minVolume, double maxVolume, double volumeStep)
+//+------------------------------------------------------------------+
+//| Improved Lot Size Calculation with Flexible Pip Calculation      |
+//+------------------------------------------------------------------
+double CalculateLotSize(
+    double risk_percent,    // e.g., 1.0 for 1%
+    double stop_loss_points,// Raw stop loss distance in points
+    double accountEquity,   // Current account equity
+    double tickValue,       // Tick value from SymbolInfoDouble(...)
+    double minVolume,       // Minimum allowed trade volume
+    double maxVolume,       // Maximum allowed trade volume
+    double volumeStep       // Volume step size
+)
 {
-    // Convert risk percentage to decimal
+    // Convert points to pips (assuming 1 pip = 1 _Point)
+    double stop_loss_pips = stop_loss_points / _Point;
+
+    // Convert risk percentage to a decimal and get monetary risk
     double risk_decimal = risk_percent / 100.0;
-    
-    // Calculate the risk amount in account currency
     double risk_amount = accountEquity * risk_decimal;
-    
-    // Calculate pip value (how much one pip is worth per lot)
-    double pip_value = tickValue * 10; // Multiply by 10 because tickValue is per 0.1 pip
-    
-    // Calculate the lot size
+
+    // For this symbol, assume 1 pip = 1 point value or adjust if needed
+    // If needed, add logic here to define pip_value differently
+    double pip_value = tickValue;
+
+    // Compute the raw lot size
     double lot_size = risk_amount / (stop_loss_pips * pip_value);
-    
-    // Round to nearest volume step
+
+    // Round the lot size to the nearest volume step
     lot_size = MathFloor(lot_size / volumeStep) * volumeStep;
-    
-    // Ensure lot size is within allowed range
+
+    // Ensure the lot size is within allowed limits
     lot_size = MathMax(minVolume, MathMin(lot_size, maxVolume));
-    
-    // Normalize to avoid floating point issues
-    int volume_step_digits = GetVolumeStepDigits(volumeStep);
+
+    // Determine the number of digits for volume step normalization
+    int volume_step_digits = 0;
+    double temp_step = volumeStep;
+    while (MathFloor(temp_step * 10) != temp_step * 10 && volume_step_digits < 8)
+    {
+        temp_step *= 10;
+        volume_step_digits++;
+    }
+
+    // Normalize the lot size
     lot_size = NormalizeDouble(lot_size, volume_step_digits);
-    
-    Print("Risk Amount: ", risk_amount, 
-          " Stop Loss Pips: ", stop_loss_pips,
-          " Pip Value: ", pip_value,
-          " Calculated Lot Size: ", lot_size);
-          
+
+    // Calculate the actual monetary risk based on the final lot size chosen
+    double actual_risk = lot_size * stop_loss_pips * pip_value;
+
+    Print(
+        "=== CalculateLotSize Debug ===\n",
+        "Risk (%): ", risk_percent, "\n",
+        "Account Equity: ", accountEquity, "\n",
+        "Stop Loss Points: ", stop_loss_points, "\n",
+        "Stop Loss Pips: ", stop_loss_pips, "\n",
+        "Tick Value: ", tickValue, "\n",
+        "Pip Value: ", pip_value, "\n",
+        "Initial Lot Size: ", lot_size, "\n",
+        "Actual Monetary Risk: $", actual_risk, " vs. Intended: $", risk_amount, "\n",
+        "============================="
+    );
+
     return lot_size;
 }
+
+
 
 //+------------------------------------------------------------------+
 //| Calculate Dynamic Lot Size with improved safety and logging       |
 //+------------------------------------------------------------------+
-double CalculateDynamicLotSize(double stop_loss_points, double accountBalance, 
-                              double riskPercent, double minVolume, double maxVolume)
+//+------------------------------------------------------------------+
+//| Improved Dynamic Lot Size Calculation with Flexible Pip Logic    |
+//+------------------------------------------------------------------
+double CalculateDynamicLotSize(
+    double stop_loss_points, // Raw stop loss distance in points
+    double accountBalance,   // Current account balance
+    double riskPercent,      // Percent of account to risk (e.g., 1.0)
+    double minVolume,        // Broker's minimum allowed volume
+    double maxVolume         // Broker's maximum allowed volume
+)
 {
     // Input validation
-    if(stop_loss_points <= 0)
+    if (stop_loss_points <= 0)
     {
         Print("Error: Invalid stop loss points (", stop_loss_points, ")");
         return minVolume;
     }
-    
-    if(accountBalance <= 0)
+
+    if (accountBalance <= 0)
     {
         Print("Error: Invalid account balance (", accountBalance, ")");
         return minVolume;
     }
-    
-    if(riskPercent <= 0 || riskPercent > 100)
+
+    if (riskPercent <= 0 || riskPercent > 100)
     {
         Print("Error: Invalid risk percent (", riskPercent, ")");
         return minVolume;
@@ -195,67 +236,79 @@ double CalculateDynamicLotSize(double stop_loss_points, double accountBalance,
 
     // Get symbol properties
     double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-    double tick_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-    double lot_step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-    
+    double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+    double lot_step   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+
     // Validate symbol properties
-    if(tick_value <= 0 || tick_size <= 0 || lot_step <= 0)
+    if (tick_value <= 0 || tick_size <= 0 || lot_step <= 0)
     {
         string error = StringFormat("Invalid symbol properties - Tick Value: %.5f, Tick Size: %.5f, Lot Step: %.5f",
-                                  tick_value, tick_size, lot_step);
+                                    tick_value, tick_size, lot_step);
         Print(error);
         return minVolume;
     }
 
-    // Calculate risk amount
+    // Convert raw stop loss points to pips (assuming 1 pip = 1 point)
+    double stop_loss_pips = stop_loss_points / _Point;
+
+    // Calculate intended monetary risk
     double risk_amount = accountBalance * (riskPercent / 100.0);
-    
-    // Calculate lot size
+
+    // Assume pip_value = tick_value. 
+    // Adjust here if instrument defines pip differently than just one point.
+    double pip_value = tick_value; 
+
+    // Calculate raw lot size
+    // lot_size = risk_amount / (stop_loss_pips * pip_value)
     double lot_size = 0;
-    
-    // Prevent division by zero
-    if(tick_value > 0 && tick_size > 0)
+    if (pip_value > 0)
     {
-        lot_size = (risk_amount / stop_loss_points) / (tick_value / tick_size);
+        lot_size = risk_amount / (stop_loss_pips * pip_value);
     }
     else
     {
-        Print("Error: Invalid tick value or size");
+        Print("Error: Invalid pip value calculation");
         return minVolume;
     }
 
     // Round to nearest lot step
     lot_size = MathRound(lot_size / lot_step) * lot_step;
-    
+
     // Ensure lot size is within allowed range
     lot_size = MathMax(lot_size, minVolume);
     lot_size = MathMin(lot_size, maxVolume);
-    
-    // Normalize lot size to avoid floating point issues
-    int digits = (int)SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-    lot_size = NormalizeDouble(lot_size, digits);
 
-    // Log calculation details
-    string log_message = StringFormat(
-        "Lot Size Calculation:\n" +
-        "Account Balance: %.2f\n" +
-        "Risk Percent: %.2f%%\n" +
-        "Risk Amount: %.2f\n" +
-        "Stop Loss Points: %.2f\n" +
-        "Tick Value: %.5f\n" +
-        "Tick Size: %.5f\n" +
-        "Calculated Lot Size: %.2f\n" +
-        "Final Lot Size (after limits): %.2f",
-        accountBalance,
-        riskPercent,
-        risk_amount,
-        stop_loss_points,
-        tick_value,
-        tick_size,
-        lot_size,
-        lot_size
+    // Determine how many decimal places to use for normalization
+    int volume_step_digits = 0;
+    double temp_step = lot_step;
+    while (MathFloor(temp_step * 10) != temp_step * 10 && volume_step_digits < 8)
+    {
+        temp_step *= 10;
+        volume_step_digits++;
+    }
+
+    // Normalize lot size
+    lot_size = NormalizeDouble(lot_size, volume_step_digits);
+
+    // Calculate the actual monetary risk based on the final lot size
+    double actual_risk = lot_size * stop_loss_pips * pip_value;
+
+    Print(
+        "=== CalculateDynamicLotSize Debug ===\n",
+        "Symbol: ", _Symbol, "\n",
+        "Account Balance: ", accountBalance, "\n",
+        "Risk Percent: ", riskPercent, "%\n",
+        "Intended Monetary Risk: ", risk_amount, "\n",
+        "Stop Loss Points: ", stop_loss_points, "\n",
+        "Stop Loss Pips: ", stop_loss_pips, "\n",
+        "Tick Value: ", tick_value, "\n",
+        "Tick Size: ", tick_size, "\n",
+        "Lot Step: ", lot_step, "\n",
+        "Pip Value: ", pip_value, "\n",
+        "Calculated Lot Size: ", lot_size, "\n",
+        "Actual Monetary Risk: ", actual_risk, "\n",
+        "=============================="
     );
-    Print(log_message);
 
     return lot_size;
 }
