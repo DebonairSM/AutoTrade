@@ -11,7 +11,7 @@ input int EMA_PERIODS_SHORT = 20;                    // Short EMA period
 input int EMA_PERIODS_MEDIUM = 50;                   // Medium EMA period
 input int EMA_PERIODS_LONG = 200;                    // Long EMA period
 input int PATTERN_LOOKBACK = 5;                      // Pattern lookback periods
-input double GOLDEN_CROSS_THRESHOLD = 1.0;           // Adjusted Golden cross threshold from 0.001 to a larger value
+input double GOLDEN_CROSS_THRESHOLD = 1.0;           // Golden cross threshold (increased)
 input bool SaveToFile = true;                        // Save results to file
 
 // Enhanced Analysis Parameters
@@ -28,6 +28,9 @@ input double RSI_Neutral = 50.0;                     // RSI neutral level
 // Volume Analysis Parameters
 input double VOLUME_THRESHOLD = 1.5;                 // Volume threshold multiplier
 input bool USE_VOLUME_CONFIRMATION = true;           // Use volume confirmation
+
+// Introduce an SMA period for stricter conditions (use same as medium EMA for simplicity)
+input int SMA_PERIOD = 50;
 
 enum CrossType {
     CROSS_NONE,
@@ -52,6 +55,7 @@ struct PatternResult {
     double avgVolume;
 };
 
+// Market analysis data
 struct MarketAnalysisData {
     double currentPrice;
     double ema_short;
@@ -71,6 +75,7 @@ struct MarketAnalysisData {
     double avgVolume;
 };
 
+// Parameters structure
 struct MarketAnalysisParameters {
     int ema_period_short;
     int ema_period_medium;
@@ -82,7 +87,6 @@ struct MarketAnalysisParameters {
     double rsi_lower_threshold;
 };
 
-// Global variables for logging
 datetime lastLogTime = 0;
 int logHandle = INVALID_HANDLE;
 
@@ -104,30 +108,14 @@ ScanFiles CreateUniqueFileNames()
     return files;
 }
 
-// Helper function to safely add scores with a cap
-void AddScore(double &target, double value, string reason, string &reasons[])
-{
-    // Cap individual contributions at a certain amount, e.g., 5 points
-    double cappedValue = MathMin(value, 5.0);
-    // Add reason if value added
-    if(cappedValue != 0)
-    {
-        ArrayResize(reasons, ArraySize(reasons)+1);
-        reasons[ArraySize(reasons)-1] = reason;
-    }
-    target += cappedValue;
-}
-
 //+------------------------------------------------------------------+
 //| Script program start function                                     |
 //+------------------------------------------------------------------+
 void OnStart()
 {
-    // Create files immediately and verify they're ready
     ScanFiles files = CreateUniqueFileNames();
     Print("Attempting to create log files...");
     
-    // Create and verify TXT file
     logHandle = FileOpen(files.txtFile, FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_SHARE_READ);
     if(logHandle == INVALID_HANDLE)
     {
@@ -136,7 +124,6 @@ void OnStart()
     }
     Print("Successfully created log file: ", files.txtFile);
     
-    // Create and verify CSV file
     int csvHandle = FileOpen(files.csvFile, FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_COMMON|FILE_SHARE_READ);
     if(csvHandle == INVALID_HANDLE)
     {
@@ -146,7 +133,6 @@ void OnStart()
     }
     Print("Successfully created CSV file: ", files.csvFile);
     
-    // Write CSV headers immediately
     FileWrite(csvHandle, 
         "Scan Time",
         "Symbol",
@@ -167,19 +153,16 @@ void OnStart()
     );
     FileFlush(csvHandle);
 
-    // Log scan start
     string scanStartTime = TimeToString(TimeCurrent());
     LogMessage("=== Pattern Scan Started at " + scanStartTime + " ===", true);
     LogMessage("Timeframe: " + EnumToString(ScanTimeframe));
     FileFlush(logHandle);
 
-    // Get symbols and log count
     string symbols[];
     int symbolCount = GetTradeableSymbols(symbols);
     LogMessage("Found " + IntegerToString(symbolCount) + " tradeable symbols");
     FileFlush(logHandle);
     
-    // Log configuration
     LogMessage("=== Pattern Scan Configuration ===", true);
     LogMessage("Timeframe: " + EnumToString(ScanTimeframe));
     LogMessage("EMA Periods: " + IntegerToString(EMA_PERIODS_SHORT) + "/" + 
@@ -211,7 +194,6 @@ void OnStart()
             string message = FormatPatternResult(symbols[i], result);
             LogMessage("Pattern Found: " + symbols[i], true);
             LogMessage(message);
-            // Log detailed reasons if present
             if(result.details != "")
             {
                 LogMessage("Detailed Analysis:");
@@ -219,7 +201,6 @@ void OnStart()
             }
             FileFlush(logHandle);
             
-            // Write to CSV
             if(csvHandle != INVALID_HANDLE)
             {
                 string currentTime = TimeToString(TimeCurrent());
@@ -295,11 +276,11 @@ PatternResult AnalyzePattern(string symbol, ENUM_TIMEFRAMES timeframe)
     int rsiMacdSignal = AnalyzeRSIMACD(analysisData);
     bool volumeConfirmed = USE_VOLUME_CONFIRMATION ? CheckVolumeConfirmation(analysisData) : true;
 
+    // Compute SMA for final stringent filtering
+    double sma = CalculateSMA(symbol, timeframe, SMA_PERIOD);
+
     if(patternSignal != 0 && rsiMacdSignal != 0 && volumeConfirmed)
     {
-        // Combine patternSignal and rsiMacdSignal for final strength
-        // Expecting both signals to be small integers, we simply average them
-        // If needed, adjust scaling factors here.
         int combinedScore = (patternSignal + rsiMacdSignal) / 2;
 
         if(patternSignal > 0 && rsiMacdSignal > 0)
@@ -322,6 +303,48 @@ PatternResult AnalyzePattern(string symbol, ENUM_TIMEFRAMES timeframe)
         result.details = GenerateAnalysisDetails(analysisData, params);
         if(reasonSummary != "")
             result.details += "\n" + reasonSummary;
+
+        // Apply the stricter conditions:
+        double diDifference = 0;
+        if(analysisData.plusDI > analysisData.minusDI)
+            diDifference = analysisData.plusDI - analysisData.minusDI;
+        else
+            diDifference = analysisData.minusDI - analysisData.plusDI;
+
+        if(result.pattern_type == "Bullish")
+        {
+            // Stricter conditions for Bullish
+            // ema_short > sma, rsi < RSI_UPPER_THRESHOLD, adx > ADX_THRESHOLD
+            // plusDI > minusDI, (plusDI - minusDI) > DI_DIFFERENCE_THRESHOLD
+            if(!(analysisData.ema_short > sma &&
+                 analysisData.rsi < RSI_UPPER_THRESHOLD &&
+                 analysisData.adx > ADX_THRESHOLD &&
+                 analysisData.plusDI > analysisData.minusDI &&
+                 (analysisData.plusDI - analysisData.minusDI) > DI_DIFFERENCE_THRESHOLD))
+            {
+                // Conditions not met, discard
+                result.pattern_type = "None";
+                result.strength = 0;
+                result.confidence = 0;
+            }
+        }
+        else if(result.pattern_type == "Bearish")
+        {
+            // Stricter conditions for Bearish (mirrored logic):
+            // ema_short < sma, rsi > RSI_LOWER_THRESHOLD, adx > ADX_THRESHOLD
+            // minusDI > plusDI, (minusDI - plusDI) > DI_DIFFERENCE_THRESHOLD
+            if(!(analysisData.ema_short < sma &&
+                 analysisData.rsi > RSI_LOWER_THRESHOLD &&
+                 analysisData.adx > ADX_THRESHOLD &&
+                 analysisData.minusDI > analysisData.plusDI &&
+                 (analysisData.minusDI - analysisData.plusDI) > DI_DIFFERENCE_THRESHOLD))
+            {
+                // Conditions not met, discard
+                result.pattern_type = "None";
+                result.strength = 0;
+                result.confidence = 0;
+            }
+        }
     }
 
     result.currentPrice = analysisData.currentPrice;
@@ -362,12 +385,7 @@ bool PopulateMarketData(string symbol, ENUM_TIMEFRAMES timeframe, MarketAnalysis
 //+------------------------------------------------------------------+
 double CalculateConfidence(int strength, bool volumeConfirmed)
 {
-    // Adjusted logic:
-    // Assume strength goes up to around 10 max after adjustments.
-    // Base confidence: strength * 7 (so max 70%)
     double confidence = strength * 7.0;
-    
-    // Volume confirmation adds up to 30 points, max 100%
     if(volumeConfirmed)
         confidence += 30.0;
     
@@ -375,6 +393,20 @@ double CalculateConfidence(int strength, bool volumeConfirmed)
     confidence = MathMax(confidence, 0.0);
     
     return NormalizeDouble(confidence, 2);
+}
+
+//+------------------------------------------------------------------+
+//| Helper function for adding scores                                  |
+//+------------------------------------------------------------------+
+void AddScore(double &target, double value, string reason, string &reasons[])
+{
+    double cappedValue = MathMin(value, 5.0);
+    if(cappedValue != 0)
+    {
+        ArrayResize(reasons, ArraySize(reasons)+1);
+        reasons[ArraySize(reasons)-1] = reason;
+    }
+    target += cappedValue;
 }
 
 //+------------------------------------------------------------------+
@@ -390,27 +422,22 @@ int IdentifyTrendPattern(MarketAnalysisData &data, MarketAnalysisParameters &par
     score.bullish = 0;
     score.bearish = 0;
 
-    // 1. EMA Alignment Analysis
+    // EMA Alignment
     if(data.ema_short > data.ema_medium && data.ema_medium > data.ema_long)
         AddScore(score.bullish, 2.5, "Bullish EMA alignment", score.reasons);
     else if(data.ema_short < data.ema_medium && data.ema_medium < data.ema_long)
         AddScore(score.bearish, 2.5, "Bearish EMA alignment", score.reasons);
 
-    // 2. Cross Detection
     double cross_strength = MathAbs(data.ema_short - data.ema_long);
-    // If EMAs differ by more than GOLDEN_CROSS_THRESHOLD, reward up to a limit
     if(cross_strength > GOLDEN_CROSS_THRESHOLD) {
         double factor = cross_strength / GOLDEN_CROSS_THRESHOLD;
-        // Cap factor to avoid extreme values, for example factor = MathMin(factor, 3.0)
-        factor = MathMin(factor, 3.0); 
+        factor = MathMin(factor, 3.0);
         if(data.ema_short > data.ema_long)
             AddScore(score.bullish, 3.0 * factor, "Golden Cross", score.reasons);
         else
             AddScore(score.bearish, 3.0 * factor, "Death Cross", score.reasons);
     }
 
-    // 3. Volume Analysis
-    // Volume analysis can give a smaller boost, e.g., 1.5 max
     if(data.volume > data.avgVolume * VOLUME_THRESHOLD) {
         if(score.bullish > score.bearish)
             AddScore(score.bullish, 1.5, "High Volume Bullish Confirmation", score.reasons);
@@ -418,7 +445,6 @@ int IdentifyTrendPattern(MarketAnalysisData &data, MarketAnalysisParameters &par
             AddScore(score.bearish, 1.5, "High Volume Bearish Confirmation", score.reasons);
     }
 
-    // 4. Additional Technical Indicators (ADX)
     if(data.adx > ADX_THRESHOLD) {
         if(data.plusDI > data.minusDI)
             AddScore(score.bullish, 1.5, "Strong ADX Bullish Momentum", score.reasons);
@@ -426,7 +452,6 @@ int IdentifyTrendPattern(MarketAnalysisData &data, MarketAnalysisParameters &par
             AddScore(score.bearish, 1.5, "Strong ADX Bearish Momentum", score.reasons);
     }
 
-    // Build reasonSummary
     reasonSummary = "Pattern Reasons:\n";
     for(int i=0; i<ArraySize(score.reasons); i++)
     {
@@ -447,7 +472,7 @@ int IdentifyTrendPattern(MarketAnalysisData &data, MarketAnalysisParameters &par
 }
 
 //+------------------------------------------------------------------+
-//| Analyze RSI and MACD Combination                                  |
+//| Analyze RSI and MACD                                              |
 //+------------------------------------------------------------------+
 int AnalyzeRSIMACD(MarketAnalysisData &data)
 {
@@ -460,11 +485,11 @@ int AnalyzeRSIMACD(MarketAnalysisData &data)
     bool macdBearish = data.macdMain < data.macdSignal && data.macdHistogram < 0;
     
     if((rsiOversold || rsiTrendUp) && macdBullish)
-        return 1;  // Bullish signal
+        return 1;
     else if((rsiOverbought || rsiTrendDown) && macdBearish)
-        return -1; // Bearish signal
+        return -1;
     
-    return 0;  // No clear signal
+    return 0;
 }
 
 //+------------------------------------------------------------------+
@@ -483,10 +508,7 @@ bool CheckVolumeConfirmation(MarketAnalysisData &data)
 //+------------------------------------------------------------------+
 string GenerateAnalysisDetails(MarketAnalysisData &data, MarketAnalysisParameters &params)
 {
-    string details = "";
-    
-    // Trend Analysis
-    details += "Trend Analysis:\n";
+    string details = "Trend Analysis:\n";
     if(data.ema_short > data.ema_medium && data.ema_medium > data.ema_long)
         details += "Strong Bullish Trend - All EMAs aligned upward\n";
     else if(data.ema_short < data.ema_medium && data.ema_medium < data.ema_long)
@@ -494,7 +516,6 @@ string GenerateAnalysisDetails(MarketAnalysisData &data, MarketAnalysisParameter
     else
         details += "Mixed Trend - No clear EMA alignment\n";
     
-    // Momentum Analysis
     details += "\nMomentum Analysis:\n";
     if(data.adx > ADX_THRESHOLD) {
         details += "Strong Trend (ADX > " + DoubleToString(ADX_THRESHOLD, 1) + "): ";
@@ -506,7 +527,6 @@ string GenerateAnalysisDetails(MarketAnalysisData &data, MarketAnalysisParameter
         details += "Weak trend - Consider ranging market conditions\n";
     }
     
-    // RSI Conditions
     details += "\nOverbought/Oversold:\n";
     if(data.rsi > RSI_UPPER_THRESHOLD)
         details += "Overbought conditions - Potential reversal point\n";
@@ -515,7 +535,6 @@ string GenerateAnalysisDetails(MarketAnalysisData &data, MarketAnalysisParameter
     else
         details += "Normal RSI range - No extreme conditions\n";
     
-    // Volume Analysis
     details += "\nVolume Analysis:\n";
     double volRatio = data.volume/data.avgVolume;
     if(volRatio > VOLUME_THRESHOLD)
@@ -562,6 +581,31 @@ double CalculateEMA(string symbol, ENUM_TIMEFRAMES timeframe, int period, int sh
     
     IndicatorRelease(handle);
     return ema[0];
+}
+
+//+------------------------------------------------------------------+
+//| Calculate SMA                                                     |
+//+------------------------------------------------------------------+
+double CalculateSMA(string symbol, ENUM_TIMEFRAMES timeframe, int period, int shift = 0)
+{
+    double sma[];
+    ArraySetAsSeries(sma, true);
+    
+    int handle = iMA(symbol, timeframe, period, 0, MODE_SMA, PRICE_CLOSE);
+    if(handle == INVALID_HANDLE)
+    {
+        Print("Error creating SMA indicator handle");
+        return 0;
+    }
+    
+    if(CopyBuffer(handle, 0, shift, 1, sma) != 1)
+    {
+        Print("Error copying SMA data");
+        return 0;
+    }
+    
+    IndicatorRelease(handle);
+    return sma[0];
 }
 
 //+------------------------------------------------------------------+
@@ -682,7 +726,7 @@ double CalculateATR(string symbol, ENUM_TIMEFRAMES timeframe, int period, int sh
 }
 
 //+------------------------------------------------------------------+
-//| Get Tradeable Symbols                                            |
+//| Get Tradeable Symbols                                             |
 //+------------------------------------------------------------------+
 int GetTradeableSymbols(string &symbols[])
 {
