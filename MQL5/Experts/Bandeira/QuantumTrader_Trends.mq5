@@ -83,6 +83,20 @@ input group "Order Management"
 input double TakeProfitPips = 50.0;         // Take Profit in pips
 input double StopLossPips = 30.0;           // Stop Loss in pips
 
+// Order Entry Settings
+input group "Order Entry Settings"
+input bool StrictOrderChecks = true;         // Use strict order entry conditions
+input double SignalTolerancePercent = 20.0;  // Signal tolerance (lower = more trades)
+
+// Modify symbol settings inputs
+input group "Symbol Settings"
+input bool UseMultipleSymbols = true;        // Trade multiple symbols
+input int MaxSymbolsToTrade = 5;             // Maximum number of symbols to trade
+
+// Add global variables for symbol management
+string tradingSymbols[];                     // Array to store symbols for trading
+int symbolCount = 0;                         // Number of symbols being traded
+
 //+------------------------------------------------------------------+
 //| Global Variables and Objects                                     |
 //+------------------------------------------------------------------+
@@ -144,6 +158,45 @@ int OnInit()
     // Set the initial value of lastCalculationTime to ensure signals are calculated on the first tick
     lastCalculationTime = 0;
 
+    // Initialize symbol array
+    if(UseMultipleSymbols)
+    {
+        // Get all symbols from Market Watch
+        int totalSymbols = SymbolsTotal(true);  // true = only symbols in Market Watch
+        
+        for(int i = 0; i < totalSymbols && symbolCount < MaxSymbolsToTrade; i++)
+        {
+            string symbol = SymbolName(i, true);  // Get symbol name from Market Watch
+            
+            // Verify the symbol is valid and can be traded
+            if(SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_FULL)
+            {
+                ArrayResize(tradingSymbols, symbolCount + 1);
+                tradingSymbols[symbolCount++] = symbol;
+                Print("Added symbol for trading: ", symbol);
+            }
+            else
+            {
+                Print("Skipped symbol (not tradeable): ", symbol);
+            }
+        }
+        
+        if(symbolCount == 0)
+        {
+            Print("Error: No valid symbols found for trading in Market Watch");
+            return INIT_FAILED;
+        }
+        
+        Print("Total symbols added for trading: ", symbolCount);
+    }
+    else
+    {
+        // Single symbol mode - use current chart symbol
+        symbolCount = 1;
+        ArrayResize(tradingSymbols, 1);
+        tradingSymbols[0] = _Symbol;
+    }
+
     return INIT_SUCCEEDED;
 }
 
@@ -152,15 +205,18 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    // Execute trading logic on each tick
-    ExecuteTradingLogic();
-
-    // Check calendar events every hour
-    static datetime lastCheck = 0;
-    datetime currentTime = TimeCurrent();
-    if(currentTime - lastCheck >= PeriodSeconds(PERIOD_H1))
+    if(UseMultipleSymbols)
     {
-        lastCheck = currentTime;
+        // Process each symbol
+        for(int i = 0; i < symbolCount; i++)
+        {
+            ProcessSymbol(tradingSymbols[i]);
+        }
+    }
+    else
+    {
+        // Process only the current chart symbol
+        ProcessSymbol(_Symbol);
     }
 }
 
@@ -275,28 +331,64 @@ void ExecuteTradingLogic()
         double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) * 10;
         double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
         double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-        double volumeStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
         double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-        double lotSize = CalculateLotSize(
-            RiskPercent,              // risk percent (e.g., 2.0)
-            stopLoss / _Point,        // stop loss in pips
-            accountEquity,            // current account equity
-            tickValue,                // tick value
-            minVolume,                // minimum volume
-            maxVolume,                // maximum volume
-            volumeStep                // volume step
+        double lotSize = CalculateDynamicLotSize(
+            stopLoss / _Point,    // stop loss in pips
+            accountEquity,        // current account equity
+            RiskPercent,         // risk percent
+            minVolume,           // minimum volume
+            maxVolume            // maximum volume
         );
 
         // For BUY signals
-        if (trendSignal == 1 && patternSignal == 1 && rsiMacdSignal == 1 && orderFlowSignal == 1)
+        if (StrictOrderChecks)
         {
-            ProcessBuySignal(lotSize, stopLoss, takeProfit);
+            // Original strict conditions
+            if (trendSignal == 1 && patternSignal == 1 && rsiMacdSignal == 1 && orderFlowSignal == 1)
+            {
+                ProcessBuySignal(lotSize, stopLoss, takeProfit);
+            }
         }
-        // For SELL signals
-        else if (AllowShortTrades && trendSignal == -1 && patternSignal == -1 && 
-                 rsiMacdSignal == -1 && orderFlowSignal == -1)
+        else
         {
-            ProcessSellSignal(lotSize, stopLoss, takeProfit);
+            // More lenient conditions - only need majority of signals
+            int totalBuySignals = (trendSignal == 1 ? 1 : 0) + 
+                                   (patternSignal == 1 ? 1 : 0) + 
+                                   (rsiMacdSignal == 1 ? 1 : 0) + 
+                                   (orderFlowSignal == 1 ? 1 : 0);
+            
+            double requiredSignals = 4 * (1 - SignalTolerancePercent/100.0);  // Adjust threshold based on tolerance
+            if (totalBuySignals >= requiredSignals)
+            {
+                ProcessBuySignal(lotSize, stopLoss, takeProfit);
+            }
+        }
+
+        // For SELL signals
+        if (AllowShortTrades)
+        {
+            if (StrictOrderChecks)
+            {
+                // Original strict conditions
+                if (trendSignal == -1 && patternSignal == -1 && rsiMacdSignal == -1 && orderFlowSignal == -1)
+                {
+                    ProcessSellSignal(lotSize, stopLoss, takeProfit);
+                }
+            }
+            else
+            {
+                // More lenient conditions - only need majority of signals
+                int totalSellSignals = (trendSignal == -1 ? 1 : 0) + 
+                                      (patternSignal == -1 ? 1 : 0) + 
+                                      (rsiMacdSignal == -1 ? 1 : 0) + 
+                                      (orderFlowSignal == -1 ? 1 : 0);
+                
+                double requiredSignals = 4 * (1 - SignalTolerancePercent/100.0);  // Adjust threshold based on tolerance
+                if (totalSellSignals >= requiredSignals)
+                {
+                    ProcessSellSignal(lotSize, stopLoss, takeProfit);
+                }
+            }
         }
 
         // Update last values
@@ -1461,4 +1553,21 @@ void ValidateInputs()
         ExpertRemove();
         return;
     }
+}
+
+//+------------------------------------------------------------------+
+//| Process trading logic for a single symbol                        |
+//+------------------------------------------------------------------+
+void ProcessSymbol(string symbol)
+{
+    // Check if within trading hours
+    if(!IsWithinTradingHours(TradingStartTime, TradingEndTime))
+        return;
+
+    // Check drawdown
+    if(CheckDrawdown(MaxDrawdownPercent, AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY)))
+        return;
+
+    // Execute trading logic for this symbol
+    ExecuteTradingLogic();
 }
