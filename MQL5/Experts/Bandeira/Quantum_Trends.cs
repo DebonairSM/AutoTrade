@@ -135,56 +135,73 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   string symbol = _Symbol; // Get current symbol
+   
    if(!IsWithinTradingHours(TradingStartTime, TradingEndTime))
       return;
 
    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-   if (CheckDrawdown(MaxDrawdownPercent, accountBalance, accountEquity))
+   if (CheckDrawdown(symbol, MaxDrawdownPercent, accountBalance, accountEquity))
       return;
 
    // Manage existing positions first (e.g., trailing stop, breakeven)
-   ManagePositions();
+   ManagePositions(symbol);
 
    if (UseTrendStrategy)
    {
       // Get signals from the signals and strategy class
       int trendSignal, rsiMacdSignal, orderFlowSignal;
-      signalsAndStrategy.GetSignals(trendSignal, rsiMacdSignal, orderFlowSignal);
+      signalsAndStrategy.GetSignals(symbol, trendSignal, rsiMacdSignal, orderFlowSignal);
 
       // Implement your logic using the retrieved signals
-      // For example:
       if (trendSignal == 1 && rsiMacdSignal == 1 && orderFlowSignal == 1)
       {
          // Buy logic
          // Calculate SL/TP and place order if no active buy trades/pending orders
-         if (!HasActiveTradeOrPendingOrder(POSITION_TYPE_BUY))
+         if (!HasActiveTradeOrPendingOrder(symbol, POSITION_TYPE_BUY))
          {
             double stopLoss, takeProfit;
-            CalculateDynamicSLTP(stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
+            CalculateDynamicSLTP(symbol, stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
 
-            double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-            double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-            double lotSize = CalculateDynamicLotSize(stopLoss / _Point, accountBalance, RiskPercent, minVolume, maxVolume);
+            double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+            double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+            double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+            
+            if(point <= 0)
+            {
+                Print("Error: Invalid point value for symbol ", symbol);
+                return;
+            }
+            
+            double lotSize = CalculateDynamicLotSize(symbol, stopLoss / point, accountBalance, RiskPercent, minVolume, maxVolume);
 
-            Print("Placing Buy Trade...");
-            PlaceBuyOrder();  // This uses your existing PlaceBuyOrder() logic
+            Print("Placing Buy Trade for symbol ", symbol);
+            PlaceBuyOrder(symbol);  // Update to include symbol parameter
          }
       }
       else if (AllowShortTrades && trendSignal == -1 && rsiMacdSignal == -1 && orderFlowSignal == -1)
       {
          // Sell logic
-         if (!HasActiveTradeOrPendingOrder(POSITION_TYPE_SELL))
+         if (!HasActiveTradeOrPendingOrder(symbol, POSITION_TYPE_SELL))
          {
             double stopLoss, takeProfit;
-            CalculateDynamicSLTP(stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
+            CalculateDynamicSLTP(symbol, stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
 
-            double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-            double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-            double lotSize = CalculateDynamicLotSize(stopLoss / _Point, accountBalance, RiskPercent, minVolume, maxVolume);
+            double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+            double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+            double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+            
+            if(point <= 0)
+            {
+                Print("Error: Invalid point value for symbol ", symbol);
+                return;
+            }
+            
+            double lotSize = CalculateDynamicLotSize(symbol, stopLoss / point, accountBalance, RiskPercent, minVolume, maxVolume);
 
-            Print("Placing Sell Trade...");
-            PlaceSellOrder(); // Uses your existing PlaceSellOrder() logic
+            Print("Placing Sell Trade for symbol ", symbol);
+            PlaceSellOrder(symbol); // Update to include symbol parameter
          }
       }
    }
@@ -201,7 +218,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 //| Manage Positions                                                 |
 //+------------------------------------------------------------------+
-bool ManagePositions(int checkType = -1)
+bool ManagePositions(string symbol, int checkType = -1)
 {
    bool hasPosition = false;
    int total = PositionsTotal();
@@ -211,8 +228,8 @@ bool ManagePositions(int checkType = -1)
       ulong ticket = PositionGetTicket(i);
       if(PositionSelectByTicket(ticket))
       {
-         string symbol = PositionGetString(POSITION_SYMBOL);
-         if(symbol != _Symbol) continue;
+         string posSymbol = PositionGetString(POSITION_SYMBOL);
+         if(posSymbol != symbol) continue;
 
          int posType = (int)PositionGetInteger(POSITION_TYPE);
          if(checkType != -1 && posType != checkType) continue;
@@ -227,9 +244,9 @@ bool ManagePositions(int checkType = -1)
             double stop_loss = PositionGetDouble(POSITION_SL);
 
             if(UseTrailingStop)
-               ApplyTrailingStop(ticket, posType, open_price, stop_loss);
+               ApplyTrailingStop(symbol, ticket, posType, open_price, stop_loss);
             if(UseBreakeven)
-               ApplyBreakeven(ticket, posType, open_price, stop_loss);
+               ApplyBreakeven(symbol, ticket, posType, open_price, stop_loss);
          }
       }
    }
@@ -332,5 +349,21 @@ void ValidateInputs()
       Alert("GOLDEN_CROSS_THRESHOLD must be greater than 0");
       ExpertRemove();
       return;
+   }
+
+   // Add symbol-specific validations
+   string symbol = _Symbol;
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   
+   if(point <= 0 || tickSize <= 0 || minVolume <= 0 || maxVolume <= 0)
+   {
+       string error = StringFormat("Invalid symbol properties for %s - Point: %.5f, Tick Size: %.5f, Min Volume: %.2f, Max Volume: %.2f",
+                                 symbol, point, tickSize, minVolume, maxVolume);
+       Alert(error);
+       ExpertRemove();
+       return;
    }
 }

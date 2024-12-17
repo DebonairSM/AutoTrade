@@ -1,13 +1,20 @@
 #include <Trade/Trade.mqh>
+// Global configuration
+bool useDOMAnalysis = false;  // Default to false, can be set by the EA
+
+// Add at the top with other global variables
+static datetime lastLotSizeCalcTime = 0;
+const int LOT_SIZE_CALC_INTERVAL = 60; // Minimum seconds between lot size calculations
+
 //+------------------------------------------------------------------+
 //| Helper function to get indicator value                           |
 //+------------------------------------------------------------------+
-double GetIndicatorValue(int handle, int bufferIndex, int shift = 0)
+double GetIndicatorValue(string symbol, int handle, int bufferIndex, int shift = 0)
 {
     double value[];
     if (handle == INVALID_HANDLE)
     {
-        Print("Invalid indicator handle");
+        Print("Invalid indicator handle for symbol ", symbol);
         return 0;
     }
 
@@ -18,7 +25,7 @@ double GetIndicatorValue(int handle, int bufferIndex, int shift = 0)
     else
     {
         int error = GetLastError();
-        Print("Error copying data from indicator handle: ", error);
+        Print("Error copying data from indicator handle for symbol ", symbol, ": ", error);
         ResetLastError();
         return 0;
     }
@@ -27,75 +34,89 @@ double GetIndicatorValue(int handle, int bufferIndex, int shift = 0)
 //+------------------------------------------------------------------+
 //| Indicator Calculation Functions                                  |
 //+------------------------------------------------------------------+
-double CalculateSMA(int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
+double CalculateSMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
 {
-    int handle = iMA(_Symbol, timeframe, period, 0, MODE_SMA, PRICE_CLOSE);
+    int handle = iMA(symbol, timeframe, period, 0, MODE_SMA, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
         int error = GetLastError();
-        Print("Failed to create SMA indicator handle: ", error);
+        Print("Failed to create SMA indicator handle for symbol ", symbol, ": ", error);
         ResetLastError();
         return 0;
     }
-    double value = GetIndicatorValue(handle, 0, shift);
+    double value = GetIndicatorValue(symbol, handle, 0, shift);
     IndicatorRelease(handle);
     return value;
 }
 
-double CalculateEMA(int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
+double CalculateEMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
 {
-    int handle = iMA(_Symbol, timeframe, period, 0, MODE_EMA, PRICE_CLOSE);
+    int handle = iMA(symbol, timeframe, period, 0, MODE_EMA, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
         int error = GetLastError();
-        Print("Failed to create EMA indicator handle: ", error);
+        Print("Failed to create EMA indicator handle for symbol ", symbol, ": ", error);
         ResetLastError();
         return 0;
     }
-    double value = GetIndicatorValue(handle, 0, shift);
+    double value = GetIndicatorValue(symbol, handle, 0, shift);
     IndicatorRelease(handle);
     return value;
 }
 
-double CalculateRSI(int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
+double CalculateRSI(string symbol, int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
 {
-    int handle = iRSI(_Symbol, timeframe, period, PRICE_CLOSE);
+    double rsi[];
+    ArraySetAsSeries(rsi, true);
+    
+    int handle = iRSI(symbol, timeframe, period, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
         int error = GetLastError();
-        Print("Failed to create RSI indicator handle: ", error);
+        Print("Failed to create RSI indicator handle for symbol ", symbol, ": ", error);
         ResetLastError();
         return 0;
     }
-    double value = GetIndicatorValue(handle, 0, shift);
+    if (CopyBuffer(handle, 0, shift, 1, rsi) <= 0)
+    {
+        Print("Error copying RSI data: ", GetLastError());
+        return 0;
+    }
     IndicatorRelease(handle);
-    return value;
+    return rsi[0];
 }
 
-double CalculateATR(int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
+double CalculateATR(string symbol, int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
 {
-    int handle = iATR(_Symbol, timeframe, period);
-    if (handle == INVALID_HANDLE)
+    double atr[];
+    ArraySetAsSeries(atr, true);
+    
+    int handle = iATR(symbol, timeframe, period);
+    if(handle == INVALID_HANDLE)
     {
-        int error = GetLastError();
-        Print("Failed to create ATR indicator handle: ", error);
-        ResetLastError();
-        return 0;
+        Print("Error creating ATR indicator: ", GetLastError());
+        return -1;
     }
-    double value = GetIndicatorValue(handle, 0, shift);
+    
+    if(CopyBuffer(handle, 0, shift, 1, atr) <= 0)
+    {
+        Print("Error copying ATR data: ", GetLastError());
+        return -1;
+    }
+    
     IndicatorRelease(handle);
-    return value;
+    return atr[0];
 }
 
 //+------------------------------------------------------------------+
 //| Calculate ADX, +DI, and -DI                                      |
 //+------------------------------------------------------------------+
-void CalculateADX(int period, ENUM_TIMEFRAMES timeframe, double &adx, double &plusDI, double &minusDI)
+void CalculateADX(string symbol, int period, ENUM_TIMEFRAMES timeframe, double &adx, double &plusDI, double &minusDI)
 {
-    int handle = iADX(_Symbol, timeframe, period);
+    int handle = iADX(symbol, timeframe, period);
     if (handle == INVALID_HANDLE)
     {
-        Print("Failed to create ADX handle");
+        Print("Failed to create ADX handle for symbol ", symbol);
         return;
     }
 
@@ -136,6 +157,7 @@ int GetVolumeStepDigits(double volume_step)
 //| Calculate Lot Size Based on Risk Percentage and Stop Loss        |
 //+------------------------------------------------------------------+
 double CalculateDynamicLotSize(
+    string symbol,
     double stop_loss_pips,  // Already in correct units (e.g. if 1 pip = 1 price unit, pass that directly)
     double accountBalance,  // Current account balance
     double riskPercent,     // e.g. 2.0 for 2%
@@ -146,31 +168,31 @@ double CalculateDynamicLotSize(
     // Validate inputs
     if (stop_loss_pips <= 0)
     {
-        Print("Error: Invalid stop loss pips (", stop_loss_pips, ")");
+        Print("Error: Invalid stop loss pips (", stop_loss_pips, ") for symbol ", symbol);
         return minVolume;
     }
 
     if (accountBalance <= 0)
     {
-        Print("Error: Invalid account balance (", accountBalance, ")");
+        Print("Error: Invalid account balance (", accountBalance, ") for symbol ", symbol);
         return minVolume;
     }
 
     if (riskPercent <= 0 || riskPercent > 100)
     {
-        Print("Error: Invalid risk percent (", riskPercent, ")");
+        Print("Error: Invalid risk percent (", riskPercent, ") for symbol ", symbol);
         return minVolume;
     }
 
-    // Get symbol properties
-    double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-    double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-    double lot_step   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    // Get symbol properties dynamically
+    double tick_value = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+    double tick_size = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+    double lot_step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
 
     if (tick_value <= 0 || tick_size <= 0 || lot_step <= 0)
     {
-        string error = StringFormat("Invalid symbol properties - Tick Value: %.5f, Tick Size: %.5f, Lot Step: %.5f",
-                                    tick_value, tick_size, lot_step);
+        string error = StringFormat("Invalid symbol properties - Tick Value: %.5f, Tick Size: %.5f, Lot Step: %.5f for symbol %s",
+                                    tick_value, tick_size, lot_step, symbol);
         Print(error);
         return minVolume;
     }
@@ -191,22 +213,15 @@ double CalculateDynamicLotSize(
     lot_size = MathMax(lot_size, minVolume);
     lot_size = MathMin(lot_size, maxVolume);
 
-    // Determine volume step digits
-    int volume_step_digits = 0;
-    double temp_step = lot_step;
-    while (MathFloor(temp_step * 10) != temp_step * 10 && volume_step_digits < 8)
-    {
-        temp_step *= 10;
-        volume_step_digits++;
-    }
-
+    // Get volume step digits dynamically
+    int volume_step_digits = GetVolumeStepDigits(lot_step);
     lot_size = NormalizeDouble(lot_size, volume_step_digits);
 
     double actual_risk = lot_size * stop_loss_pips * pip_value;
 
     Print(
         "=== CalculateDynamicLotSize Debug ===\n",
-        "Symbol: ", _Symbol, "\n",
+        "Symbol: ", symbol, "\n",
         "Account Balance: ", accountBalance, "\n",
         "Risk Percent: ", riskPercent, "%\n",
         "Intended Monetary Risk: ", risk_amount, "\n",
@@ -227,7 +242,7 @@ double CalculateDynamicLotSize(
 //+------------------------------------------------------------------+
 //| Check Drawdown and Halt Trading if Necessary                     |
 //+------------------------------------------------------------------+
-bool CheckDrawdown(double maxDrawdownPercent, double accountBalance, double accountEquity)
+bool CheckDrawdown(string symbol, double maxDrawdownPercent, double accountBalance, double accountEquity)
 {
     if (accountBalance == 0.0) accountBalance = 0.0001;
     
@@ -236,12 +251,12 @@ bool CheckDrawdown(double maxDrawdownPercent, double accountBalance, double acco
     // Only log if drawdown is significant
     if (drawdown_percent >= maxDrawdownPercent)
     {
-        Print("ALERT: Maximum Drawdown Reached: ", drawdown_percent, "% - Trading Halted");
+        Print("ALERT: Maximum Drawdown Reached for ", symbol, ": ", drawdown_percent, "% - Trading Halted");
         return true;
     }
     else if (drawdown_percent >= maxDrawdownPercent * 0.8) // Only log when approaching max drawdown
     {
-        Print("WARNING: Significant Drawdown: ", drawdown_percent, "% - Approaching Limit");
+        Print("WARNING: Significant Drawdown for ", symbol, ": ", drawdown_percent, "% - Approaching Limit");
     }
     
     return false;
@@ -250,24 +265,31 @@ bool CheckDrawdown(double maxDrawdownPercent, double accountBalance, double acco
 //+------------------------------------------------------------------+
 //| Calculate Dynamic SL/TP Levels Based on ATR                      |
 //+------------------------------------------------------------------+
-void CalculateDynamicSLTP(double &stop_loss, double &take_profit, double atr_multiplier, ENUM_TIMEFRAMES timeframe, double inFixedStopLossPips)
+void CalculateDynamicSLTP(string symbol, double &stop_loss, double &take_profit, double atr_multiplier, ENUM_TIMEFRAMES timeframe, double inFixedStopLossPips)
 {
-    double atr = CalculateATR(14, timeframe);
+    double atr = CalculateATR(symbol, 14, timeframe);
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    
+    if (point <= 0)
+    {
+        Print("Error: Invalid point value for symbol ", symbol);
+        return;
+    }
 
     if (atr <= 0)
     {
-        Print("ATR calculation failed or returned zero. Using default SL/TP values.");
-        stop_loss = inFixedStopLossPips * _Point;
-        take_profit = 40 * _Point;
+        Print("ATR calculation failed or returned zero for ", symbol, ". Using default SL/TP values.");
+        stop_loss = inFixedStopLossPips * point;
+        take_profit = 40 * point;
         return;
     }
 
     double dynamicStopLoss = atr * atr_multiplier;
-    stop_loss = MathMax(dynamicStopLoss, inFixedStopLossPips * _Point);
+    stop_loss = MathMax(dynamicStopLoss, inFixedStopLossPips * point);
     take_profit = atr * atr_multiplier * 2.0;
 
     // Use the new logging function
-    LogDynamicSLTP(stop_loss, take_profit, _Symbol, timeframe);
+    LogDynamicSLTP(stop_loss, take_profit, symbol, timeframe);
 }
 
 //+------------------------------------------------------------------+
@@ -280,7 +302,7 @@ void LogDynamicSLTP(double stopLoss, double takeProfit, string symbol, ENUM_TIME
     datetime currentTime = TimeCurrent();
     
     // Prevent division by zero
-    if (utilityLastLogTime == 0) utilityLastLogTime = stopLoss;
+    if (utilityLastLogTime == 0) utilityLastLogTime = (datetime)stopLoss;
     if (utilityLastCalculationTime == 0) utilityLastCalculationTime = currentTime;
     
     // Only log if SL/TP changed by more than 1% or after 5 minutes
@@ -289,7 +311,7 @@ void LogDynamicSLTP(double stopLoss, double takeProfit, string symbol, ENUM_TIME
         currentTime - utilityLastCalculationTime >= 300)
     {
         Print(symbol, ",", EnumToString(timeframe), " Dynamic SL: ", stopLoss, " | Dynamic TP: ", takeProfit);
-        utilityLastLogTime = stopLoss;
+        utilityLastLogTime = (datetime)stopLoss;
         utilityLastCalculationTime = currentTime;
     }
 }
@@ -306,7 +328,8 @@ void LogDIDifference(double diDifference, double threshold, string symbol, ENUM_
     // Only log if the difference has changed by more than 0.5 or after 5 minutes
     if (MathAbs(diDifference - lastDIDifference) > 0.5 || currentTime - utilityLastLogTime >= 300)
     {
-        Print(symbol, ",", EnumToString(timeframe), " DI Difference: ", diDifference, " (Threshold: ", threshold, ")");
+        Print(StringFormat("%s,%s DI Difference: %f (Threshold: %f)", 
+              symbol, EnumToString(timeframe), diDifference, threshold));
         lastDIDifference = diDifference;
         utilityLastLogTime = currentTime;
     }
@@ -315,7 +338,7 @@ void LogDIDifference(double diDifference, double threshold, string symbol, ENUM_
 //+------------------------------------------------------------------+
 //| Log Trade Details                                                |
 //+------------------------------------------------------------------+
-void LogTradeDetails(double lot_size, double stop_loss, double take_profit)
+void LogTradeDetails(string symbol, double lot_size, double stop_loss, double take_profit)
 {
     // Create log message
     string log_message = StringFormat(
@@ -331,7 +354,7 @@ void LogTradeDetails(double lot_size, double stop_loss, double take_profit)
         "===================\n",
         __FUNCTION__,
         TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS),
-        _Symbol,
+        symbol,
         lot_size,
         stop_loss,
         take_profit,
@@ -344,7 +367,7 @@ void LogTradeDetails(double lot_size, double stop_loss, double take_profit)
     Print(log_message);
     
     // Write to file in the correct location
-    string filename = "QuantumTraderAI_" + _Symbol + ".log";
+    string filename = "QuantumTraderAI_" + symbol + ".log";
     int filehandle = FileOpen(filename, FILE_WRITE|FILE_READ|FILE_TXT|FILE_SHARE_READ|FILE_SHARE_WRITE);
     
     if(filehandle != INVALID_HANDLE)
@@ -377,7 +400,7 @@ bool IsWithinTradingHours(string startTime, string endTime)
 //+------------------------------------------------------------------+
 //| Check for Pending Orders                                         |
 //+------------------------------------------------------------------+
-bool HasPendingOrder(int type)
+bool HasPendingOrder(string symbol, int type)
 {
     int total = OrdersTotal();
     for (int i = 0; i < total; i++)
@@ -410,14 +433,14 @@ struct CandleData {
 //+------------------------------------------------------------------+
 //| Get Normalized Candle Data                                       |
 //+------------------------------------------------------------------+
-CandleData GetCandleData(int shift, ENUM_TIMEFRAMES timeframe)
+CandleData GetCandleData(string symbol, int shift, ENUM_TIMEFRAMES timeframe)
 {
     CandleData candle;
     
-    candle.open = iOpen(_Symbol, timeframe, shift);
-    candle.high = iHigh(_Symbol, timeframe, shift);
-    candle.low = iLow(_Symbol, timeframe, shift);
-    candle.close = iClose(_Symbol, timeframe, shift);
+    candle.open = iOpen(symbol, timeframe, shift);
+    candle.high = iHigh(symbol, timeframe, shift);
+    candle.low = iLow(symbol, timeframe, shift);
+    candle.close = iClose(symbol, timeframe, shift);
     
     candle.isBullish = (candle.close > candle.open);
     
@@ -432,7 +455,7 @@ CandleData GetCandleData(int shift, ENUM_TIMEFRAMES timeframe)
 //+------------------------------------------------------------------+
 //| Count Current Orders by Type                                      |
 //+------------------------------------------------------------------+
-int CountOrders(int type)
+int CountOrders(string symbol, int type)
 {
     int count = 0;
     int total = PositionsTotal();
@@ -443,7 +466,7 @@ int CountOrders(int type)
         if(PositionSelectByTicket(ticket))
         {
             if(PositionGetInteger(POSITION_TYPE) == type && 
-               PositionGetString(POSITION_SYMBOL) == _Symbol)
+               PositionGetString(POSITION_SYMBOL) == symbol)
             {
                 count++;
             }
@@ -455,7 +478,7 @@ int CountOrders(int type)
 //+------------------------------------------------------------------+
 //| Add helper function to check for active trades or pending orders |
 //+------------------------------------------------------------------+
-bool HasActiveTradeOrPendingOrder(int type)
+bool HasActiveTradeOrPendingOrder(string symbol, int type)
 {
     // Check positions
     for(int i = 0; i < PositionsTotal(); i++)
@@ -463,7 +486,7 @@ bool HasActiveTradeOrPendingOrder(int type)
         ulong ticket = PositionGetTicket(i);
         if(PositionSelectByTicket(ticket))
         {
-            if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+            if(PositionGetString(POSITION_SYMBOL) == symbol && 
                PositionGetInteger(POSITION_TYPE) == type)
                 return true;
         }
@@ -475,7 +498,7 @@ bool HasActiveTradeOrPendingOrder(int type)
         ulong ticket = OrderGetTicket(i);
         if(OrderSelect(ticket))
         {
-            if(OrderGetString(ORDER_SYMBOL) == _Symbol)
+            if(OrderGetString(ORDER_SYMBOL) == symbol)
             {
                 int orderType = (int)OrderGetInteger(ORDER_TYPE);
                 if((type == POSITION_TYPE_BUY && (orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_BUY_STOP)) ||
@@ -491,7 +514,8 @@ bool HasActiveTradeOrPendingOrder(int type)
 //+------------------------------------------------------------------+
 //| Get Best Limit Order Price                                       |
 //+------------------------------------------------------------------+
-double GetBestLimitOrderPrice(ENUM_ORDER_TYPE orderType, double &tpPrice, double &slPrice, double liquidityThreshold, double takeProfitPips, double stopLossPips)
+double GetBestLimitOrderPrice(string symbol, ENUM_ORDER_TYPE orderType, double &tpPrice, double &slPrice, 
+                            double liquidityThreshold, double takeProfitPips, double stopLossPips)
 {
     MqlBookInfo book_info[];
     
@@ -512,7 +536,7 @@ double GetBestLimitOrderPrice(ENUM_ORDER_TYPE orderType, double &tpPrice, double
     double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
     double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double spread = currentAsk - currentBid;
-    double atr = CalculateATR(14, PERIOD_CURRENT);
+    double atr = CalculateATR(_Symbol, 14, PERIOD_CURRENT, 0);
     
     // Initialize variables for liquidity analysis
     double bestPrice = 0.0;
@@ -704,7 +728,7 @@ struct MarketAnalysisParameters
 //+------------------------------------------------------------------+
 //| Log Market Analysis using pre-calculated values                  |
 //+------------------------------------------------------------------+
-void LogMarketAnalysis(const MarketAnalysisData& data, 
+void LogMarketAnalysis(const string symbol, const MarketAnalysisData& data, 
                       const MarketAnalysisParameters& params,
                       ENUM_TIMEFRAMES timeframe,
                       bool useDOMAnalysis)
@@ -733,7 +757,7 @@ void LogMarketAnalysis(const MarketAnalysisData& data,
         "ATR(14): %.5f\n\n",
         EnumToString(timeframe),
         TimeToString(current_time, TIME_DATE|TIME_MINUTES|TIME_SECONDS),
-        _Symbol,
+        symbol,
         data.currentPrice,
         params.ema_period_short, data.ema_short,
         params.ema_period_medium, data.ema_medium,
@@ -748,7 +772,7 @@ void LogMarketAnalysis(const MarketAnalysisData& data,
     if (useDOMAnalysis)
     {
         MqlBookInfo book_info[];
-        if (MarketBookGet(_Symbol, book_info))
+        if (MarketBookGet(symbol, book_info))
         {
             double buyVolume = 0.0, sellVolume = 0.0;
             for (int i = 0; i < ArraySize(book_info); i++)
@@ -812,7 +836,7 @@ void LogMarketAnalysis(const MarketAnalysisData& data,
     Print(analysis);
     
     // Write to file
-    string filename = "MarketAnalysis_" + _Symbol + ".log";
+    string filename = "MarketAnalysis_" + symbol + ".log";
     int filehandle = FileOpen(filename, FILE_WRITE|FILE_READ|FILE_TXT|FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_ANSI);
     
     if(filehandle != INVALID_HANDLE)
@@ -830,10 +854,9 @@ void LogMarketAnalysis(const MarketAnalysisData& data,
 //+------------------------------------------------------------------+
 //| Log Trade Rejection Reasons with Detailed Explanation            |
 //+------------------------------------------------------------------+
-void LogTradeRejection(const string reason, double currentPrice, double adx, double rsi, 
+void LogTradeRejection(const string reason, string symbol, double currentPrice, double adx, double rsi, 
                       double emaShort, double emaMedium, double emaLong, 
-                      double adxThreshold, double rsiUpperThreshold, double rsiLowerThreshold,
-                      bool useDOMAnalysis)
+                      double adxThreshold, double rsiUpperThreshold, double rsiLowerThreshold)
 {
     string log_message = StringFormat(
         "\n=== Trade Rejection Analysis [%s] ===\n"
@@ -928,8 +951,10 @@ void LogTradeRejection(const string reason, double currentPrice, double adx, dou
 
     // 5. Pattern Recognition
     log_message += "\nPattern Recognition:\n";
-    CandleData currentCandle = GetCandleData(0, PERIOD_CURRENT);
-    CandleData prevCandle = GetCandleData(1, PERIOD_CURRENT);
+    CandleData currentCandle;
+    currentCandle = GetCandleData(_Symbol, 0, PERIOD_CURRENT);
+    CandleData prevCandle;
+    prevCandle = GetCandleData(_Symbol, 1, PERIOD_CURRENT);
     
     // Body/Wick Analysis
     double bodyToWickRatio = currentCandle.body / (currentCandle.upperWick + currentCandle.lowerWick + 0.000001);
