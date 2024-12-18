@@ -3,8 +3,124 @@
 bool useDOMAnalysis = false;  // Default to false, can be set by the EA
 
 // Add at the top with other global variables
-static datetime lastLotSizeCalcTime = 0;
-const int LOT_SIZE_CALC_INTERVAL = 60; // Minimum seconds between lot size calculations
+input group "Symbol Settings"  // These should only be in the EA file
+static string tradingSymbols[];           // Array to store trading symbols
+static int symbolCount = 0;               // Number of symbols being traded
+static datetime lastLotSizeCalcTimes[];   // Array to store last calculation time for each symbol
+const int LOT_SIZE_CALC_INTERVAL = 60;    // Minimum seconds between lot size calculations
+
+// Function to set symbol count externally
+void SetSymbolCount(int count)
+{
+    symbolCount = count;
+}
+
+// Function to add symbol to array
+void AddTradingSymbol(string symbol, int index)
+{
+    if(index >= 0 && index < ArraySize(tradingSymbols))
+    {
+        tradingSymbols[index] = symbol;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Get index of symbol in trading symbols array                     |
+//+------------------------------------------------------------------+
+int GetSymbolIndex(string symbol)
+{
+    for(int i = 0; i < symbolCount; i++)
+    {
+        if(tradingSymbols[i] == symbol)
+            return i;
+    }
+    return -1;  // Symbol not found
+}
+
+//+------------------------------------------------------------------+
+//| Initialize lot size calculation times                            |
+//+------------------------------------------------------------------+
+void InitializeLotSizeCalcTimes()
+{
+    ArrayResize(lastLotSizeCalcTimes, symbolCount);
+    datetime currentTime = TimeCurrent();
+    
+    for(int i = 0; i < symbolCount; i++)
+    {
+        lastLotSizeCalcTimes[i] = currentTime;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate dynamic lot size with cooldown                         |
+//+------------------------------------------------------------------+
+double CalculateDynamicLotSize(string symbol, double riskPercent, double stopLossPips)
+{
+    // Get symbol index
+    int symbolIndex = GetSymbolIndex(symbol);
+    if(symbolIndex == -1)
+    {
+        Print("Error: Symbol not found in trading symbols array: ", symbol);
+        return 0.0;
+    }
+
+    // Check if enough time has passed since last calculation
+    datetime currentTime = TimeCurrent();
+    if(currentTime - lastLotSizeCalcTimes[symbolIndex] < LOT_SIZE_CALC_INTERVAL)
+    {
+        return 0.0; // Return 0 to indicate calculation should be skipped
+    }
+
+    // Update last calculation time
+    lastLotSizeCalcTimes[symbolIndex] = currentTime;
+
+    // Calculate lot size
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double intendedRisk = accountBalance * riskPercent / 100.0;
+    
+    double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+    double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+    double lotStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    
+    if(tickValue <= 0 || tickSize <= 0 || lotStep <= 0 || point <= 0)
+    {
+        Print("Invalid symbol properties for ", symbol);
+        return 0.0;
+    }
+    
+    // Calculate pip value (1 pip = 0.0001 for most forex pairs)
+    double pipValue = tickValue * (0.0001 / point);
+    
+    // Calculate required lot size
+    double calculatedLotSize = (intendedRisk / (stopLossPips * pipValue));
+    
+    // Round to nearest lot step
+    calculatedLotSize = MathFloor(calculatedLotSize / lotStep) * lotStep;
+    
+    // Apply minimum and maximum lot size constraints
+    double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+    calculatedLotSize = MathMax(minLot, MathMin(maxLot, calculatedLotSize));
+    
+    // Single debug output with corrected calculations
+    Print("=== CalculateDynamicLotSize Debug for ", symbol, " ===");
+    Print("Symbol: ", symbol);
+    Print("Account Balance: ", NormalizeDouble(accountBalance, 2));
+    Print("Risk Percent: ", NormalizeDouble(riskPercent, 1), "%");
+    Print("Intended Monetary Risk: ", NormalizeDouble(intendedRisk, 2));
+    Print("Stop Loss Pips: ", NormalizeDouble(stopLossPips, 2));
+    Print("Tick Value: ", NormalizeDouble(tickValue, 8));
+    Print("Tick Size: ", NormalizeDouble(tickSize, 8));
+    Print("Point: ", NormalizeDouble(point, 8));
+    Print("Lot Step: ", NormalizeDouble(lotStep, 2));
+    Print("Pip Value: ", NormalizeDouble(pipValue, 8));
+    Print("Calculated Lot Size: ", NormalizeDouble(calculatedLotSize, 2));
+    Print("Actual Monetary Risk: ", NormalizeDouble(calculatedLotSize * stopLossPips * pipValue, 2));
+    Print("==============================");
+    
+    return calculatedLotSize;
+}
 
 //+------------------------------------------------------------------+
 //| Helper function to get indicator value                           |

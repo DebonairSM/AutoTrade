@@ -96,11 +96,7 @@ input double SignalTolerancePercent = 20.0;  // Signal tolerance (lower = more t
 // Modify symbol settings inputs
 input group "Symbol Settings"
 input bool UseMultipleSymbols = true;        // Trade multiple symbols
-input int MaxSymbolsToTrade = 5;             // Maximum number of symbols to trade
-
-// Add global variables for symbol management
-string tradingSymbols[];                     // Array to store symbols for trading
-int symbolCount = 0;                         // Number of symbols being traded
+input int MaxSymbolsToTrade = 100;           // Maximum number of symbols to trade
 
 //+------------------------------------------------------------------+
 //| Global Variables and Objects                                     |
@@ -146,87 +142,55 @@ int OnInit()
     if(!UseMultipleSymbols)
     {
         string symbol = ChartSymbol(0);  // Get symbol from current chart
+        ArrayResize(tradingSymbols, 1);
+        AddTradingSymbol(symbol, 0);
+        SetSymbolCount(1);
         ValidateInputs(symbol);
     }
     else
     {
-        // ... existing multiple symbol initialization ...
-    }
-
-    // Initialize starting balance
-    starting_balance = AccountInfoDouble(ACCOUNT_BALANCE);
-
-    // Print current configurations to the journal/log
-    Print("Configuration: ");
-    Print("  UseTrendStrategy=", UseTrendStrategy);
-    Print("  RiskPercent=", RiskPercent);
-    Print("  MaxDrawdownPercent=", MaxDrawdownPercent);
-    Print("  ATRMultiplier=", ATRMultiplier);
-    Print("  ADXPeriod=", ADXPeriod);
-    Print("  TrendADXThreshold=", TrendADXThreshold);
-    Print("  TradingStartTime=", TradingStartTime);
-    Print("  TradingEndTime=", TradingEndTime);
-    Print("  UseTrailingStop=", UseTrailingStop);
-    Print("  TrailingStopPips=", TrailingStopPips);
-    Print("  UseBreakeven=", UseBreakeven);
-    Print("  BreakevenActivationPips=", BreakevenActivationPips);
-    Print("  BreakevenOffsetPips=", BreakevenOffsetPips);
-    Print("  UseDOMAnalysis=", UseDOMAnalysis);
-    Print("  LiquidityThreshold=", LiquidityThreshold);
-    Print("  ImbalanceThreshold=", ImbalanceThreshold);
-    Print("  Timeframe=", EnumToString(Timeframe));
-
-    // Set the initial value of lastCalculationTime to ensure signals are calculated on the first tick
-    lastCalculationTime = 0;
-
-    // Initialize symbol array
-    if(UseMultipleSymbols)
-    {
         // Get all symbols from Market Watch
         int totalSymbols = SymbolsTotal(true);  // true = only symbols in Market Watch
+        int count = 0;
         
-        for(int i = 0; i < totalSymbols && symbolCount < MaxSymbolsToTrade; i++)
+        // Ensure we don't exceed array bounds
+        int maxSymbols = MathMin(totalSymbols, MaxSymbolsToTrade);
+        ArrayResize(tradingSymbols, maxSymbols);
+        
+        for(int i = 0; i < totalSymbols && count < maxSymbols; i++)
         {
             string symbol = SymbolName(i, true);  // Get symbol name from Market Watch
             
             // Verify the symbol is valid and can be traded
             if(SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE) == SYMBOL_TRADE_MODE_FULL)
             {
-                // Add additional validation if needed
                 if(!SymbolSelect(symbol, true))
                 {
                     Print("Failed to add symbol to Market Watch: ", symbol);
                     continue;
                 }
                 
-                ArrayResize(tradingSymbols, symbolCount + 1);
-                tradingSymbols[symbolCount++] = symbol;
+                AddTradingSymbol(symbol, count);
+                count++;
                 Print("Added symbol for trading: ", symbol);
-                
-                // Initialize log times array for this symbol
-                ArrayResize(symbolLogTimes, symbolCount);
             }
         }
         
-        if(symbolCount == 0)
+        SetSymbolCount(count);
+        
+        if(count == 0)
         {
             Print("Error: No valid symbols found for trading");
             return INIT_FAILED;
         }
         
-        Print("Total symbols added for trading: ", symbolCount);
-    }
-    else
-    {
-        // Single symbol mode
-        symbolCount = 1;
-        ArrayResize(tradingSymbols, 1);
-        tradingSymbols[0] = Symbol();  // Use current chart symbol
-        ArrayResize(symbolLogTimes, 1);
-        Print("Single symbol mode: ", Symbol());
+        Print("Total symbols added for trading: ", count);
     }
 
+    // Ensure arrays are properly sized for all symbols
+    ArrayResize(symbolLogTimes, symbolCount);
     InitializeLogTimes();
+    InitializeLotSizeCalcTimes();
 
     return INIT_SUCCEEDED;
 }
@@ -521,6 +485,13 @@ void ExecuteTradingLogic(string symbol)
 
 void ProcessBuySignal(string symbol, double lotSize, double stopLoss, double takeProfit)
 {
+    // Require 3 bars of confirmation for more reliability
+    if(!CheckConsecutiveSignals(symbol, 3, true))
+    {
+        Print("Buy signal rejected - Failed 3-bar persistence check");
+        return;
+    }
+
     if (!IsBearishCandlePattern(symbol))
     {
         if (!ManagePositions(symbol, POSITION_TYPE_BUY) && !HasPendingOrder(symbol, ORDER_TYPE_BUY_LIMIT))
@@ -552,6 +523,13 @@ void ProcessBuySignal(string symbol, double lotSize, double stopLoss, double tak
 
 void ProcessSellSignal(string symbol, double lotSize, double stopLoss, double takeProfit)
 {
+    // Require 3 bars of confirmation for more reliability
+    if(!CheckConsecutiveSignals(symbol, 3, false))
+    {
+        Print("Sell signal rejected - Failed 3-bar persistence check");
+        return;
+    }
+
     if (!IsBullishCandlePattern(symbol))
     {
         if (!ManagePositions(symbol, POSITION_TYPE_SELL) && !HasPendingOrder(symbol, ORDER_TYPE_SELL_LIMIT))
@@ -924,12 +902,15 @@ bool IsBullishCandlePattern(string symbol)
     
     // Get average candle size for reference
     double avgCandleSize = 0;
+    double avgVolume = 0;
     for(int i = 1; i <= 10; i++)
     {
         CandleData temp = GetCandleData(symbol, i, Timeframe);
         avgCandleSize += temp.body;
+        avgVolume += iVolume(symbol, Timeframe, i);
     }
     avgCandleSize /= 10;
+    avgVolume /= 10;
     
     // Only return true for very strong bullish patterns
     
@@ -940,7 +921,8 @@ bool IsBullishCandlePattern(string symbol)
         current.open < previous.close &&
         current.close > previous.open &&
         current.body > previous.body * 1.5 && // Increased size requirement
-        current.body > avgCandleSize * 1.2;   // Must be larger than average
+        current.body > avgCandleSize * 1.2 &&   // Must be larger than average
+        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
     
     // 2. Perfect Morning Star
     CandleData twoDaysAgo = GetCandleData(symbol, 3, Timeframe);
@@ -950,7 +932,8 @@ bool IsBullishCandlePattern(string symbol)
         previous.body < avgCandleSize * 0.3 && // Smaller doji body
         twoDaysAgo.body > avgCandleSize * 1.2 &&
         current.body > avgCandleSize * 1.2 &&
-        current.close > twoDaysAgo.open; // More stringent price requirement
+        current.close > twoDaysAgo.open && // More stringent price requirement
+        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
     
     // 3. Clear Hammer
     bool isClearHammer = 
@@ -958,7 +941,8 @@ bool IsBullishCandlePattern(string symbol)
         current.lowerWick > current.body * 3 && // Increased wick requirement
         current.upperWick < current.body * 0.1 && // Minimal upper wick
         current.body > avgCandleSize * 0.8 &&
-        current.low < previous.low; // Must make new low
+        current.low < previous.low && // Must make new low
+        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
     
     // Log pattern detection with confidence levels
     if(isStrongBullishEngulfing) Print("Strong Bullish Engulfing Pattern - High Confidence Reversal Signal");
@@ -978,12 +962,15 @@ bool IsBearishCandlePattern(string symbol)
     
     // Get average candle size for reference
     double avgCandleSize = 0;
+    double avgVolume = 0;
     for(int i = 1; i <= 10; i++)
     {
         CandleData temp = GetCandleData(symbol, i, Timeframe);
         avgCandleSize += temp.body;
+        avgVolume += iVolume(symbol, Timeframe, i);
     }
     avgCandleSize /= 10;
+    avgVolume /= 10;
     
     // Only return true for very strong bearish patterns
     
@@ -994,7 +981,8 @@ bool IsBearishCandlePattern(string symbol)
         current.open > previous.close &&
         current.close < previous.open &&
         current.body > previous.body * 1.5 && // Increased size requirement
-        current.body > avgCandleSize * 1.2;   // Must be larger than average
+        current.body > avgCandleSize * 1.2 &&   // Must be larger than average
+        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
     
     // 2. Perfect Evening Star
     CandleData twoDaysAgo = GetCandleData(symbol, 3, Timeframe);
@@ -1004,7 +992,8 @@ bool IsBearishCandlePattern(string symbol)
         previous.body < avgCandleSize * 0.3 && // Smaller doji body
         twoDaysAgo.body > avgCandleSize * 1.2 &&
         current.body > avgCandleSize * 1.2 &&
-        current.close < twoDaysAgo.open; // More stringent price requirement
+        current.close < twoDaysAgo.open && // More stringent price requirement
+        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
     
     // 3. Clear Shooting Star
     bool isClearShootingStar = 
@@ -1012,7 +1001,8 @@ bool IsBearishCandlePattern(string symbol)
         current.upperWick > current.body * 3 && // Increased wick requirement
         current.lowerWick < current.body * 0.1 && // Minimal lower wick
         current.body > avgCandleSize * 0.8 &&
-        current.high > previous.high; // Must make new high
+        current.high > previous.high && // Must make new high
+        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
     
     // Log pattern detection with confidence levels
     if(isStrongBearishEngulfing) Print("Strong Bearish Engulfing Pattern - High Confidence Reversal Signal");
@@ -1068,14 +1058,36 @@ int IdentifyTrendPattern(string symbol)
     
     // Check EMA alignment with weighted scoring
     if(current_ema_short > current_ema_medium && current_ema_medium > current_ema_long) {
-        score.bullish += 2.5;
-        ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
-        score.reasons[ArraySize(score.reasons)-1] = "Bullish EMA alignment";
+        // Get MACD values for momentum confirmation
+        double macdMain, macdSignal, macdHistogram;
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram);
+        
+        // Enhanced bullish scoring with momentum confirmation
+        if(macdHistogram > 0) {  // Positive momentum
+            score.bullish += 3.0;  // Increased from 2.5 to 3.0 for strong confirmation
+            ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+            score.reasons[ArraySize(score.reasons)-1] = "Bullish EMA alignment with positive momentum";
+        } else {
+            score.bullish += 1.5;  // Reduced score without momentum confirmation
+            ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+            score.reasons[ArraySize(score.reasons)-1] = "Bullish EMA alignment (weak momentum)";
+        }
     }
     else if(current_ema_short < current_ema_medium && current_ema_medium < current_ema_long) {
-        score.bearish += 2.5;
-        ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
-        score.reasons[ArraySize(score.reasons)-1] = "Bearish EMA alignment";
+        // Get MACD values for momentum confirmation
+        double macdMain, macdSignal, macdHistogram;
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram);
+        
+        // Enhanced bearish scoring with momentum confirmation
+        if(macdHistogram < 0) {  // Negative momentum
+            score.bearish += 3.0;  // Increased from 2.5 to 3.0 for strong confirmation
+            ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+            score.reasons[ArraySize(score.reasons)-1] = "Bearish EMA alignment with negative momentum";
+        } else {
+            score.bearish += 1.5;  // Reduced score without momentum confirmation
+            ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
+            score.reasons[ArraySize(score.reasons)-1] = "Bearish EMA alignment (weak momentum)";
+        }
     }
 
     // 3. Enhanced Golden/Death Cross Detection with Confirmation
@@ -1724,14 +1736,108 @@ void InitializeLogTimes()
 }
 
 //+------------------------------------------------------------------+
-//| Get index of symbol in trading symbols array                     |
+//| Check for Signal Persistence                                     |
 //+------------------------------------------------------------------+
-int GetSymbolIndex(string symbol)
+bool CheckConsecutiveSignals(string symbol, int requiredBars, bool isBuySignal)
 {
-    for(int i = 0; i < symbolCount; i++)
+    // Minimum required bars for confirmation
+    if(requiredBars < 2) requiredBars = 2;  // Force minimum of 2 bars
+    
+    // Arrays to store historical values
+    double ema_short_values[];
+    double ema_medium_values[];
+    double ema_long_values[];
+    double macd_histogram_values[];
+    double rsi_values[];
+    
+    // Initialize arrays
+    ArrayResize(ema_short_values, requiredBars);
+    ArrayResize(ema_medium_values, requiredBars);
+    ArrayResize(ema_long_values, requiredBars);
+    ArrayResize(macd_histogram_values, requiredBars);
+    ArrayResize(rsi_values, requiredBars);
+    
+    // Get historical values for all indicators
+    for(int i = 0; i < requiredBars; i++)
     {
-        if(tradingSymbols[i] == symbol)
-            return i;
+        // Calculate EMAs
+        ema_short_values[i] = CalculateEMA(symbol, EMA_PERIODS_SHORT, Timeframe, i);
+        ema_medium_values[i] = CalculateEMA(symbol, EMA_PERIODS_MEDIUM, Timeframe, i);
+        ema_long_values[i] = CalculateEMA(symbol, EMA_PERIODS_LONG, Timeframe, i);
+        
+        // Calculate MACD
+        double macdMain, macdSignal, macdHistogram;
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, i);
+        macd_histogram_values[i] = macdHistogram;
+        
+        // Calculate RSI
+        rsi_values[i] = CalculateRSI(symbol, RSI_Period, Timeframe, i);
     }
-    return -1;  // Symbol not found
+    
+    // Check for signal persistence
+    int confirmedBars = 0;
+    
+    for(int i = 0; i < requiredBars; i++)
+    {
+        bool signalConfirmed = false;
+        
+        if(isBuySignal)
+        {
+            // Buy signal conditions
+            bool emaAligned = (ema_short_values[i] > ema_medium_values[i] && 
+                             ema_medium_values[i] > ema_long_values[i]);
+            bool macdPositive = (macd_histogram_values[i] > 0);
+            bool rsiSupport = (rsi_values[i] > RSI_Neutral);  // Above neutral level
+            
+            signalConfirmed = (emaAligned && macdPositive && rsiSupport);
+        }
+        else
+        {
+            // Sell signal conditions
+            bool emaAligned = (ema_short_values[i] < ema_medium_values[i] && 
+                             ema_medium_values[i] < ema_long_values[i]);
+            bool macdNegative = (macd_histogram_values[i] < 0);
+            bool rsiSupport = (rsi_values[i] < RSI_Neutral);  // Below neutral level
+            
+            signalConfirmed = (emaAligned && macdNegative && rsiSupport);
+        }
+        
+        if(signalConfirmed)
+        {
+            confirmedBars++;
+        }
+        else
+        {
+            // Reset counter if signal breaks
+            confirmedBars = 0;
+            
+            // Log the reason for signal break
+            string signalType = isBuySignal ? "Buy" : "Sell";
+            Print(signalType, " signal persistence broken at bar ", i);
+            Print("EMA Alignment: ", 
+                  ema_short_values[i], " / ",
+                  ema_medium_values[i], " / ",
+                  ema_long_values[i]);
+            Print("MACD Histogram: ", macd_histogram_values[i]);
+            Print("RSI: ", rsi_values[i]);
+            
+            return false;
+        }
+    }
+    
+    // Log successful confirmation
+    if(confirmedBars >= requiredBars)
+    {
+        string signalType = isBuySignal ? "Buy" : "Sell";
+        Print(signalType, " signal confirmed over ", confirmedBars, " bars");
+        Print("Final Values:");
+        Print("EMA Short: ", ema_short_values[0]);
+        Print("EMA Medium: ", ema_medium_values[0]);
+        Print("EMA Long: ", ema_long_values[0]);
+        Print("MACD Histogram: ", macd_histogram_values[0]);
+        Print("RSI: ", rsi_values[0]);
+    }
+    
+    return (confirmedBars >= requiredBars);
 }
+
