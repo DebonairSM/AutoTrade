@@ -152,6 +152,8 @@ double GetIndicatorValue(string symbol, int handle, int bufferIndex, int shift =
 //+------------------------------------------------------------------+
 double CalculateSMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
 {
+    if (!IsValidTimeframe(timeframe)) return 0;
+    
     int handle = iMA(symbol, timeframe, period, 0, MODE_SMA, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
@@ -167,6 +169,8 @@ double CalculateSMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
 
 double CalculateEMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
 {
+    if (!IsValidTimeframe(timeframe)) return 0;
+    
     int handle = iMA(symbol, timeframe, period, 0, MODE_EMA, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
@@ -182,6 +186,8 @@ double CalculateEMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
 
 double CalculateRSI(string symbol, int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
 {
+    if (!IsValidTimeframe(timeframe)) return 0;
+    
     double rsi[];
     ArraySetAsSeries(rsi, true);
     
@@ -204,6 +210,8 @@ double CalculateRSI(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
 
 double CalculateATR(string symbol, int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
 {
+    if (!IsValidTimeframe(timeframe)) return 0;
+    
     double atr[];
     ArraySetAsSeries(atr, true);
     
@@ -229,6 +237,8 @@ double CalculateATR(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
 //+------------------------------------------------------------------+
 void CalculateADX(string symbol, int period, ENUM_TIMEFRAMES timeframe, double &adx, double &plusDI, double &minusDI)
 {
+    if (!IsValidTimeframe(timeframe)) return;
+    
     int handle = iADX(symbol, timeframe, period);
     if (handle == INVALID_HANDLE)
     {
@@ -1099,7 +1109,11 @@ void LogTradeRejection(const string reason, string symbol, double currentPrice, 
     if(filehandle != INVALID_HANDLE)
     {
         FileSeek(filehandle, 0, SEEK_END);
-        FileWriteString(filehandle, log_message);
+        bool writeSuccess = FileWriteString(filehandle, log_message);
+        if(!writeSuccess)
+        {
+            Print("Failed to write to log file. Error: ", GetLastError());
+        }
         FileClose(filehandle);
     }
     else
@@ -1121,5 +1135,28 @@ void LogPatternAnalysis(int bullishSignals, int bearishSignals, string symbol, E
             bearishSignals
         );
         Print(log_message);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Validate timeframe parameter                                     |
+//+------------------------------------------------------------------+
+bool IsValidTimeframe(ENUM_TIMEFRAMES timeframe)
+{
+    switch(timeframe)
+    {
+        case PERIOD_M1:
+        case PERIOD_M5:
+        case PERIOD_M15:
+        case PERIOD_M30:
+        case PERIOD_H1:
+        case PERIOD_H4:
+        case PERIOD_D1:
+        case PERIOD_W1:
+        case PERIOD_MN1:
+            return true;
+        default:
+            Print("Invalid timeframe parameter: ", EnumToString(timeframe));
+            return false;
     }
 }

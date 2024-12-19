@@ -331,7 +331,7 @@ void ExecuteTradingLogic(string symbol)
 
         // Calculate stop loss and take profit only when needed
         double stopLoss, takeProfit;
-        CalculateDynamicSLTP(symbol, stopLoss, takeProfit, ATRMultiplier, PERIOD_H1, fixedStopLossPips);
+        CalculateDynamicSLTP(symbol, stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
 
         // Calculate lot size using the now-defined stopLoss
         double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
@@ -1376,7 +1376,7 @@ void ApplyBreakeven(string symbol, ulong ticket, int type, double open_price, do
 void PlaceBuyOrder(string symbol)
 {
     double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, PERIOD_H1, fixedStopLossPips);
+    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, Timeframe, fixedStopLossPips);
 
     double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
     double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
@@ -1415,7 +1415,7 @@ void PlaceBuyOrder(string symbol)
 void PlaceSellOrder(string symbol)
 {
     double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, PERIOD_H1, fixedStopLossPips);
+    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, Timeframe, fixedStopLossPips);
 
     double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
     double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
@@ -1464,7 +1464,7 @@ void PlaceAdditionalBuyOrder(string symbol)
     }
 
     double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, PERIOD_H1, fixedStopLossPips);
+    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, Timeframe, fixedStopLossPips);
 
     double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
     double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
@@ -1513,7 +1513,7 @@ void PlaceAdditionalSellOrder(string symbol)
     }
 
     double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, PERIOD_H1, fixedStopLossPips);
+    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, Timeframe, fixedStopLossPips);
 
     double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
     double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
