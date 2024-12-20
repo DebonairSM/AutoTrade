@@ -2,16 +2,14 @@
 //| QuantumTraderAI_TrendFollowing.mq5                               |
 //| VSol Software                                                    |
 //+------------------------------------------------------------------+
-// Define constants for version and copyright
-const string EA_VERSION = "1.14";
-const string EA_COPYRIGHT = "VSol Software";
+
 #property copyright "VSol Software"
 #property version   "1.14"
 #property strict
 
 #include <Trade/Trade.mqh>
 #include <Bandeira/Utility.mqh>
-
+#include <Bandeira/RSI_MACD_Scalping.mqh>
 
 // Define threshold values
 input double ADX_THRESHOLD = 20.0;
@@ -98,6 +96,14 @@ input group "Symbol Settings"
 input bool UseMultipleSymbols = true;        // Trade multiple symbols
 input int MaxSymbolsToTrade = 100;           // Maximum number of symbols to trade
 
+// Scalping Strategy Parameters
+input group "Scalping Strategy Parameters"
+input ENUM_TIMEFRAMES ScalpingTimeframe = PERIOD_M5;  // Scalping Timeframe
+input bool UseScalpingStrategy = true;        // Enable RSI-MACD Scalping
+input double ScalpingRiskPercent = 1.0;       // Scalping Risk Percentage
+input double ScalpingStopLoss = 15.0;         // Scalping Stop Loss (pips)
+input double ScalpingTakeProfit = 30.0;       // Scalping Take Profit (pips)
+
 //+------------------------------------------------------------------+
 //| Global Variables and Objects                                     |
 //+------------------------------------------------------------------+
@@ -134,8 +140,6 @@ int OnInit()
 {
     // Log version and copyright information
     Print("=== Expert Advisor Initialized ===");
-    Print("Version: ", EA_VERSION);
-    Print("Copyright: ", EA_COPYRIGHT);
     Print("===================================");
 
     // Initialize with current chart symbol if not using multiple symbols
@@ -258,6 +262,50 @@ void ExecuteTradingLogic(string symbol)
         ManagePositions(symbol);
     }
 
+    // Check for scalping opportunities first
+    if (UseScalpingStrategy)
+    {
+        // Calculate RSI using scalping-specific period
+        double rsi = CalculateRSI(symbol, SCALP_RSI_PERIOD, ScalpingTimeframe);
+        
+        // Calculate MACD using scalping-specific parameters
+        double macdMain, macdSignal, macdHistogram;
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0, ScalpingTimeframe);
+
+        // Check for existing positions to avoid overlapping trades
+        if (!HasActiveTradeOrPendingOrder(symbol, POSITION_TYPE_BUY) && 
+            !HasActiveTradeOrPendingOrder(symbol, POSITION_TYPE_SELL))
+        {
+            // Calculate lot size for scalping using enhanced risk management
+            double lotSize = CalculateLotSize(ScalpingRiskPercent, ScalpingStopLoss, symbol);  // Added symbol
+
+            // Enhanced buy condition check with all confirmations
+            if (CheckBuyCondition(rsi, macdMain, macdSignal, symbol))  // Added symbol
+            {
+                ExecuteBuyTrade(lotSize, ScalpingStopLoss, ScalpingTakeProfit, symbol);  // Added symbol
+                LogMessage("Scalping Buy Signal Executed on " + EnumToString(ScalpingTimeframe), symbol);  // Added symbol
+                return;  // Exit to avoid conflicting signals
+            }
+            
+            // Enhanced sell condition check with all confirmations
+            if (CheckSellCondition(rsi, macdMain, macdSignal, symbol))  // Added symbol
+            {
+                ExecuteSellTrade(lotSize, ScalpingStopLoss, ScalpingTakeProfit, symbol);  // Added symbol
+                LogMessage("Scalping Sell Signal Executed on " + EnumToString(ScalpingTimeframe), symbol);  // Added symbol
+                return;  // Exit to avoid conflicting signals
+            }
+        }
+
+        // Enhanced exit condition check
+        if (CheckExitCondition(rsi, symbol))  // Add the symbol parameter
+        {
+            CloseAllPositions(symbol);
+            LogMessage("Scalping Exit Signal - Closing Positions on " + EnumToString(ScalpingTimeframe), symbol);
+            return;
+        }
+    }
+
+    // Continue with existing trend strategy
     if (UseTrendStrategy && shouldRecalculateSignals)
     {
         int symbolIdx = GetSymbolIndex(symbol);
@@ -815,9 +863,9 @@ int MonitorOrderFlow(string symbol)
 //+------------------------------------------------------------------+
 //| Calculate MACD Values                                            |
 //+------------------------------------------------------------------+
-void CalculateMACD(string symbol, double &macdMain, double &macdSignal, double &macdHistogram, int shift = 0)
+void CalculateMACD(string symbol, double &macdMain, double &macdSignal, double &macdHistogram, int shift = 0, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT)
 {
-    int handle = iMACD(symbol, Timeframe, MACD_Fast, MACD_Slow, MACD_Signal, PRICE_CLOSE);
+    int handle = iMACD(symbol, timeframe, MACD_Fast, MACD_Slow, MACD_Signal, PRICE_CLOSE);
     if(handle == INVALID_HANDLE)
     {
         Print("Error creating MACD indicator handle");
@@ -1717,6 +1765,25 @@ void ProcessSymbol(string symbol)
     if(CheckDrawdown(symbol, MaxDrawdownPercent, accountBalance, accountEquity))
         return;
 
+    // Add volatility check for scalping
+    if (UseScalpingStrategy)
+    {
+        double atr = CalculateATR(symbol, 14, Timeframe);
+        double avgAtr = 0;
+        for(int i = 1; i <= 20; i++)
+        {
+            avgAtr += CalculateATR(symbol, 14, Timeframe, i);
+        }
+        avgAtr /= 20;
+
+        // Only allow scalping in normal volatility conditions
+        if (atr > avgAtr * 1.5)
+        {
+            Print("Scalping disabled due to high volatility: ATR=", atr, " AvgATR=", avgAtr);
+            return;
+        }
+    }
+
     // Execute trading logic for this symbol
     ExecuteTradingLogic(symbol);
 }
@@ -1839,5 +1906,21 @@ bool CheckConsecutiveSignals(string symbol, int requiredBars, bool isBuySignal)
     }
     
     return (confirmedBars >= requiredBars);
+}
+
+// Add this helper function to close all positions
+void CloseAllPositions(string symbol)
+{
+    for (int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if (PositionSelectByTicket(ticket))
+        {
+            if (PositionGetString(POSITION_SYMBOL) == symbol)
+            {
+                trade.PositionClose(ticket);
+            }
+        }
+    }
 }
 
