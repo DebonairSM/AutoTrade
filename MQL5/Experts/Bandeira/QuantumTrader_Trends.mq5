@@ -22,6 +22,12 @@ const int LOG_INTERVAL_CALCULATIONS = 300;  // 5 minutes between calculation log
 const int LOG_INTERVAL_ANALYSIS = 900;      // 15 minutes between analysis logs
 const int LOG_INTERVAL_SIGNALS = 600;       // 10 minutes between signal logs
 
+// Add these constants at the top of the file after other constants
+const int US_MARKET_OPEN_HOUR = 9;     // 9:30 AM EST
+const int US_MARKET_OPEN_MINUTE = 30;
+const int US_MARKET_CLOSE_HOUR = 16;    // 4:00 PM EST
+const int US_MARKET_CLOSE_MINUTE = 0;
+
 //+------------------------------------------------------------------+
 //| Input parameters                                                 |
 //+------------------------------------------------------------------+
@@ -174,6 +180,16 @@ int OnInit()
                     continue;
                 }
                 
+                // Log whether symbol is stock or not
+                if(IsStockSymbol(symbol))
+                {
+                    Print("Added stock symbol (US Market Hours): ", symbol);
+                }
+                else
+                {
+                    Print("Added non-stock symbol (24/5): ", symbol);
+                }
+                
                 AddTradingSymbol(symbol, count);
                 count++;
                 Print("Added symbol for trading: ", symbol);
@@ -282,7 +298,7 @@ void ExecuteTradingLogic(string symbol)
             // Enhanced buy condition check with all confirmations
             if (CheckBuyCondition(rsi, macdMain, macdSignal, symbol))  // Added symbol
             {
-                ExecuteBuyTrade(lotSize, ScalpingStopLoss, ScalpingTakeProfit, symbol);  // Added symbol
+                ExecuteBuyTrade(lotSize, symbol);  // Added symbol
                 LogMessage("Scalping Buy Signal Executed on " + EnumToString(ScalpingTimeframe), symbol);  // Added symbol
                 return;  // Exit to avoid conflicting signals
             }
@@ -290,7 +306,7 @@ void ExecuteTradingLogic(string symbol)
             // Enhanced sell condition check with all confirmations
             if (CheckSellCondition(rsi, macdMain, macdSignal, symbol))  // Added symbol
             {
-                ExecuteSellTrade(lotSize, ScalpingStopLoss, ScalpingTakeProfit, symbol);  // Added symbol
+                ExecuteSellTrade(lotSize, symbol);  // Added symbol
                 LogMessage("Scalping Sell Signal Executed on " + EnumToString(ScalpingTimeframe), symbol);  // Added symbol
                 return;  // Exit to avoid conflicting signals
             }
@@ -1207,7 +1223,7 @@ int IdentifyTrendPattern(string symbol)
     }
 
     // 6. Log detailed analysis
-    string analysis = "=== Trend Pattern Analysis ===\n";
+    string analysis = "=== Trend Pattern Analysis (Timeframe: " + EnumToString(Timeframe) + ") ===\n";
     analysis += "Bullish Score: " + DoubleToString(score.bullish, 2) + "\n";
     analysis += "Bearish Score: " + DoubleToString(score.bearish, 2) + "\n";
     analysis += "Reasons:\n";
@@ -1755,6 +1771,17 @@ void ValidateInputs(string symbol)
 //+------------------------------------------------------------------+
 void ProcessSymbol(string symbol)
 {
+    // Check if symbol is a stock and if we're within market hours
+    if(IsStockSymbol(symbol) && !IsWithinUSMarketHours())
+    {
+        LogMessage("Skipping " + symbol + " - Outside US market hours", symbol);
+        return;
+    }
+
+    // Check if within trading hours (for non-stock symbols)
+    if(!IsStockSymbol(symbol) && !IsWithinTradingHours(TradingStartTime, TradingEndTime))
+        return;
+
     // Check if within trading hours
     if(!IsWithinTradingHours(TradingStartTime, TradingEndTime))
         return;
@@ -1922,5 +1949,33 @@ void CloseAllPositions(string symbol)
             }
         }
     }
+}
+
+// Add this function to check if a symbol is a stock
+bool IsStockSymbol(string symbol)
+{
+    // Check for common stock exchange suffixes
+    return StringFind(symbol, ".NYSE") >= 0 || 
+           StringFind(symbol, ".NAS") >= 0 || 
+           StringFind(symbol, ".LSE") >= 0;
+}
+
+// Add this function to check US market hours
+bool IsWithinUSMarketHours()
+{
+    datetime serverTime = TimeCurrent();
+    MqlDateTime dt;
+    TimeToStruct(serverTime, dt);
+    
+    // Check if it's a weekday (1-5, Monday-Friday)
+    if(dt.day_of_week <= 0 || dt.day_of_week > 5)
+        return false;
+        
+    // Convert current time to minutes since midnight
+    int currentMinutes = dt.hour * 60 + dt.min;
+    int openMinutes = US_MARKET_OPEN_HOUR * 60 + US_MARKET_OPEN_MINUTE;
+    int closeMinutes = US_MARKET_CLOSE_HOUR * 60 + US_MARKET_CLOSE_MINUTE;
+    
+    return (currentMinutes >= openMinutes && currentMinutes < closeMinutes);
 }
 

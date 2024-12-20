@@ -5,15 +5,15 @@
 #property version   "1.01"
 
 // Add these constants at the top of the file
-const int SCALP_RSI_PERIOD = 7;           // Shorter RSI period for scalping
-const int SCALP_MACD_FAST = 9;            // Faster MACD settings
-const int SCALP_MACD_SLOW = 21;
-const int SCALP_MACD_SIGNAL = 6;
-const int SCALP_EMA_SHORT = 9;            // EMA periods for trend confirmation
-const int SCALP_EMA_MEDIUM = 21;
-const int SCALP_EMA_LONG = 50;
-const int VOLUME_LOOKBACK = 20;           // For RVOL calculation
-const double MIN_RVOL = 1.5;              // Minimum relative volume
+const int SCALP_RSI_PERIOD = 5;           // Even shorter RSI period
+const int SCALP_MACD_FAST = 5;            // More aggressive MACD settings
+const int SCALP_MACD_SLOW = 13;
+const int SCALP_MACD_SIGNAL = 4;
+const int SCALP_EMA_SHORT = 5;            // Shorter EMA periods
+const int SCALP_EMA_MEDIUM = 13;
+const int SCALP_EMA_LONG = 34;
+const int VOLUME_LOOKBACK = 10;           // Shorter volume lookback
+const double MIN_RVOL = 1.2;              // Lower volume threshold
 
 // Logging utility
 void LogMessage(string message, string symbol) {
@@ -35,33 +35,52 @@ void LogError(int errorCode, string context) {
 double CalculateLotSize(double riskPercentage, double stopLossPips, string symbol) {
     double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
     double riskAmount = accountBalance * (riskPercentage / 100.0);
+    
+    // Get point value and calculate pip value
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
     double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+    double pipValue = (tickValue * point) / tickSize;
+    
+    // Calculate potential loss in account currency
+    double potentialLoss = stopLossPips * pipValue;
     
     // Prevent division by zero
-    if(stopLossPips <= 0 || tickValue <= 0) {
-        LogMessage("Warning: Invalid stop loss or tick value. Using minimum lot size.", symbol);
+    if(potentialLoss <= 0) {
+        LogMessage("Warning: Invalid potential loss calculation. Using minimum lot size.", symbol);
         return SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
     }
     
-    double lotSize = riskAmount / (stopLossPips * tickValue);
+    // Calculate lot size based on risk amount and potential loss
+    double lotSize = riskAmount / potentialLoss;
+    
+    // Ensure minimum viable lot size
+    if (lotSize < SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN) || lotSize <= 0) {
+        LogMessage("Warning: Calculated lot size too small. Using minimum lot size.", symbol);
+        lotSize = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    }
     
     // Get symbol lot limits
     double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
     double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
     double lotStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
     
-    // Add a hard cap on maximum lot size (adjust this value based on your broker's limits)
-    const double HARD_CAP_MAX_LOTS = 50.0;  // Added safety limit
-    maxLot = MathMin(maxLot, HARD_CAP_MAX_LOTS);
+    // Add a dynamic maximum lot size based on account balance
+    double dynamicMaxLot = MathMax(minLot, accountBalance / (50000 * lotStep)); // Ensure at least minLot
+    double HARD_CAP_MAX_LOTS = MathMin(maxLot, dynamicMaxLot);
     
     // Normalize lot size to valid range
-    lotSize = MathMin(maxLot, MathMax(minLot, lotSize));
+    lotSize = MathMin(HARD_CAP_MAX_LOTS, MathMax(minLot, lotSize));
     lotSize = NormalizeDouble(lotSize / lotStep, 0) * lotStep;
     
-    LogMessage("Risk Amount: " + DoubleToString(riskAmount, 2) + 
-              " Account Balance: " + DoubleToString(accountBalance, 2) +  
-              " Tick Value: " + DoubleToString(tickValue, 6), symbol);
-    LogMessage("Calculated Lot Size: " + DoubleToString(lotSize, 2), symbol);
+    LogMessage("Risk Calculation:" +
+              "\nAccount Balance: " + DoubleToString(accountBalance, 2) +
+              "\nRisk Amount: " + DoubleToString(riskAmount, 2) +
+              "\nPip Value: " + DoubleToString(pipValue, 6) +
+              "\nPotential Loss: " + DoubleToString(potentialLoss, 2) +
+              "\nDynamic Max Lot: " + DoubleToString(dynamicMaxLot, 2) +
+              "\nFinal Lot Size: " + DoubleToString(lotSize, 2), symbol);
+              
     return lotSize;
 }
 
@@ -90,10 +109,10 @@ bool CheckBuyCondition(double rsi, double macdMain, double macdSignal, string sy
               "\nMACD Signal=" + DoubleToString(macdSignal, 2) +
               "\nRVOL=" + DoubleToString(rvol, 2), symbol);
     
-    bool momentumConfirmation = (rsi > 30 && rsi < 70 && macdMain > macdSignal);
-    bool trendConfirmation = (emaShort > emaMedium);
+    bool momentumConfirmation = (rsi > 20 && rsi < 80 && macdMain > macdSignal);
+    bool trendConfirmation = (emaShort > emaMedium * 0.995);
     bool volumeConfirmation = (rvol >= MIN_RVOL);
-    bool priceAction = (SymbolInfoDouble(symbol, SYMBOL_ASK) < bbUpper);
+    bool priceAction = (SymbolInfoDouble(symbol, SYMBOL_ASK) < bbUpper * 1.005);
     
     if (momentumConfirmation && trendConfirmation && volumeConfirmation && priceAction) {
         LogMessage("Buy condition met with all confirmations.", symbol);
@@ -133,10 +152,10 @@ bool CheckSellCondition(double rsi, double macdMain, double macdSignal, string s
               "\nMACD Signal=" + DoubleToString(macdSignal, 2) +
               "\nRVOL=" + DoubleToString(rvol, 2), symbol);
     
-    bool momentumConfirmation = (rsi > 30 && rsi < 70 && macdMain < macdSignal);
-    bool trendConfirmation = (emaShort < emaMedium);
+    bool momentumConfirmation = (rsi > 20 && rsi < 80 && macdMain < macdSignal);
+    bool trendConfirmation = (emaShort < emaMedium * 1.005);
     bool volumeConfirmation = (rvol >= MIN_RVOL);
-    bool priceAction = (SymbolInfoDouble(symbol, SYMBOL_BID) > bbLower);
+    bool priceAction = (SymbolInfoDouble(symbol, SYMBOL_BID) > bbLower * 0.995);
     
     if (momentumConfirmation && trendConfirmation && volumeConfirmation && priceAction) {
         LogMessage("Sell condition met with all confirmations.", symbol);
@@ -186,33 +205,44 @@ void CalculateBollingerBands(double &upper, double &middle, double &lower) {
 }
 
 // Function to execute a buy trade
-void ExecuteBuyTrade(double lotSize, double stopLossPips, double takeProfitPips, string symbol) {
-    MqlTradeRequest request = {};
-    MqlTradeResult result = {};
-    
-    // Symbol properties
+void ExecuteBuyTrade(double lotSize, string symbol) {
+    // Calculate dynamic SL/TP first
+    double stopLossPips, takeProfitPips;
+    CalculateDynamicSLTP(stopLossPips, takeProfitPips, symbol, 2.0);
+
+    // Get symbol properties
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
     double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
     double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
     double lotStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-    double minStopLevel = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(symbol, SYMBOL_POINT);
-
-    // Cap and normalize lot size
+    int stopLevel = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    
+    // Normalize lot size
     lotSize = MathMin(maxLot, MathMax(minLot, lotSize));
     lotSize = NormalizeDouble(lotSize / lotStep, 0) * lotStep;
 
-    // Validate stop-loss and take-profit
+    // Get current price
     double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
-    double sl = price - stopLossPips * SymbolInfoDouble(symbol, SYMBOL_POINT);
-    double tp = price + takeProfitPips * SymbolInfoDouble(symbol, SYMBOL_POINT);
+    
+    // Ensure minimum stop level is respected
+    stopLossPips = MathMax(stopLossPips, stopLevel * point);
+    takeProfitPips = MathMax(takeProfitPips, stopLevel * point);
+    
+    // Calculate SL/TP prices with proper point multiplication
+    double sl = price - (stopLossPips / point) * point;
+    double tp = price + (takeProfitPips / point) * point;
 
-    if (stopLossPips < minStopLevel || takeProfitPips < minStopLevel) {
-        LogMessage("Adjusting stop-loss and take-profit to minimum stop level: " +
-                   DoubleToString(minStopLevel / SymbolInfoDouble(symbol, SYMBOL_POINT), 2) + " pips.", symbol);
-        stopLossPips = MathMax(stopLossPips, minStopLevel / SymbolInfoDouble(symbol, SYMBOL_POINT));
-        takeProfitPips = MathMax(takeProfitPips, minStopLevel / SymbolInfoDouble(symbol, SYMBOL_POINT));
-    }
+    // Log trade parameters before execution
+    LogMessage("Trade parameters:" +
+              "\nType: BUY" +
+              "\nLot Size: " + DoubleToString(lotSize, 2) +
+              "\nStop Loss: " + DoubleToString(stopLossPips/point, 2) + " pips" +
+              "\nTake Profit: " + DoubleToString(takeProfitPips/point, 2) + " pips" +
+              "\nRisk/Reward: 1:" + DoubleToString(takeProfitPips/stopLossPips, 2), symbol);
 
-    // Prepare trade request
+    MqlTradeRequest request = {};
+    MqlTradeResult result = {};
+    
     request.action = TRADE_ACTION_DEAL;
     request.symbol = symbol;
     request.volume = lotSize;
@@ -222,7 +252,7 @@ void ExecuteBuyTrade(double lotSize, double stopLossPips, double takeProfitPips,
     request.tp = tp;
     request.deviation = 3;
     request.comment = "RSI-MACD Buy";
-    request.type_filling = ORDER_FILLING_IOC;  // Use IOC for compatibility
+    request.type_filling = ORDER_FILLING_FOK;  // Change to FOK for better execution
 
     // Log trade parameters
     LogMessage("Executing Buy Trade: Price=" + DoubleToString(price, _Digits) +
@@ -235,38 +265,63 @@ void ExecuteBuyTrade(double lotSize, double stopLossPips, double takeProfitPips,
         LogError(GetLastError(), "Buy Trade");
     } else {
         LogMessage("Buy Trade Executed: Ticket=" + IntegerToString(result.deal), symbol);
+        
+        // ASCII Art for Buy
+        Print("\n");
+        Print("╔══════════════════════════════════════╗");
+        Print("║          🚀 LONG POSITION 🚀         ║");
+        Print("║----------------------------------------║");
+        Print("║    TO THE MOON!     |    ^    |      ║");
+        Print("║                      |   / \\   |      ║");
+        Print("║                      |  /   \\  |      ║");
+        Print("║                      | /     \\ |      ║");
+        Print("║                      |/       \\|      ║");
+        Print("╚══════════════════════════════════════╝");
+        Print("\n");
     }
 }
 
 
 // Function to execute a sell trade
-void ExecuteSellTrade(double lotSize, double stopLossPips, double takeProfitPips, string symbol) {
-    MqlTradeRequest request = {};
-    MqlTradeResult result = {};
-    
-    // Symbol properties
+void ExecuteSellTrade(double lotSize, string symbol) {
+    // Calculate dynamic SL/TP first
+    double stopLossPips, takeProfitPips;
+    CalculateDynamicSLTP(stopLossPips, takeProfitPips, symbol, 2.0);
+
+    // Get symbol properties
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
     double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
     double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
     double lotStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-    double minStopLevel = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(symbol, SYMBOL_POINT);
-
-    // Cap and normalize lot size
+    int stopLevel = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    
+    // Normalize lot size
     lotSize = MathMin(maxLot, MathMax(minLot, lotSize));
     lotSize = NormalizeDouble(lotSize / lotStep, 0) * lotStep;
 
-    // Validate stop-loss and take-profit
+    // Get current price
     double price = SymbolInfoDouble(symbol, SYMBOL_BID);
-    double sl = price + stopLossPips * SymbolInfoDouble(symbol, SYMBOL_POINT);
-    double tp = price - takeProfitPips * SymbolInfoDouble(symbol, SYMBOL_POINT);
+    
+    // Ensure minimum stop level is respected
+    stopLossPips = MathMax(stopLossPips, stopLevel * point);
+    takeProfitPips = MathMax(takeProfitPips, stopLevel * point);
+    
+    // Calculate SL/TP prices with proper point multiplication
+    double sl = price + (stopLossPips / point) * point;
+    double tp = price - (takeProfitPips / point) * point;
 
-    if (stopLossPips < minStopLevel || takeProfitPips < minStopLevel) {
-        LogMessage("Adjusting stop-loss and take-profit to minimum stop level: " +
-                   DoubleToString(minStopLevel / SymbolInfoDouble(symbol, SYMBOL_POINT), 2) + " pips.", symbol);
-        stopLossPips = MathMax(stopLossPips, minStopLevel / SymbolInfoDouble(symbol, SYMBOL_POINT));
-        takeProfitPips = MathMax(takeProfitPips, minStopLevel / SymbolInfoDouble(symbol, SYMBOL_POINT));
-    }
+    // Log trade parameters before execution
+    LogMessage("Trade parameters:" +
+              "\nType: SELL" +
+              "\nLot Size: " + DoubleToString(lotSize, 2) +
+              "\nStop Loss: " + DoubleToString(stopLossPips/point, 2) + " pips" +
+              "\nTake Profit: " + DoubleToString(takeProfitPips/point, 2) + " pips" +
+              "\nRisk/Reward: 1:" + DoubleToString(takeProfitPips/stopLossPips, 2), symbol);
 
     // Prepare trade request
+    MqlTradeRequest request = {};
+    MqlTradeResult result = {};
+    
     request.action = TRADE_ACTION_DEAL;
     request.symbol = symbol;
     request.volume = lotSize;
@@ -276,7 +331,7 @@ void ExecuteSellTrade(double lotSize, double stopLossPips, double takeProfitPips
     request.tp = tp;
     request.deviation = 3;
     request.comment = "RSI-MACD Sell";
-    request.type_filling = ORDER_FILLING_IOC;  // Use IOC for compatibility
+    request.type_filling = ORDER_FILLING_FOK;  // Change to FOK for better execution
 
     // Log trade parameters
     LogMessage("Executing Sell Trade: Price=" + DoubleToString(price, _Digits) +
@@ -289,6 +344,19 @@ void ExecuteSellTrade(double lotSize, double stopLossPips, double takeProfitPips
         LogError(GetLastError(), "Sell Trade");
     } else {
         LogMessage("Sell Trade Executed: Ticket=" + IntegerToString(result.deal), symbol);
+        
+        // ASCII Art for Sell
+        Print("\n");
+        Print("╔══════════════════════════════════════╗");
+        Print("║          🐻 SHORT POSITION 🐻        ║");
+        Print("║----------------------------------------║");
+        Print("║    RIDING THE WAVE    |\\       /|    ║");
+        Print("║                       | \\     / |    ║");
+        Print("║                       |  \\   /  |    ║");
+        Print("║                       |   \\ /   |    ║");
+        Print("║                       |    v    |    ║");
+        Print("╚══════════════════════════════════════╝");
+        Print("\n");
     }
 }
 
@@ -311,10 +379,10 @@ bool CheckExitCondition(double rsi, string symbol) {
               " MACD Histogram Change=" + DoubleToString(macdHistogram, 6), symbol);
               
     // Exit if RSI reaches extreme levels or MACD shows momentum reversal
-    if (rsi > 70 || rsi < 30 || MathAbs(macdHistogram) < 0.0001) {
+    if (rsi > 80 || rsi < 20 || MathAbs(macdHistogram) < 0.00005) {
         LogMessage("Exit condition met: " + 
-                  (rsi > 70 ? "RSI Overbought" : 
-                   rsi < 30 ? "RSI Oversold" : 
+                  (rsi > 80 ? "RSI Overbought" : 
+                   rsi < 20 ? "RSI Oversold" : 
                    "MACD Momentum Reversal"), symbol);
         return true;
     }
@@ -322,3 +390,38 @@ bool CheckExitCondition(double rsi, string symbol) {
     LogMessage("Exit condition not met.", symbol);
     return false;
 }
+
+void CalculateDynamicSLTP(double &stopLossPips, double &takeProfitPips, string symbol, double riskRewardRatio = 2.0) {
+    // Get ATR for dynamic SL/TP
+    int atrPeriod = 14;  // Standard ATR period
+    double atrValues[];
+    ArraySetAsSeries(atrValues, true);
+    int atrHandle = iATR(symbol, PERIOD_CURRENT, atrPeriod);
+
+    if (atrHandle == INVALID_HANDLE) {
+        LogMessage("Error creating ATR indicator for SL/TP calculation", symbol);
+        stopLossPips = 10;  // Default fallback
+        takeProfitPips = 20; // Default fallback
+        return;
+    }
+
+    if (CopyBuffer(atrHandle, 0, 0, 1, atrValues) < 0) {
+        LogMessage("Error copying ATR values for SL/TP calculation", symbol);
+        stopLossPips = 10;  // Default fallback
+        takeProfitPips = 20; // Default fallback
+        IndicatorRelease(atrHandle);
+        return;
+    }
+
+    double atr = atrValues[0];  // Current ATR
+    IndicatorRelease(atrHandle);
+
+    // Calculate SL and TP
+    stopLossPips = atr * 1.5;  // Example multiplier
+    takeProfitPips = stopLossPips * riskRewardRatio;
+
+    LogMessage("Dynamic SL/TP calculated: ATR=" + DoubleToString(atr, 5) +
+               " SL=" + DoubleToString(stopLossPips, 2) + 
+               " TP=" + DoubleToString(takeProfitPips, 2), symbol);
+}
+
