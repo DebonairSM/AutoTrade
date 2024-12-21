@@ -1064,7 +1064,7 @@ void LogMarketAnalysis(const string symbol, const MarketAnalysisData& data,
 void LogTradeRejection(const string reason, string symbol, double currentPrice, double adx, double rsi, 
                       double emaShort, double emaMedium, double emaLong, 
                       double adxThreshold, double rsiUpperThreshold, double rsiLowerThreshold,
-                      bool useDOMAnalysis)
+                      bool useDOMAnalysis, ENUM_TIMEFRAMES timeframe) // Add timeframe parameter
 {
     string log_message = StringFormat(
         "\n=== Trade Rejection Analysis [%s] ===\n"
@@ -1088,8 +1088,7 @@ void LogTradeRejection(const string reason, string symbol, double currentPrice, 
         emaLong
     );
 
-    // Add Trend Pattern Analysis with emoji delimiter
-    log_message += "\n=== 📈 Trend Pattern Analysis (Timeframe: PERIOD_H1) ===\n";
+    log_message += StringFormat("\n=== 📈 Trend Pattern Analysis (Timeframe: %s) ===\n", EnumToString(timeframe)); // Use parameter
     
     // 1. EMA Analysis
     log_message += "EMA Analysis:\n";

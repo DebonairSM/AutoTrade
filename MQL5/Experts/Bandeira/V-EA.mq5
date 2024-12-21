@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| QuantumTraderAI_TrendFollowing.mq5                               |
+//| V-EA.mq5                               |
 //| VSol Software                                                    |
 //+------------------------------------------------------------------+
 
@@ -8,8 +8,8 @@
 #property strict
 
 #include <Trade/Trade.mqh>
-#include <Bandeira/Utility.mqh>
-#include <Bandeira/RSI_MACD_Scalping.mqh>
+#include <Bandeira/VTrends.mqh>
+#include <Bandeira/VScalping.mqh>
 
 // Define threshold values
 input double ADX_THRESHOLD = 20.0;
@@ -319,7 +319,6 @@ void ExecuteTradingLogic(string symbol)
         Print("💰 Scalping Logic End for Symbol: ", symbol, " 💰");
     }
 
-    // Continue with existing trend strategy
     if (UseTrendStrategy)
     {
         int symbolIdx = GetSymbolIndex(symbol);
@@ -489,7 +488,7 @@ void ExecuteTradingLogic(string symbol)
             {
                 LogTradeRejection("No order flow signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
+                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
                 lastLogTime = TimeCurrent(); // Update last log time
             }
         }
@@ -499,7 +498,7 @@ void ExecuteTradingLogic(string symbol)
             {
                 LogTradeRejection("No trend signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
+                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
                 lastLogTime = TimeCurrent();
             }
         }
@@ -509,7 +508,7 @@ void ExecuteTradingLogic(string symbol)
             {
                 LogTradeRejection("No RSI/MACD signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
+                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
                 lastLogTime = TimeCurrent();
             }
         }
@@ -519,7 +518,7 @@ void ExecuteTradingLogic(string symbol)
             {
                 LogTradeRejection("No pattern signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
+                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
                 lastLogTime = TimeCurrent();
             }
         }
@@ -762,7 +761,7 @@ int IdentifyTrendPattern(string symbol)
     }
 
     // 6. Log detailed analysis
-    string analysis = "=== Trend Pattern Analysis (Timeframe: " + EnumToString(Timeframe) + ") ===\n";
+    string analysis = "🔍 Trend Pattern Analysis for " + symbol + " (Timeframe: " + EnumToString(Timeframe) + ") ===\n";
     analysis += "Bullish Score: " + DoubleToString(score.bullish, 2) + "\n";
     analysis += "Bearish Score: " + DoubleToString(score.bearish, 2) + "\n";
     analysis += "Reasons:\n";
