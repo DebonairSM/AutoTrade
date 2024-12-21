@@ -945,7 +945,7 @@ void LogMarketAnalysis(const string symbol, const MarketAnalysisData& data,
     
     // Create base analysis message with emoji delimiter
     string analysis = StringFormat(
-        "\n=== 📊 Trend Pattern Analysis (Timeframe: %s) ===\n"
+        "\n=== 📈 Trend Pattern Analysis (Timeframe: %s) ===\n"
         "Time: %s\n"
         "Symbol: %s\n"
         "Current Price: %.5f\n\n"
@@ -970,6 +970,9 @@ void LogMarketAnalysis(const string symbol, const MarketAnalysisData& data,
         data.macdMain, data.macdSignal, data.macdHistogram,
         data.atr
     );
+
+    // Add ending delimiter
+    analysis += "\n=== 📈 End of Trend Pattern Analysis ===\n";
     
     // Add DOM analysis if enabled
     if (useDOMAnalysis)
@@ -1085,7 +1088,7 @@ void LogTradeRejection(const string reason, string symbol, double currentPrice, 
     );
 
     // Add Trend Pattern Analysis with emoji delimiter
-    log_message += "\n=== 📊 Trend Pattern Analysis (Timeframe: PERIOD_H1) ===\n";
+    log_message += "\n=== 📈 Trend Pattern Analysis (Timeframe: PERIOD_H1) ===\n";
     
     // 1. EMA Analysis
     log_message += "EMA Analysis:\n";
@@ -1177,6 +1180,9 @@ void LogTradeRejection(const string reason, string symbol, double currentPrice, 
     log_message += reason + "\n";
     log_message += "The trade setup does not meet all the required criteria for entry at this time.\n";
     log_message += "===================\n";
+
+    // Add ending delimiter
+    log_message += "\n=== 📈 End of Trend Pattern Analysis ===\n";
 
     // Print and save to file
     Print(log_message);

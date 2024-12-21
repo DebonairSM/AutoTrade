@@ -218,8 +218,14 @@ void OnTick()
         // Skip invalid symbols
         if(symbol == "" || !SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE))
             continue;
-            
+        
+        // Add start delimiter with emoji
+        Print("🚀🚀🚀 Start Processing Symbol: ", symbol, " 🚀🚀🚀");
+        
         ProcessSymbol(symbol, UseScalpingStrategy, MaxDrawdownPercent, ScalpingRiskPercent, ScalpingStopLoss, Timeframe, TradingStartTime, TradingEndTime);
+        
+        // Add end delimiter with emoji
+        Print("🏁🏁🏁 End Processing Symbol: ", symbol, " 🏁🏁🏁");
         
         // Add delay between symbol processing to avoid overloading
         Sleep(100);  // 100ms delay
@@ -268,6 +274,9 @@ void ExecuteTradingLogic(string symbol)
     // Check for scalping opportunities first
     if (UseScalpingStrategy)
     {
+        // Add start delimiter for scalping logic
+        Print("💥💸 Scalping Logic Start for Symbol: ", symbol, " 💸💥");
+
         // Calculate RSI using scalping-specific period
         double rsi = CalculateRSI(symbol, SCALP_RSI_PERIOD, ScalpingTimeframe);
         
@@ -306,6 +315,9 @@ void ExecuteTradingLogic(string symbol)
             LogGenericMessage("Scalping Exit Signal - Closing Positions on " + EnumToString(ScalpingTimeframe), symbol);
             return;
         }
+
+        // Add end delimiter for scalping logic
+        Print("🔚💰 Scalping Logic End for Symbol: ", symbol, " 💰🔚");
     }
 
     // Continue with existing trend strategy
