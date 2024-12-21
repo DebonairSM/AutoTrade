@@ -4,6 +4,11 @@
 #property copyright "Your Name"
 #property version   "1.01"
 
+#include <Trade/Trade.mqh>
+
+// Add CTrade object
+CTrade tradeScalp;
+
 // Add these constants at the top of the file
 const int SCALP_RSI_PERIOD = 5;           // Even shorter RSI period
 const int SCALP_MACD_FAST = 5;            // More aggressive MACD settings
@@ -204,11 +209,26 @@ void CalculateBollingerBands(double &upper, double &middle, double &lower) {
     IndicatorRelease(bb_handle);
 }
 
+// Add this helper function at the top of the file
+ENUM_ORDER_TYPE_FILLING GetSupportedFillingMode(string symbol)
+{
+    // Get the filling modes supported by the symbol
+    uint filling = (uint)SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
+    
+    // Check supported filling modes in order of preference
+    if((filling & SYMBOL_FILLING_FOK) == SYMBOL_FILLING_FOK)
+        return ORDER_FILLING_FOK;
+    if((filling & SYMBOL_FILLING_IOC) == SYMBOL_FILLING_IOC)
+        return ORDER_FILLING_IOC;
+    
+    return ORDER_FILLING_RETURN; // Default if nothing else is supported
+}
+
 // Function to execute a buy trade
-void ExecuteBuyTrade(double lotSize, string symbol) {
+void ExecuteBuyTrade(double lotSize, string symbol, double riskRewardRatio) {
     // Calculate dynamic SL/TP first
     double stopLossPips, takeProfitPips;
-    CalculateDynamicSLTP(stopLossPips, takeProfitPips, symbol, 2.0);
+    CalculateDynamicSLTP(stopLossPips, takeProfitPips, symbol, riskRewardRatio);
 
     // Get symbol properties
     double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
@@ -240,31 +260,14 @@ void ExecuteBuyTrade(double lotSize, string symbol) {
               "\nTake Profit: " + DoubleToString(takeProfitPips/point, 2) + " pips" +
               "\nRisk/Reward: 1:" + DoubleToString(takeProfitPips/stopLossPips, 2), symbol);
 
-    MqlTradeRequest request = {};
-    MqlTradeResult result = {};
+    // Use the trade object instead of direct OrderSend
+    tradeScalp.SetTypeFilling(GetSupportedFillingMode(symbol));
+    tradeScalp.Buy(lotSize, symbol, 0, sl, tp, "RSI-MACD Buy");
     
-    request.action = TRADE_ACTION_DEAL;
-    request.symbol = symbol;
-    request.volume = lotSize;
-    request.type = ORDER_TYPE_BUY;
-    request.price = price;
-    request.sl = sl;
-    request.tp = tp;
-    request.deviation = 3;
-    request.comment = "RSI-MACD Buy";
-    request.type_filling = ORDER_FILLING_FOK;  // Change to FOK for better execution
-
-    // Log trade parameters
-    LogMessage("Executing Buy Trade: Price=" + DoubleToString(price, _Digits) +
-               " LotSize=" + DoubleToString(lotSize, 2) + 
-               " SL=" + DoubleToString(sl, _Digits) + 
-               " TP=" + DoubleToString(tp, _Digits), symbol);
-
-    bool success = OrderSend(request, result);
-    if (!success) {
-        LogError(GetLastError(), "Buy Trade");
+    if(tradeScalp.ResultRetcode() != TRADE_RETCODE_DONE) {
+        LogError(tradeScalp.ResultRetcode(), "Buy Trade");
     } else {
-        LogMessage("Buy Trade Executed: Ticket=" + IntegerToString(result.deal), symbol);
+        LogMessage("Buy Trade Executed: Ticket=" + IntegerToString(tradeScalp.ResultOrder()), symbol);
         
         // ASCII Art for Buy
         Print("\n");
@@ -283,10 +286,10 @@ void ExecuteBuyTrade(double lotSize, string symbol) {
 
 
 // Function to execute a sell trade
-void ExecuteSellTrade(double lotSize, string symbol) {
+void ExecuteSellTrade(double lotSize, string symbol, double riskRewardRatio) {
     // Calculate dynamic SL/TP first
     double stopLossPips, takeProfitPips;
-    CalculateDynamicSLTP(stopLossPips, takeProfitPips, symbol, 2.0);
+    CalculateDynamicSLTP(stopLossPips, takeProfitPips, symbol, riskRewardRatio);
 
     // Get symbol properties
     double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
@@ -318,32 +321,14 @@ void ExecuteSellTrade(double lotSize, string symbol) {
               "\nTake Profit: " + DoubleToString(takeProfitPips/point, 2) + " pips" +
               "\nRisk/Reward: 1:" + DoubleToString(takeProfitPips/stopLossPips, 2), symbol);
 
-    // Prepare trade request
-    MqlTradeRequest request = {};
-    MqlTradeResult result = {};
+    // Use the trade object instead of direct OrderSend
+    tradeScalp.SetTypeFilling(GetSupportedFillingMode(symbol));
+    tradeScalp.Sell(lotSize, symbol, 0, sl, tp, "RSI-MACD Sell");
     
-    request.action = TRADE_ACTION_DEAL;
-    request.symbol = symbol;
-    request.volume = lotSize;
-    request.type = ORDER_TYPE_SELL;
-    request.price = price;
-    request.sl = sl;
-    request.tp = tp;
-    request.deviation = 3;
-    request.comment = "RSI-MACD Sell";
-    request.type_filling = ORDER_FILLING_FOK;  // Change to FOK for better execution
-
-    // Log trade parameters
-    LogMessage("Executing Sell Trade: Price=" + DoubleToString(price, _Digits) +
-               " LotSize=" + DoubleToString(lotSize, 2) + 
-               " SL=" + DoubleToString(sl, _Digits) + 
-               " TP=" + DoubleToString(tp, _Digits), symbol);
-
-    bool success = OrderSend(request, result);
-    if (!success) {
-        LogError(GetLastError(), "Sell Trade");
+    if(tradeScalp.ResultRetcode() != TRADE_RETCODE_DONE) {
+        LogError(tradeScalp.ResultRetcode(), "Sell Trade");
     } else {
-        LogMessage("Sell Trade Executed: Ticket=" + IntegerToString(result.deal), symbol);
+        LogMessage("Sell Trade Executed: Ticket=" + IntegerToString(tradeScalp.ResultOrder()), symbol);
         
         // ASCII Art for Sell
         Print("\n");

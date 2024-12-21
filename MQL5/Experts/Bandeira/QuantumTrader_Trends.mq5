@@ -22,12 +22,6 @@ const int LOG_INTERVAL_CALCULATIONS = 300;  // 5 minutes between calculation log
 const int LOG_INTERVAL_ANALYSIS = 900;      // 15 minutes between analysis logs
 const int LOG_INTERVAL_SIGNALS = 600;       // 10 minutes between signal logs
 
-// Add these constants at the top of the file after other constants
-const int US_MARKET_OPEN_HOUR = 9;     // 9:30 AM EST
-const int US_MARKET_OPEN_MINUTE = 30;
-const int US_MARKET_CLOSE_HOUR = 16;    // 4:00 PM EST
-const int US_MARKET_CLOSE_MINUTE = 0;
-
 //+------------------------------------------------------------------+
 //| Input parameters                                                 |
 //+------------------------------------------------------------------+
@@ -106,7 +100,7 @@ input int MaxSymbolsToTrade = 100;           // Maximum number of symbols to tra
 input group "Scalping Strategy Parameters"
 input ENUM_TIMEFRAMES ScalpingTimeframe = PERIOD_M5;  // Scalping Timeframe
 input bool UseScalpingStrategy = true;        // Enable RSI-MACD Scalping
-input double ScalpingRiskPercent = 1.0;       // Scalping Risk Percentage
+input double ScalpingRiskPercent = 2.0;       // Scalping Risk Percentage
 input double ScalpingStopLoss = 15.0;         // Scalping Stop Loss (pips)
 input double ScalpingTakeProfit = 30.0;       // Scalping Take Profit (pips)
 
@@ -114,11 +108,9 @@ input double ScalpingTakeProfit = 30.0;       // Scalping Take Profit (pips)
 //| Global Variables and Objects                                     |
 //+------------------------------------------------------------------+
 CTrade trade;
+
 double starting_balance;
 // Add a minimum price change threshold (in points)
-double MinPriceChangeThreshold = 10;
-
-// Store the last modification price
 double LastModificationPrice = 0;
 
 // Declare a static variable to track the last log time
@@ -127,13 +119,11 @@ static datetime lastLogTime = 0;
 // Declare the lastCalculationTime variable
 datetime lastCalculationTime = 0;
 
-// Add these variables to track last log times
-struct LogTimes {
-    datetime calculationLogTime;
-    datetime analysisLogTime;
-    datetime signalLogTime;
-};
-static LogTimes symbolLogTimes[];  // Array to store log times for each symbol
+// Declare and initialize these variables at the top of your file or within the relevant function
+double liquidityThreshold = 50.0; // Example value, adjust as needed
+double takeProfitPips = 50.0;     // Example value, adjust as needed
+double stopLossPips = 30.0;       // Example value, adjust as needed
+double riskPercent = 2.0;         // Example value, adjust as needed
 
 //+------------------------------------------------------------------+
 //| Core EA Functions                                                 |
@@ -155,7 +145,7 @@ int OnInit()
         ArrayResize(tradingSymbols, 1);
         AddTradingSymbol(symbol, 0);
         SetSymbolCount(1);
-        ValidateInputs(symbol);
+        ValidateInputs(RiskPercent, MaxDrawdownPercent, ATRMultiplier, ADXPeriod, TrendADXThreshold, TrailingStopPips, BreakevenActivationPips, BreakevenOffsetPips, LiquidityThreshold, ImbalanceThreshold, EMA_PERIODS_SHORT, EMA_PERIODS_MEDIUM, EMA_PERIODS_LONG, PATTERN_LOOKBACK, GOLDEN_CROSS_THRESHOLD);
     }
     else
     {
@@ -209,7 +199,7 @@ int OnInit()
 
     // Ensure arrays are properly sized for all symbols
     ArrayResize(symbolLogTimes, symbolCount);
-    InitializeLogTimes();
+    InitializeLogTimes(symbolLogTimes, symbolCount);
     InitializeLotSizeCalcTimes();
 
     return INIT_SUCCEEDED;
@@ -229,7 +219,7 @@ void OnTick()
         if(symbol == "" || !SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE))
             continue;
             
-        ProcessSymbol(symbol);
+        ProcessSymbol(symbol, UseScalpingStrategy, MaxDrawdownPercent, ScalpingRiskPercent, ScalpingStopLoss, Timeframe, TradingStartTime, TradingEndTime);
         
         // Add delay between symbol processing to avoid overloading
         Sleep(100);  // 100ms delay
@@ -269,9 +259,6 @@ void ExecuteTradingLogic(string symbol)
 
     datetime currentTime = TimeCurrent();
     
-    // Use the global lastCalculationTime
-    bool shouldRecalculateSignals = (currentTime - lastCalculationTime >= 30);
-    
     // Always manage existing positions
     if (UseTrailingStop || UseBreakeven)
     {
@@ -298,16 +285,16 @@ void ExecuteTradingLogic(string symbol)
             // Enhanced buy condition check with all confirmations
             if (CheckBuyCondition(rsi, macdMain, macdSignal, symbol))  // Added symbol
             {
-                ExecuteBuyTrade(lotSize, symbol);  // Added symbol
-                LogMessage("Scalping Buy Signal Executed on " + EnumToString(ScalpingTimeframe), symbol);  // Added symbol
+                ExecuteBuyTrade(lotSize, symbol, ScalpingRiskPercent);  // Added symbol
+                LogGenericMessage("Scalping Buy Signal Executed on " + EnumToString(ScalpingTimeframe), symbol);  // Added symbol
                 return;  // Exit to avoid conflicting signals
             }
             
             // Enhanced sell condition check with all confirmations
             if (CheckSellCondition(rsi, macdMain, macdSignal, symbol))  // Added symbol
             {
-                ExecuteSellTrade(lotSize, symbol);  // Added symbol
-                LogMessage("Scalping Sell Signal Executed on " + EnumToString(ScalpingTimeframe), symbol);  // Added symbol
+                ExecuteSellTrade(lotSize, symbol, ScalpingRiskPercent);  // Added symbol
+                LogGenericMessage("Scalping Sell Signal Executed on " + EnumToString(ScalpingTimeframe), symbol);  // Added symbol
                 return;  // Exit to avoid conflicting signals
             }
         }
@@ -315,14 +302,14 @@ void ExecuteTradingLogic(string symbol)
         // Enhanced exit condition check
         if (CheckExitCondition(rsi, symbol))  // Add the symbol parameter
         {
-            CloseAllPositions(symbol);
-            LogMessage("Scalping Exit Signal - Closing Positions on " + EnumToString(ScalpingTimeframe), symbol);
+            CloseAllPositions(symbol, trade);
+            LogGenericMessage("Scalping Exit Signal - Closing Positions on " + EnumToString(ScalpingTimeframe), symbol);
             return;
         }
     }
 
     // Continue with existing trend strategy
-    if (UseTrendStrategy && shouldRecalculateSignals)
+    if (UseTrendStrategy)
     {
         int symbolIdx = GetSymbolIndex(symbol);
         if(symbolIdx == -1)
@@ -340,7 +327,7 @@ void ExecuteTradingLogic(string symbol)
         double adx, plusDI, minusDI;
         CalculateADX(symbol, ADXPeriod, Timeframe, adx, plusDI, minusDI);
         double macdMain, macdSignal, macdHistogram;
-        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram);
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0, Timeframe);
 
         // Package the data for logging
         MarketAnalysisData analysisData;
@@ -378,10 +365,10 @@ void ExecuteTradingLogic(string symbol)
         }
 
         // Calculate signals
-        int orderFlowSignal = MonitorOrderFlow(symbol);
+        int orderFlowSignal = MonitorOrderFlow(symbol, UseDOMAnalysis, LiquidityThreshold, ImbalanceThreshold);
         int trendSignal = TrendFollowingCore(symbol);
         int patternSignal = IdentifyTrendPattern(symbol);
-        int rsiMacdSignal = CheckRSIMACDSignal(symbol);
+        int rsiMacdSignal = CheckRSIMACDSignal(symbol, Timeframe, RSI_Period, RSIUpperThreshold, RSILowerThreshold);
         
         // Use a local variable for RiskPercent modification
         double localRiskPercent = RiskPercent;
@@ -417,7 +404,7 @@ void ExecuteTradingLogic(string symbol)
             // Original strict conditions
             if (trendSignal == 1 && patternSignal == 1 && rsiMacdSignal == 1 && orderFlowSignal == 1)
             {
-                ProcessBuySignal(symbol, lotSize, stopLoss, takeProfit);
+                ProcessBuySignal(symbol, lotSize, stopLoss, takeProfit, liquidityThreshold, takeProfitPips, stopLossPips, riskPercent, trade);
             }
         }
         else
@@ -431,7 +418,7 @@ void ExecuteTradingLogic(string symbol)
             double requiredSignals = 4 * (1 - SignalTolerancePercent/100.0);  // Adjust threshold based on tolerance
             if (totalBuySignals >= requiredSignals)
             {
-                ProcessBuySignal(symbol, lotSize, stopLoss, takeProfit);
+                ProcessBuySignal(symbol, lotSize, stopLoss, takeProfit, liquidityThreshold, takeProfitPips, stopLossPips, riskPercent, trade);
             }
         }
 
@@ -443,7 +430,7 @@ void ExecuteTradingLogic(string symbol)
                 // Original strict conditions
                 if (trendSignal == -1 && patternSignal == -1 && rsiMacdSignal == -1 && orderFlowSignal == -1)
                 {
-                    ProcessSellSignal(symbol, lotSize, stopLoss, takeProfit);
+                    ProcessSellSignal(symbol, lotSize, stopLoss, takeProfit, liquidityThreshold, takeProfitPips, stopLossPips, riskPercent, trade);
                 }
             }
             else
@@ -457,7 +444,7 @@ void ExecuteTradingLogic(string symbol)
                 double requiredSignals = 4 * (1 - SignalTolerancePercent/100.0);  // Adjust threshold based on tolerance
                 if (totalSellSignals >= requiredSignals)
                 {
-                    ProcessSellSignal(symbol, lotSize, stopLoss, takeProfit);
+                    ProcessSellSignal(symbol, lotSize, stopLoss, takeProfit, liquidityThreshold, takeProfitPips, stopLossPips, riskPercent, trade);
                 }
             }
         }
@@ -491,7 +478,7 @@ void ExecuteTradingLogic(string symbol)
             {
                 LogTradeRejection("No order flow signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD);
+                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
                 lastLogTime = TimeCurrent(); // Update last log time
             }
         }
@@ -501,7 +488,7 @@ void ExecuteTradingLogic(string symbol)
             {
                 LogTradeRejection("No trend signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD);
+                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
                 lastLogTime = TimeCurrent();
             }
         }
@@ -511,7 +498,7 @@ void ExecuteTradingLogic(string symbol)
             {
                 LogTradeRejection("No RSI/MACD signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD);
+                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
                 lastLogTime = TimeCurrent();
             }
         }
@@ -521,7 +508,7 @@ void ExecuteTradingLogic(string symbol)
             {
                 LogTradeRejection("No pattern signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD);
+                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis);
                 lastLogTime = TimeCurrent();
             }
         }
@@ -544,82 +531,6 @@ void ExecuteTradingLogic(string symbol)
             Print("==============================");
             symbolLogTimes[symbolIdx].calculationLogTime = currentTime;
         }
-    }
-}
-
-void ProcessBuySignal(string symbol, double lotSize, double stopLoss, double takeProfit)
-{
-    // Require 3 bars of confirmation for more reliability
-    if(!CheckConsecutiveSignals(symbol, 3, true))
-    {
-        Print("Buy signal rejected - Failed 3-bar persistence check");
-        return;
-    }
-
-    if (!IsBearishCandlePattern(symbol))
-    {
-        if (!ManagePositions(symbol, POSITION_TYPE_BUY) && !HasPendingOrder(symbol, ORDER_TYPE_BUY_LIMIT))
-        {
-            double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
-            double tpPrice = ask + takeProfit;
-            double slPrice = ask - stopLoss;
-            
-            double limitPrice = GetBestLimitOrderPrice(symbol, ORDER_TYPE_BUY_LIMIT, tpPrice, slPrice, 
-                                                       LiquidityThreshold, TakeProfitPips, StopLossPips);
-            
-            if (limitPrice > 0.0)
-            {
-                Print("Buy Limit Order Placed - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
-                PlaceBuyLimitOrder(symbol, limitPrice, tpPrice, slPrice);
-            }
-            else
-            {
-                Print("Buy Market Order Placed - TP: ", tpPrice, " SL: ", slPrice, " Lot Size: ", lotSize);
-                PlaceBuyOrder(symbol);
-            }
-        }
-    }
-    else
-    {
-        Print("Buy Signal Rejected - Strong bearish pattern detected");
-    }
-}
-
-void ProcessSellSignal(string symbol, double lotSize, double stopLoss, double takeProfit)
-{
-    // Require 3 bars of confirmation for more reliability
-    if(!CheckConsecutiveSignals(symbol, 3, false))
-    {
-        Print("Sell signal rejected - Failed 3-bar persistence check");
-        return;
-    }
-
-    if (!IsBullishCandlePattern(symbol))
-    {
-        if (!ManagePositions(symbol, POSITION_TYPE_SELL) && !HasPendingOrder(symbol, ORDER_TYPE_SELL_LIMIT))
-        {
-            double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
-            double tpPrice = bid - takeProfit;
-            double slPrice = bid + stopLoss;
-            
-            double limitPrice = GetBestLimitOrderPrice(symbol, ORDER_TYPE_SELL_LIMIT, tpPrice, slPrice, 
-                                                       LiquidityThreshold, TakeProfitPips, StopLossPips);
-            
-            if (limitPrice > 0.0)
-            {
-                Print("Sell Limit Order Placed - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
-                PlaceSellLimitOrder(symbol, limitPrice, tpPrice, slPrice);
-            }
-            else
-            {
-                Print("Sell Market Order Placed - TP: ", tpPrice, " SL: ", slPrice);
-                PlaceSellOrder(symbol);
-            }
-        }
-    }
-    else
-    {
-        Print("Sell Signal Rejected - Strong bullish pattern detected");
     }
 }
 
@@ -694,389 +605,6 @@ int TrendFollowingCore(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Check and Manage Positions                                       |
-//+------------------------------------------------------------------+
-bool ManagePositions(string symbol, int checkType = -1)  // -1 means check all positions
-{
-    bool hasPosition = false;
-    int total = PositionsTotal();
-    
-    for(int i = 0; i < total; i++)
-    {
-        ulong ticket = PositionGetTicket(i);
-        if(PositionSelectByTicket(ticket))
-        {
-            // Check if position is for our symbol
-            string symbol = PositionGetString(POSITION_SYMBOL);
-            if(symbol != symbol) continue;
-            
-            int posType = (int)PositionGetInteger(POSITION_TYPE);
-            
-            // If checking for specific type and doesn't match, skip
-            if(checkType != -1 && posType != checkType) continue;
-            
-            hasPosition = true;
-            
-            // Only manage if trailing stop or breakeven is enabled
-            if(UseTrailingStop || UseBreakeven)
-            {
-                double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
-                double current_price = PositionGetDouble(POSITION_PRICE_CURRENT);
-                double stop_loss = PositionGetDouble(POSITION_SL);
-                double profit = PositionGetDouble(POSITION_PROFIT);
-
-                // Apply trailing stop if enabled
-                if(UseTrailingStop)
-                    ApplyTrailingStop(symbol, ticket, posType, open_price, stop_loss);
-
-                // Apply breakeven if enabled
-                if(UseBreakeven)
-                    ApplyBreakeven(symbol, ticket, posType, open_price, stop_loss);
-            }
-        }
-    }
-    
-    return hasPosition;
-}
-
-//+------------------------------------------------------------------+
-//| Detect Order Flow Imbalances                                     |
-//+------------------------------------------------------------------+
-int DetectOrderFlowImbalances(string symbol, double buyVolume, double sellVolume, double imbalanceThreshold)
-{
-    // Calculate imbalance ratio for logging
-    double imbalanceRatio = 0;
-    if (sellVolume > 0) imbalanceRatio = buyVolume / sellVolume;
-    
-    if (buyVolume > sellVolume * imbalanceThreshold)
-    {
-        Print("Order Flow Imbalance Detected: More Buy Orders (Ratio: ", imbalanceRatio, ")");
-        return 1;  // Buy signal
-    }
-    else if (sellVolume > buyVolume * imbalanceThreshold)
-    {
-        Print("Order Flow Imbalance Detected: More Sell Orders (Ratio: ", imbalanceRatio, ")");
-        return -1; // Sell signal
-    }
-    
-    return 0;  // No significant imbalance
-}
-
-//+------------------------------------------------------------------+
-//| Monitor Order Flow                                               |
-//+------------------------------------------------------------------+
-int MonitorOrderFlow(string symbol)
-{
-    if (!UseDOMAnalysis)
-        return 1; // Return neutral signal if DOM analysis is disabled
-
-    MqlBookInfo book_info[];
-    int book_count = MarketBookGet(symbol, book_info);
-    
-    if (book_count <= 0)
-    {
-        static datetime lastWarningTime = 0;
-        datetime currentTime = TimeCurrent();
-        if (currentTime - lastWarningTime >= 300) // Log warning every 5 minutes
-        {
-            Print("Warning: No DOM data available. Returning neutral signal.");
-            lastWarningTime = currentTime;
-        }
-        return 1; // Return neutral instead of 0 to not block trades
-    }
-
-    double buyVolume = 0.0;
-    double sellVolume = 0.0;
-    double totalVolume = 0.0;
-    double maxBuyPrice = 0.0;
-    double minSellPrice = DBL_MAX;
-    double largestBuyOrder = 0.0;
-    double largestSellOrder = 0.0;
-    int buyLevels = 0;
-    int sellLevels = 0;
-    
-    // Calculate average order size for normalization
-    double totalOrderSize = 0.0;
-    int orderCount = 0;
-
-    // First pass - calculate averages
-    for (int i = 0; i < book_count; i++)
-    {
-        totalOrderSize += book_info[i].volume;
-        orderCount++;
-    }
-    double avgOrderSize = (orderCount > 0) ? totalOrderSize / orderCount : 0;
-
-    // Second pass - analyze order flow with normalized volumes
-    for (int i = 0; i < book_count; i++)
-    {
-        double normalizedVolume = (avgOrderSize > 0) ? book_info[i].volume / avgOrderSize : book_info[i].volume;
-        
-        if (book_info[i].type == BOOK_TYPE_BUY)
-        {
-            buyVolume += normalizedVolume;
-            buyLevels++;
-            maxBuyPrice = MathMax(maxBuyPrice, book_info[i].price);
-            largestBuyOrder = MathMax(largestBuyOrder, normalizedVolume);
-        }
-        else if (book_info[i].type == BOOK_TYPE_SELL)
-        {
-            sellVolume += normalizedVolume;
-            sellLevels++;
-            minSellPrice = MathMin(minSellPrice, book_info[i].price);
-            largestSellOrder = MathMax(largestSellOrder, normalizedVolume);
-        }
-    }
-
-    totalVolume = buyVolume + sellVolume;
-    double buyPercentage = (totalVolume > 0) ? (buyVolume / totalVolume) * 100 : 0;
-    double sellPercentage = (totalVolume > 0) ? (sellVolume / totalVolume) * 100 : 0;
-    double imbalanceRatio = (sellVolume > 0) ? buyVolume / sellVolume : 1.0;
-
-    // Reduced imbalance threshold for more frequent signals
-    double adjustedImbalanceThreshold = ImbalanceThreshold * 0.8; // 20% more lenient
-
-    // More lenient liquidity check
-    bool sufficientLiquidity = (totalVolume >= LiquidityThreshold * 0.7); // 30% more lenient
-
-    // Log order flow analysis
-    static datetime lastDetailedLog = 0;
-    datetime currentTime = TimeCurrent();
-    
-    if (currentTime - lastDetailedLog >= 300) // Log details every 5 minutes
-    {
-        string flowDirection = "NEUTRAL";
-        if (imbalanceRatio > adjustedImbalanceThreshold) flowDirection = "BUY";
-        else if (imbalanceRatio < 1/adjustedImbalanceThreshold) flowDirection = "SELL";
-
-        Print("=== Order Flow Analysis ===");
-        Print("Buy Volume: ", buyVolume, " (", buyPercentage, "%)");
-        Print("Sell Volume: ", sellVolume, " (", sellPercentage, "%)");
-        Print("Imbalance Ratio: ", imbalanceRatio);
-        Print("Adjusted Threshold: ", adjustedImbalanceThreshold);
-        Print("Flow Direction: ", flowDirection);
-        Print("Liquidity Status: ", (sufficientLiquidity ? "Sufficient" : "Insufficient"));
-        Print("========================");
-        
-        lastDetailedLog = currentTime;
-    }
-
-    // Return signals with more lenient conditions
-    if (sufficientLiquidity)
-    {
-        if (imbalanceRatio > adjustedImbalanceThreshold)
-            return 1;  // Buy signal
-        else if (imbalanceRatio < 1/adjustedImbalanceThreshold)
-            return -1; // Sell signal
-        else
-            return 1;  // Return neutral signal instead of 0 when no clear imbalance
-    }
-    
-    // Even with insufficient liquidity, return neutral instead of blocking
-    return 1;
-}
-
-//+------------------------------------------------------------------+
-//| Calculate MACD Values                                            |
-//+------------------------------------------------------------------+
-void CalculateMACD(string symbol, double &macdMain, double &macdSignal, double &macdHistogram, int shift = 0, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT)
-{
-    int handle = iMACD(symbol, timeframe, MACD_Fast, MACD_Slow, MACD_Signal, PRICE_CLOSE);
-    if(handle == INVALID_HANDLE)
-    {
-        Print("Error creating MACD indicator handle");
-        return;
-    }
-
-    double macdBuffer[];
-    double signalBuffer[];
-    ArraySetAsSeries(macdBuffer, true);
-    ArraySetAsSeries(signalBuffer, true);
-
-    CopyBuffer(handle, 0, shift, 2, macdBuffer);    // MACD line
-    CopyBuffer(handle, 1, shift, 2, signalBuffer);  // Signal line
-
-    macdMain = macdBuffer[0];
-    macdSignal = signalBuffer[0];
-    macdHistogram = macdMain - macdSignal;
-
-    IndicatorRelease(handle);
-}
-
-//+------------------------------------------------------------------+
-//| Check RSI and MACD Combination Signal                            |
-//+------------------------------------------------------------------+
-int CheckRSIMACDSignal(string symbol)
-{
-    double rsi = CalculateRSI(symbol, RSI_Period, Timeframe, 0);
-    double macdMain, macdSignal, macdHistogram;
-    CalculateMACD(symbol, macdMain, macdSignal, macdHistogram);
-    
-    // Get dynamic thresholds
-    double dynamic_upper, dynamic_lower;
-    GetDynamicRSIThresholds(symbol, dynamic_upper, dynamic_lower);
-    
-    // Check for divergence
-    bool bullish_div, bearish_div;
-    CheckRSIDivergence(symbol, bullish_div, bearish_div);
-    
-    // Enhanced Buy Signal Conditions
-    bool buySignal = 
-        ((rsi < dynamic_lower) || bullish_div) &&    // RSI oversold OR bullish divergence
-        macdMain > macdSignal &&                     // MACD above signal
-        macdHistogram > 0 &&                         // Positive momentum
-        rsi > CalculateRSI(symbol, RSI_Period, Timeframe, 1);          // RSI increasing
-        
-    // Enhanced Sell Signal Conditions    
-    bool sellSignal = 
-        ((rsi > dynamic_upper) || bearish_div) &&    // RSI overbought OR bearish divergence
-        macdMain < macdSignal &&                     // MACD below signal
-        macdHistogram < 0 &&                         // Negative momentum
-        rsi < CalculateRSI(symbol, RSI_Period, Timeframe, 1);          // RSI decreasing
-    
-    // Return signals with logging
-    if(buySignal)
-    {
-        Print("RSI Buy Signal - Value: ", rsi, 
-              " Dynamic Lower: ", dynamic_lower,
-              " Divergence: ", bullish_div);
-        return 1;
-    }
-    if(sellSignal)
-    {
-        Print("RSI Sell Signal - Value: ", rsi,
-              " Dynamic Upper: ", dynamic_upper,
-              " Divergence: ", bearish_div);
-        return -1;
-    }
-    return 0;
-}
-
-//+------------------------------------------------------------------+
-//| Candle Pattern Analysis Functions                                |
-//+------------------------------------------------------------------+
-
-//+------------------------------------------------------------------+
-//| Check for Bullish Candle Pattern                                |
-//+------------------------------------------------------------------+
-bool IsBullishCandlePattern(string symbol)
-{
-    CandleData current = GetCandleData(symbol, 1, Timeframe);
-    CandleData previous = GetCandleData(symbol, 2, Timeframe);
-    
-    // Get average candle size for reference
-    double avgCandleSize = 0;
-    double avgVolume = 0;
-    for(int i = 1; i <= 10; i++)
-    {
-        CandleData temp = GetCandleData(symbol, i, Timeframe);
-        avgCandleSize += temp.body;
-        avgVolume += iVolume(symbol, Timeframe, i);
-    }
-    avgCandleSize /= 10;
-    avgVolume /= 10;
-    
-    // Only return true for very strong bullish patterns
-    
-    // 1. Strong Bullish Engulfing (more stringent criteria)
-    bool isStrongBullishEngulfing = 
-        current.isBullish &&
-        !previous.isBullish &&
-        current.open < previous.close &&
-        current.close > previous.open &&
-        current.body > previous.body * 1.5 && // Increased size requirement
-        current.body > avgCandleSize * 1.2 &&   // Must be larger than average
-        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
-    
-    // 2. Perfect Morning Star
-    CandleData twoDaysAgo = GetCandleData(symbol, 3, Timeframe);
-    bool isPerfectMorningStar =
-        !twoDaysAgo.isBullish &&
-        current.isBullish &&
-        previous.body < avgCandleSize * 0.3 && // Smaller doji body
-        twoDaysAgo.body > avgCandleSize * 1.2 &&
-        current.body > avgCandleSize * 1.2 &&
-        current.close > twoDaysAgo.open && // More stringent price requirement
-        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
-    
-    // 3. Clear Hammer
-    bool isClearHammer = 
-        current.isBullish &&
-        current.lowerWick > current.body * 3 && // Increased wick requirement
-        current.upperWick < current.body * 0.1 && // Minimal upper wick
-        current.body > avgCandleSize * 0.8 &&
-        current.low < previous.low && // Must make new low
-        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
-    
-    // Log pattern detection with confidence levels
-    if(isStrongBullishEngulfing) Print("Strong Bullish Engulfing Pattern - High Confidence Reversal Signal");
-    if(isPerfectMorningStar) Print("Perfect Morning Star Pattern - High Confidence Reversal Signal");
-    if(isClearHammer) Print("Clear Hammer Pattern - High Confidence Reversal Signal");
-    
-    return (isStrongBullishEngulfing || isPerfectMorningStar || isClearHammer);
-}
-
-//+------------------------------------------------------------------+
-//| Check for Bearish Candle Pattern                                |
-//+------------------------------------------------------------------+
-bool IsBearishCandlePattern(string symbol)
-{
-    CandleData current = GetCandleData(symbol, 1, Timeframe);
-    CandleData previous = GetCandleData(symbol, 2, Timeframe);
-    
-    // Get average candle size for reference
-    double avgCandleSize = 0;
-    double avgVolume = 0;
-    for(int i = 1; i <= 10; i++)
-    {
-        CandleData temp = GetCandleData(symbol, i, Timeframe);
-        avgCandleSize += temp.body;
-        avgVolume += iVolume(symbol, Timeframe, i);
-    }
-    avgCandleSize /= 10;
-    avgVolume /= 10;
-    
-    // Only return true for very strong bearish patterns
-    
-    // 1. Strong Bearish Engulfing (more stringent criteria)
-    bool isStrongBearishEngulfing = 
-        !current.isBullish &&
-        previous.isBullish &&
-        current.open > previous.close &&
-        current.close < previous.open &&
-        current.body > previous.body * 1.5 && // Increased size requirement
-        current.body > avgCandleSize * 1.2 &&   // Must be larger than average
-        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
-    
-    // 2. Perfect Evening Star
-    CandleData twoDaysAgo = GetCandleData(symbol, 3, Timeframe);
-    bool isPerfectEveningStar =
-        twoDaysAgo.isBullish &&
-        !current.isBullish &&
-        previous.body < avgCandleSize * 0.3 && // Smaller doji body
-        twoDaysAgo.body > avgCandleSize * 1.2 &&
-        current.body > avgCandleSize * 1.2 &&
-        current.close < twoDaysAgo.open && // More stringent price requirement
-        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
-    
-    // 3. Clear Shooting Star
-    bool isClearShootingStar = 
-        !current.isBullish &&
-        current.upperWick > current.body * 3 && // Increased wick requirement
-        current.lowerWick < current.body * 0.1 && // Minimal lower wick
-        current.body > avgCandleSize * 0.8 &&
-        current.high > previous.high && // Must make new high
-        iVolume(symbol, Timeframe, 1) > avgVolume * 1.5; // Volume confirmation
-    
-    // Log pattern detection with confidence levels
-    if(isStrongBearishEngulfing) Print("Strong Bearish Engulfing Pattern - High Confidence Reversal Signal");
-    if(isPerfectEveningStar) Print("Perfect Evening Star Pattern - High Confidence Reversal Signal");
-    if(isClearShootingStar) Print("Clear Shooting Star Pattern - High Confidence Reversal Signal");
-    
-    return (isStrongBearishEngulfing || isPerfectEveningStar || isClearShootingStar);
-}
-
-//+------------------------------------------------------------------+
 //| Comprehensive Pattern Recognition                                 |
 //+------------------------------------------------------------------+
 int IdentifyTrendPattern(string symbol)
@@ -1124,7 +652,7 @@ int IdentifyTrendPattern(string symbol)
     if(current_ema_short > current_ema_medium && current_ema_medium > current_ema_long) {
         // Get MACD values for momentum confirmation
         double macdMain, macdSignal, macdHistogram;
-        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram);
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0, Timeframe);
         
         // Enhanced bullish scoring with momentum confirmation
         if(macdHistogram > 0) {  // Positive momentum
@@ -1140,10 +668,10 @@ int IdentifyTrendPattern(string symbol)
     else if(current_ema_short < current_ema_medium && current_ema_medium < current_ema_long) {
         // Get MACD values for momentum confirmation
         double macdMain, macdSignal, macdHistogram;
-        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram);
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0, Timeframe);
         
         // Enhanced bearish scoring with momentum confirmation
-        if(macdHistogram < 0) {  // Negative momentum
+            if(macdHistogram < 0) {  // Negative momentum
             score.bearish += 3.0;  // Increased from 2.5 to 3.0 for strong confirmation
             ArrayResize(score.reasons, ArraySize(score.reasons) + 1);
             score.reasons[ArraySize(score.reasons)-1] = "Bearish EMA alignment with negative momentum";
@@ -1247,559 +775,35 @@ int IdentifyTrendPattern(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Check for RSI Divergence                                         |
-//+------------------------------------------------------------------+
-bool CheckRSIDivergence(string symbol, bool &bullish, bool &bearish, int lookback = 10)
-{
-    double rsi_values[];
-    double price_values[];
-    ArrayResize(rsi_values, lookback);
-    ArrayResize(price_values, lookback);
-    
-    // Get RSI and price values
-    for(int i = 0; i < lookback; i++)
-    {
-        rsi_values[i] = CalculateRSI(symbol, RSI_Period, Timeframe, i);
-        price_values[i] = iLow(symbol, Timeframe, i);
-    }
-    
-    // Find local extremes
-    double rsi_low = rsi_values[ArrayMinimum(rsi_values)];
-    double rsi_high = rsi_values[ArrayMaximum(rsi_values)];
-    double price_low = price_values[ArrayMinimum(price_values)];
-    double price_high = price_values[ArrayMaximum(price_values)];
-    
-    // Check for bullish divergence (price lower, RSI higher)
-    bullish = (price_values[0] < price_low && rsi_values[0] > rsi_low);
-    
-    // Check for bearish divergence (price higher, RSI lower)
-    bearish = (price_values[0] > price_high && rsi_values[0] < rsi_high);
-    
-    return (bullish || bearish);
-}
-//+------------------------------------------------------------------+
-//| Calculate Dynamic RSI Thresholds                                 |
-//+------------------------------------------------------------------+
-void GetDynamicRSIThresholds(string symbol, double &upper_threshold, double &lower_threshold)
-{
-    double atr = CalculateATR(symbol, 14, Timeframe);
-    double avg_atr = 0;
-    
-    // Calculate average ATR for last 20 periods
-    for(int i = 0; i < 20; i++)
-    {
-        avg_atr += CalculateATR(symbol, 14, Timeframe, i);
-    }
-    avg_atr /= 20;
-    
-    // Adjust thresholds based on relative volatility
-    double volatility_factor = atr / avg_atr;
-    
-    // More volatile market = wider thresholds
-    upper_threshold = RSIUpperThreshold + (volatility_factor - 1) * 10;
-    lower_threshold = RSILowerThreshold - (volatility_factor - 1) * 10;
-    
-    // Keep thresholds within reasonable bounds
-    upper_threshold = MathMin(MathMax(upper_threshold, 65), 85);
-    lower_threshold = MathMax(MathMin(lower_threshold, 35), 15);
-}
-//+------------------------------------------------------------------+
-//| Analyze RSI Trend Strength                                       |
-//+------------------------------------------------------------------+
-double GetRSITrendStrength(string symbol, int periods = 5)
-{
-    double strength = 0;
-    double prev_rsi = CalculateRSI(symbol, RSI_Period, Timeframe, periods);
-    
-    // Calculate the strength of the RSI trend
-    for(int i = periods-1; i >= 0; i--)
-    {
-        double current_rsi = CalculateRSI(symbol, RSI_Period, Timeframe, i);
-        strength += (current_rsi - prev_rsi);
-        prev_rsi = current_rsi;
-    }
-    
-    return strength / periods;  // Positive = strengthening, Negative = weakening
-}
-
-//+------------------------------------------------------------------+
-//| Apply Trailing Stop                                              |
-//+------------------------------------------------------------------+
-void ApplyTrailingStop(string symbol, ulong ticket, int type, double open_price, double stop_loss)
-{
-    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-    double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
-    double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
-    
-    if (point <= 0)
-    {
-        Print("Error: Invalid point value for symbol ", symbol);
-        return;
-    }
-
-    double trailing_stop = TrailingStopPips * point;
-    double breakeven_level = BreakevenActivationPips * point;
-    double breakeven_offset = BreakevenOffsetPips * point;
-
-    if (type == POSITION_TYPE_BUY)
-    {
-        double price = SymbolInfoDouble(symbol, SYMBOL_BID);
-        double new_stop_loss = price - trailing_stop;
-
-        if (new_stop_loss > stop_loss)
-        {
-            if (MathAbs(price - LastModificationPrice) >= MinPriceChangeThreshold * point)
-            {
-                if (trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
-                {
-                    LastModificationPrice = price; // Update the last modification price
-                    Print("Trailing Stop Updated for Buy Position ", ticket);
-                }
-            }
-        }
-    }
-    else if (type == POSITION_TYPE_SELL)
-    {
-        double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
-        double new_stop_loss = price + trailing_stop;
-
-        if (new_stop_loss < stop_loss || stop_loss == 0.0)
-        {
-            if (MathAbs(price - LastModificationPrice) >= MinPriceChangeThreshold * point)
-            {
-                if (trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
-                {
-                    LastModificationPrice = price; // Update the last modification price
-                    Print("Trailing Stop Updated for Sell Position ", ticket);
-                }
-            }
-        }
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Apply Breakeven                                                  |
-//+------------------------------------------------------------------+
-void ApplyBreakeven(string symbol, ulong ticket, int type, double open_price, double stop_loss)
-{
-    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-    double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
-    double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
-    
-    if (point <= 0)
-    {
-        Print("Error: Invalid point value for symbol ", symbol);
-        return;
-    }
-
-    double breakeven_level = BreakevenActivationPips * point;
-    double breakeven_offset = BreakevenOffsetPips * point;
-
-    if (type == POSITION_TYPE_BUY)
-    {
-        double price = SymbolInfoDouble(symbol, SYMBOL_BID);
-        if (price - open_price >= breakeven_level)
-        {
-            double new_stop_loss = open_price + breakeven_offset;
-            if (stop_loss < new_stop_loss)
-            {
-                if (MathAbs(price - LastModificationPrice) >= MinPriceChangeThreshold * point)
-                {
-                    if (trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
-                    {
-                        LastModificationPrice = price; // Update the last modification price
-                        Print("Breakeven Activated for Buy Position ", ticket);
-                    }
-                }
-            }
-        }
-    }
-    else if (type == POSITION_TYPE_SELL)
-    {
-        double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
-        if (open_price - price >= breakeven_level)
-        {
-            double new_stop_loss = open_price - breakeven_offset;
-            if (stop_loss > new_stop_loss || stop_loss == 0.0)
-            {
-                if (MathAbs(price - LastModificationPrice) >= MinPriceChangeThreshold * point)
-                {
-                    if (trade.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
-                    {
-                        LastModificationPrice = price; // Update the last modification price
-                        Print("Breakeven Activated for Sell Position ", ticket);
-                    }
-                }
-            }
-        }
-    }
-}
-//+------------------------------------------------------------------+
-//| Order Placement Functions                                        |
-//+------------------------------------------------------------------+
-void PlaceBuyOrder(string symbol)
-{
-    double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, Timeframe, fixedStopLossPips);
-
-    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-    double lot_size = CalculateDynamicLotSize(
-        symbol,                          // symbol
-        stop_loss / _Point,             // stop_loss_pips
-        accountBalance,                  // accountBalance
-        RiskPercent,                    // riskPercent
-        minVolume,                      // minVolume
-        maxVolume                       // maxVolume
-    );
-    double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
-    double limit_price = price - 10 * _Point; // Place limit order 10 points below current price
-    double sl = limit_price - stop_loss;
-    double tp = limit_price + take_profit;
-
-    // Normalize SL and TP
-    int price_digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-    sl = NormalizeDouble(sl, price_digits);
-    tp = NormalizeDouble(tp, price_digits);
-    limit_price = NormalizeDouble(limit_price, price_digits);
-
-    if (trade.BuyLimit(lot_size, limit_price, symbol, sl, tp, ORDER_TIME_GTC, 0, "Buy Limit Order with Dynamic SL/TP"))
-    {
-        LogTradeDetails(symbol, lot_size, stop_loss, take_profit);
-    }
-    else
-    {
-        int error = GetLastError();
-        Print("Buy Limit Order Failed with Error: ", error);
-        ResetLastError();
-    }
-}
-
-void PlaceSellOrder(string symbol)
-{
-    double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, Timeframe, fixedStopLossPips);
-
-    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-    double lot_size = CalculateDynamicLotSize(
-        symbol,                          // symbol
-        stop_loss / _Point,             // stop_loss_pips
-        accountBalance,                  // accountBalance
-        RiskPercent,                    // riskPercent
-        minVolume,                      // minVolume
-        maxVolume                       // maxVolume
-    );
-    double price = SymbolInfoDouble(symbol, SYMBOL_BID);
-    double limit_price = price + 10 * _Point; // Place limit order 10 points above current price
-    double sl = limit_price + stop_loss;
-    double tp = limit_price - take_profit;
-
-    // Normalize SL and TP
-    int price_digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-    sl = NormalizeDouble(sl, price_digits);
-    tp = NormalizeDouble(tp, price_digits);
-    limit_price = NormalizeDouble(limit_price, price_digits);
-
-    if (trade.SellLimit(lot_size, limit_price, symbol, sl, tp, ORDER_TIME_GTC, 0, "Sell Limit Order with Dynamic SL/TP"))
-    {
-        LogTradeDetails(symbol, lot_size, stop_loss, take_profit);
-    }
-    else
-    {
-        int error = GetLastError();
-        Print("Sell Limit Order Failed with Error: ", error);
-        ResetLastError();
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Place Additional Buy Order                                       |
-//+------------------------------------------------------------------+
-void PlaceAdditionalBuyOrder(string symbol)
-{
-    // Check if we already have maximum allowed positions
-    if(CountOrders(symbol, POSITION_TYPE_BUY) >= 3)
-    {
-        Print("Maximum number of buy orders reached (3)");
-        return;
-    }
-
-    double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, Timeframe, fixedStopLossPips);
-
-    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-    double lot_size = CalculateDynamicLotSize(
-        symbol,                          // symbol
-        stop_loss / _Point,             // stop_loss_pips
-        accountBalance,                  // accountBalance
-        RiskPercent,                    // riskPercent
-        minVolume,                      // minVolume
-        maxVolume                       // maxVolume
-    );
-    double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
-    double limit_price = price - 10 * _Point;
-    double sl = limit_price - stop_loss;
-    double tp = limit_price + take_profit;
-
-    int price_digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-    sl = NormalizeDouble(sl, price_digits);
-    tp = NormalizeDouble(tp, price_digits);
-    limit_price = NormalizeDouble(limit_price, price_digits);
-
-    if(trade.BuyLimit(lot_size, limit_price, symbol, sl, tp, ORDER_TIME_GTC, 0, 
-       "Additional Buy Limit Order #" + IntegerToString(CountOrders(symbol, POSITION_TYPE_BUY) + 1)))
-    {
-        LogTradeDetails(symbol, lot_size, stop_loss, take_profit);
-    }
-    else
-    {
-        int error = GetLastError();
-        Print("Additional Buy Limit Order Failed with Error: ", error);
-        ResetLastError();
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Place Additional Sell Order                                      |
-//+------------------------------------------------------------------+
-void PlaceAdditionalSellOrder(string symbol)
-{
-    // Check if we already have maximum allowed positions
-    if(CountOrders(symbol, POSITION_TYPE_SELL) >= 3)
-    {
-        Print("Maximum number of sell orders reached (3)");
-        return;
-    }
-
-    double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, ATRMultiplier, Timeframe, fixedStopLossPips);
-
-    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-    double lot_size = CalculateDynamicLotSize(
-        symbol,                          // symbol
-        stop_loss / _Point,             // stop_loss_pips
-        accountBalance,                  // accountBalance
-        RiskPercent,                    // riskPercent
-        minVolume,                      // minVolume
-        maxVolume                       // maxVolume
-    );
-    double price = SymbolInfoDouble(symbol, SYMBOL_BID);
-    double limit_price = price + 10 * _Point;
-    double sl = limit_price + stop_loss;
-    double tp = limit_price - take_profit;
-
-    int price_digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-    sl = NormalizeDouble(sl, price_digits);
-    tp = NormalizeDouble(tp, price_digits);
-    limit_price = NormalizeDouble(limit_price, price_digits);
-
-    if(trade.SellLimit(lot_size, limit_price, symbol, sl, tp, ORDER_TIME_GTC, 0,
-       "Additional Sell Limit Order #" + IntegerToString(CountOrders(symbol, POSITION_TYPE_SELL) + 1)))
-    {
-        LogTradeDetails(symbol, lot_size, stop_loss, take_profit);
-    }
-    else
-    {
-        int error = GetLastError();
-        Print("Additional Sell Limit Order Failed with Error: ", error);
-        ResetLastError();
-    }
-}
-
-// Define the PlaceBuyLimitOrder function
-void PlaceBuyLimitOrder(string symbol, double limitPrice, double tpPrice, double slPrice)
-{
-    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double lot_size = CalculateDynamicLotSize(
-        symbol,                          // symbol
-        slPrice / _Point,               // stop_loss_pips
-        accountBalance,                  // accountBalance
-        RiskPercent,                    // riskPercent
-        minVolume,                      // minVolume
-        maxVolume                       // maxVolume
-    );
-    
-    if (trade.BuyLimit(lot_size, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Buy Limit Order"))
-    {
-        LogTradeDetails(symbol, lot_size, slPrice, tpPrice);
-    }
-    else
-    {
-        int error = GetLastError();
-        Print("Buy Limit Order Failed with Error: ", error);
-        ResetLastError();
-    }
-}
-
-// Define the PlaceSellLimitOrder function
-void PlaceSellLimitOrder(string symbol, double limitPrice, double tpPrice, double slPrice)
-{
-    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double lot_size = CalculateDynamicLotSize(
-        symbol,                          // symbol
-        slPrice / _Point,               // stop_loss_pips
-        accountBalance,                  // accountBalance
-        RiskPercent,                    // riskPercent
-        minVolume,                      // minVolume
-        maxVolume                       // maxVolume
-    );
-    
-    if (trade.SellLimit(lot_size, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Sell Limit Order"))
-    {
-        LogTradeDetails(symbol, lot_size, slPrice, tpPrice);
-    }
-    else
-    {
-        int error = GetLastError();
-        Print("Sell Limit Order Failed with Error: ", error);
-        ResetLastError();
-    }
-}
-//+------------------------------------------------------------------+
-//| Validate Input Parameters                                        |
-//+------------------------------------------------------------------+
-void ValidateInputs(string symbol)
-{
-    // Validate RiskPercent
-    if (RiskPercent <= 0.0 || RiskPercent > 10.0)
-    {
-        Alert("RiskPercent must be between 0.1 and 10.0");
-        ExpertRemove();
-        return;
-    }
-
-    // Validate MaxDrawdownPercent
-    if (MaxDrawdownPercent <= 0.0 || MaxDrawdownPercent > 100.0)
-    {
-        Alert("MaxDrawdownPercent must be between 0.1 and 100.0");
-        ExpertRemove();
-        return;
-    }
-
-    // Validate ATRMultiplier
-    if (ATRMultiplier <= 0.0 || ATRMultiplier > 5.0)
-    {
-        Alert("ATRMultiplier must be between 0.1 and 5.0");
-        ExpertRemove();
-        return;
-    }
-
-    // Validate ADXPeriod
-    if (ADXPeriod <= 0)
-    {
-        Alert("ADXPeriod must be greater than 0");
-        ExpertRemove();
-        return;
-    }
-
-    // Validate TrendADXThreshold
-    if (TrendADXThreshold <= 0.0 || TrendADXThreshold > 100.0)
-    {
-        Alert("TrendADXThreshold must be between 0.1 and 100.0");
-        ExpertRemove();
-        return;
-    }
-
-    // Validate TrailingStopPips
-    if (TrailingStopPips <= 0.0)
-    {
-        Alert("TrailingStopPips must be greater than 0");
-        ExpertRemove();
-        return;
-    }
-
-    // Validate BreakevenActivationPips and BreakevenOffsetPips
-    if (BreakevenActivationPips <= 0.0 || BreakevenOffsetPips < 0.0)
-    {
-        Alert("BreakevenActivationPips must be greater than 0 and BreakevenOffsetPips cannot be negative");
-        ExpertRemove();
-        return;
-    }
-
-    // Validate LiquidityThreshold
-    if (LiquidityThreshold <= 0.0)
-    {
-        Alert("LiquidityThreshold must be greater than 0");
-        ExpertRemove();
-        return;
-    }
-
-    // Validate ImbalanceThreshold
-    if (ImbalanceThreshold <= 1.0)
-    {
-        Alert("ImbalanceThreshold must be greater than 1.0");
-        ExpertRemove();
-        return;
-    }
-
-    // Validate Pattern Recognition parameters
-    if (EMA_PERIODS_SHORT >= EMA_PERIODS_MEDIUM || EMA_PERIODS_MEDIUM >= EMA_PERIODS_LONG)
-    {
-        Alert("EMA periods must be in ascending order: SHORT < MEDIUM < LONG");
-        ExpertRemove();
-        return;
-    }
-
-    if (PATTERN_LOOKBACK <= 0 || PATTERN_LOOKBACK > 100)
-    {
-        Alert("PATTERN_LOOKBACK must be between 1 and 100");
-        ExpertRemove();
-        return;
-    }
-
-    if (GOLDEN_CROSS_THRESHOLD <= 0)
-    {
-        Alert("GOLDEN_CROSS_THRESHOLD must be greater than 0");
-        ExpertRemove();
-        return;
-    }
-}
-
-//+------------------------------------------------------------------+
 //| Process trading logic for a single symbol                        |
 //+------------------------------------------------------------------+
-void ProcessSymbol(string symbol)
+void ProcessSymbol(string symbol, bool useScalpingStrategy, double maxDrawdownPercent, double scalpingRiskPercent, double scalpingStopLoss, ENUM_TIMEFRAMES timeframe, double tradingStartTime, double tradingEndTime)
 {
     // Check if symbol is a stock and if we're within market hours
     if(IsStockSymbol(symbol) && !IsWithinUSMarketHours())
     {
-        LogMessage("Skipping " + symbol + " - Outside US market hours", symbol);
+        LogGenericMessage("Skipping " + symbol + " - Outside US market hours", symbol);
         return;
     }
 
     // Check if within trading hours (for non-stock symbols)
-    if(!IsStockSymbol(symbol) && !IsWithinTradingHours(TradingStartTime, TradingEndTime))
-        return;
-
-    // Check if within trading hours
-    if(!IsWithinTradingHours(TradingStartTime, TradingEndTime))
+    if(!IsStockSymbol(symbol) && !IsWithinTradingHours(tradingStartTime, tradingEndTime))
         return;
 
     // Check drawdown
     double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
     double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-    if(CheckDrawdown(symbol, MaxDrawdownPercent, accountBalance, accountEquity))
+    if(CheckDrawdown(symbol, maxDrawdownPercent, accountBalance, accountEquity))
         return;
 
     // Add volatility check for scalping
-    if (UseScalpingStrategy)
+    if (useScalpingStrategy)
     {
-        double atr = CalculateATR(symbol, 14, Timeframe);
+        double atr = CalculateATR(symbol, 14, timeframe);
         double avgAtr = 0;
         for(int i = 1; i <= 20; i++)
         {
-            avgAtr += CalculateATR(symbol, 14, Timeframe, i);
+            avgAtr += CalculateATR(symbol, 14, timeframe, i);
         }
         avgAtr /= 20;
 
@@ -1814,168 +818,3 @@ void ProcessSymbol(string symbol)
     // Execute trading logic for this symbol
     ExecuteTradingLogic(symbol);
 }
-
-//+------------------------------------------------------------------+
-//| Initialize log times for all symbols                             |
-//+------------------------------------------------------------------+
-void InitializeLogTimes()
-{
-    datetime currentTime = TimeCurrent();
-    for(int i = 0; i < symbolCount; i++)
-    {
-        symbolLogTimes[i].calculationLogTime = currentTime;
-        symbolLogTimes[i].analysisLogTime = currentTime;
-        symbolLogTimes[i].signalLogTime = currentTime;
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Check for Signal Persistence                                     |
-//+------------------------------------------------------------------+
-bool CheckConsecutiveSignals(string symbol, int requiredBars, bool isBuySignal)
-{
-    // Minimum required bars for confirmation
-    if(requiredBars < 2) requiredBars = 2;  // Force minimum of 2 bars
-    
-    // Arrays to store historical values
-    double ema_short_values[];
-    double ema_medium_values[];
-    double ema_long_values[];
-    double macd_histogram_values[];
-    double rsi_values[];
-    
-    // Initialize arrays
-    ArrayResize(ema_short_values, requiredBars);
-    ArrayResize(ema_medium_values, requiredBars);
-    ArrayResize(ema_long_values, requiredBars);
-    ArrayResize(macd_histogram_values, requiredBars);
-    ArrayResize(rsi_values, requiredBars);
-    
-    // Get historical values for all indicators
-    for(int i = 0; i < requiredBars; i++)
-    {
-        // Calculate EMAs
-        ema_short_values[i] = CalculateEMA(symbol, EMA_PERIODS_SHORT, Timeframe, i);
-        ema_medium_values[i] = CalculateEMA(symbol, EMA_PERIODS_MEDIUM, Timeframe, i);
-        ema_long_values[i] = CalculateEMA(symbol, EMA_PERIODS_LONG, Timeframe, i);
-        
-        // Calculate MACD
-        double macdMain, macdSignal, macdHistogram;
-        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, i);
-        macd_histogram_values[i] = macdHistogram;
-        
-        // Calculate RSI
-        rsi_values[i] = CalculateRSI(symbol, RSI_Period, Timeframe, i);
-    }
-    
-    // Check for signal persistence
-    int confirmedBars = 0;
-    
-    for(int i = 0; i < requiredBars; i++)
-    {
-        bool signalConfirmed = false;
-        
-        if(isBuySignal)
-        {
-            // Buy signal conditions
-            bool emaAligned = (ema_short_values[i] > ema_medium_values[i] && 
-                             ema_medium_values[i] > ema_long_values[i]);
-            bool macdPositive = (macd_histogram_values[i] > 0);
-            bool rsiSupport = (rsi_values[i] > RSI_Neutral);  // Above neutral level
-            
-            signalConfirmed = (emaAligned && macdPositive && rsiSupport);
-        }
-        else
-        {
-            // Sell signal conditions
-            bool emaAligned = (ema_short_values[i] < ema_medium_values[i] && 
-                             ema_medium_values[i] < ema_long_values[i]);
-            bool macdNegative = (macd_histogram_values[i] < 0);
-            bool rsiSupport = (rsi_values[i] < RSI_Neutral);  // Below neutral level
-            
-            signalConfirmed = (emaAligned && macdNegative && rsiSupport);
-        }
-        
-        if(signalConfirmed)
-        {
-            confirmedBars++;
-        }
-        else
-        {
-            // Reset counter if signal breaks
-            confirmedBars = 0;
-            
-            // Log the reason for signal break
-            string signalType = isBuySignal ? "Buy" : "Sell";
-            Print(signalType, " signal persistence broken at bar ", i);
-            Print("EMA Alignment: ", 
-                  ema_short_values[i], " / ",
-                  ema_medium_values[i], " / ",
-                  ema_long_values[i]);
-            Print("MACD Histogram: ", macd_histogram_values[i]);
-            Print("RSI: ", rsi_values[i]);
-            
-            return false;
-        }
-    }
-    
-    // Log successful confirmation
-    if(confirmedBars >= requiredBars)
-    {
-        string signalType = isBuySignal ? "Buy" : "Sell";
-        Print(signalType, " signal confirmed over ", confirmedBars, " bars");
-        Print("Final Values:");
-        Print("EMA Short: ", ema_short_values[0]);
-        Print("EMA Medium: ", ema_medium_values[0]);
-        Print("EMA Long: ", ema_long_values[0]);
-        Print("MACD Histogram: ", macd_histogram_values[0]);
-        Print("RSI: ", rsi_values[0]);
-    }
-    
-    return (confirmedBars >= requiredBars);
-}
-
-// Add this helper function to close all positions
-void CloseAllPositions(string symbol)
-{
-    for (int i = PositionsTotal() - 1; i >= 0; i--)
-    {
-        ulong ticket = PositionGetTicket(i);
-        if (PositionSelectByTicket(ticket))
-        {
-            if (PositionGetString(POSITION_SYMBOL) == symbol)
-            {
-                trade.PositionClose(ticket);
-            }
-        }
-    }
-}
-
-// Add this function to check if a symbol is a stock
-bool IsStockSymbol(string symbol)
-{
-    // Check for common stock exchange suffixes
-    return StringFind(symbol, ".NYSE") >= 0 || 
-           StringFind(symbol, ".NAS") >= 0 || 
-           StringFind(symbol, ".LSE") >= 0;
-}
-
-// Add this function to check US market hours
-bool IsWithinUSMarketHours()
-{
-    datetime serverTime = TimeCurrent();
-    MqlDateTime dt;
-    TimeToStruct(serverTime, dt);
-    
-    // Check if it's a weekday (1-5, Monday-Friday)
-    if(dt.day_of_week <= 0 || dt.day_of_week > 5)
-        return false;
-        
-    // Convert current time to minutes since midnight
-    int currentMinutes = dt.hour * 60 + dt.min;
-    int openMinutes = US_MARKET_OPEN_HOUR * 60 + US_MARKET_OPEN_MINUTE;
-    int closeMinutes = US_MARKET_CLOSE_HOUR * 60 + US_MARKET_CLOSE_MINUTE;
-    
-    return (currentMinutes >= openMinutes && currentMinutes < closeMinutes);
-}
-

@@ -1,6 +1,58 @@
 #include <Trade/Trade.mqh>
-// Global configuration
-bool useDOMAnalysis = false;  // Default to false, can be set by the EA
+//+------------------------------------------------------------------+
+//| Global Variables and Constants                                    |
+//+------------------------------------------------------------------+
+// External parameters used across utility functions
+input group "Utility Settings"
+input double MinPriceChangeThreshold = 10;  // Minimum price change threshold (in points)
+
+// Add these at the top of the file
+class CUtilitySettings
+{
+public:
+    // Trading Parameters
+    ENUM_TIMEFRAMES Timeframe;
+    int EMA_PERIODS_SHORT;
+    int EMA_PERIODS_MEDIUM;
+    int EMA_PERIODS_LONG;
+    int RSI_Period;
+    double RSI_Neutral;
+    
+    // Position Management
+    bool UseTrailingStop;
+    bool UseBreakeven;
+    double TrailingStopPips;
+    double BreakevenActivationPips;
+    double BreakevenOffsetPips;
+    
+    // Indicator Parameters
+    int MACD_Fast;
+    int MACD_Slow;
+    int MACD_Signal;
+    
+    // Constructor with default values
+    CUtilitySettings()
+    {
+        Timeframe = PERIOD_H1;
+        EMA_PERIODS_SHORT = 20;
+        EMA_PERIODS_MEDIUM = 50;
+        EMA_PERIODS_LONG = 200;
+        RSI_Period = 14;
+        RSI_Neutral = 50.0;
+        UseTrailingStop = false;
+        UseBreakeven = false;
+        TrailingStopPips = 20.0;
+        BreakevenActivationPips = 30.0;
+        BreakevenOffsetPips = 5.0;
+        MACD_Fast = 12;
+        MACD_Slow = 26;
+        MACD_Signal = 9;
+    }
+};
+
+// Create a global instance
+CUtilitySettings UtilitySettings;
+
 
 // Add at the top with other global variables
 input group "Symbol Settings"  // These should only be in the EA file
@@ -8,6 +60,20 @@ static string tradingSymbols[];           // Array to store trading symbols
 static int symbolCount = 0;               // Number of symbols being traded
 static datetime lastLotSizeCalcTimes[];   // Array to store last calculation time for each symbol
 const int LOT_SIZE_CALC_INTERVAL = 60;    // Minimum seconds between lot size calculations
+
+// Declare US market open and close times
+const int US_MARKET_OPEN_HOUR = 9;    // 9 AM
+const int US_MARKET_OPEN_MINUTE = 30; // 9:30 AM
+const int US_MARKET_CLOSE_HOUR = 16;  // 4 PM
+const int US_MARKET_CLOSE_MINUTE = 0; // 4:00 PM
+
+// Define a simple LogMessage function
+void LogGenericMessage(string message, string symbol)
+{
+    Print("Log: ", symbol, " - ", message);
+}
+
+CTrade tradeUtility;
 
 // Function to set symbol count externally
 void SetSymbolCount(int count)
@@ -171,7 +237,18 @@ double CalculateEMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
 {
     if (!IsValidTimeframe(timeframe)) return 0;
     
-    int handle = iMA(symbol, timeframe, period, 0, MODE_EMA, PRICE_CLOSE);
+    // Use the appropriate EMA period from UtilitySettings based on input
+    int emaPeriod;
+    if (period == UtilitySettings.EMA_PERIODS_SHORT)
+        emaPeriod = UtilitySettings.EMA_PERIODS_SHORT;
+    else if (period == UtilitySettings.EMA_PERIODS_MEDIUM)
+        emaPeriod = UtilitySettings.EMA_PERIODS_MEDIUM;
+    else if (period == UtilitySettings.EMA_PERIODS_LONG)
+        emaPeriod = UtilitySettings.EMA_PERIODS_LONG;
+    else
+        emaPeriod = period;  // Use provided period if it doesn't match any standard ones
+    
+    int handle = iMA(symbol, timeframe, emaPeriod, 0, MODE_EMA, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
         int error = GetLastError();
@@ -191,7 +268,7 @@ double CalculateRSI(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
     double rsi[];
     ArraySetAsSeries(rsi, true);
     
-    int handle = iRSI(symbol, timeframe, period, PRICE_CLOSE);
+    int handle = iRSI(symbol, timeframe, UtilitySettings.RSI_Period, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
         int error = GetLastError();
@@ -866,9 +943,9 @@ void LogMarketAnalysis(const string symbol, const MarketAnalysisData& data,
     if (current_time - utilityLastLogTime < 300) return;
     utilityLastLogTime = current_time;
     
-    // Create base analysis message
+    // Create base analysis message with emoji delimiter
     string analysis = StringFormat(
-        "\n=== Market Analysis [%s] ===\n"
+        "\n=== 📊 Trend Pattern Analysis (Timeframe: %s) ===\n"
         "Time: %s\n"
         "Symbol: %s\n"
         "Current Price: %.5f\n\n"
@@ -982,7 +1059,8 @@ void LogMarketAnalysis(const string symbol, const MarketAnalysisData& data,
 //+------------------------------------------------------------------+
 void LogTradeRejection(const string reason, string symbol, double currentPrice, double adx, double rsi, 
                       double emaShort, double emaMedium, double emaLong, 
-                      double adxThreshold, double rsiUpperThreshold, double rsiLowerThreshold)
+                      double adxThreshold, double rsiUpperThreshold, double rsiLowerThreshold,
+                      bool useDOMAnalysis)
 {
     string log_message = StringFormat(
         "\n=== Trade Rejection Analysis [%s] ===\n"
@@ -1006,8 +1084,8 @@ void LogTradeRejection(const string reason, string symbol, double currentPrice, 
         emaLong
     );
 
-    // Add Trend Pattern Analysis
-    log_message += "\nTrend Pattern Analysis:\n";
+    // Add Trend Pattern Analysis with emoji delimiter
+    log_message += "\n=== 📊 Trend Pattern Analysis (Timeframe: PERIOD_H1) ===\n";
     
     // 1. EMA Analysis
     log_message += "EMA Analysis:\n";
@@ -1158,5 +1236,1021 @@ bool IsValidTimeframe(ENUM_TIMEFRAMES timeframe)
         default:
             Print("Invalid timeframe parameter: ", EnumToString(timeframe));
             return false;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Apply Breakeven                                                  |
+//+------------------------------------------------------------------+
+void ApplyBreakeven(string symbol, ulong ticket, int type, double open_price, double stop_loss, 
+                   double breakeven_level, double breakeven_offset, double min_price_change)
+{
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    
+    if (point <= 0)
+    {
+        Print("Error: Invalid point value for symbol ", symbol);
+        return;
+    }
+
+    static datetime lastModificationTime = 0;
+    datetime currentTime = TimeCurrent();
+
+    if (type == POSITION_TYPE_BUY)
+    {
+        double price = SymbolInfoDouble(symbol, SYMBOL_BID);
+        if (price - open_price >= breakeven_level)
+        {
+            double new_stop_loss = open_price + breakeven_offset;
+            if (stop_loss < new_stop_loss)
+            {
+                if (MathAbs(price - stop_loss) >= min_price_change)
+                {
+                    if (tradeUtility.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
+                    {
+                        lastModificationTime = currentTime;
+                        Print("Breakeven Activated for Buy Position ", ticket);
+                    }
+                }
+            }
+        }
+    }
+    else if (type == POSITION_TYPE_SELL)
+    {
+        double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+        if (open_price - price >= breakeven_level)
+        {
+            double new_stop_loss = open_price - breakeven_offset;
+            if (stop_loss > new_stop_loss || stop_loss == 0.0)
+            {
+                if (MathAbs(price - stop_loss) >= min_price_change)
+                {
+                    if (tradeUtility.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
+                    {
+                        lastModificationTime = currentTime;
+                        Print("Breakeven Activated for Sell Position ", ticket);
+                    }
+                }
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Apply Trailing Stop                                              |
+//+------------------------------------------------------------------+
+void ApplyTrailingStop(string symbol, ulong ticket, int type, double open_price, double stop_loss,
+                      double trailing_stop_pips, double min_price_change)
+{
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    
+    if (point <= 0)
+    {
+        Print("Error: Invalid point value for symbol ", symbol);
+        return;
+    }
+
+    static datetime lastModificationTime = 0;
+    datetime currentTime = TimeCurrent();
+    double trailing_stop = trailing_stop_pips * point;
+
+    if (type == POSITION_TYPE_BUY)
+    {
+        double price = SymbolInfoDouble(symbol, SYMBOL_BID);
+        double new_stop_loss = price - trailing_stop;
+
+        if (new_stop_loss > stop_loss)
+        {
+            if (MathAbs(price - stop_loss) >= min_price_change)
+            {
+                if (tradeUtility.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
+                {
+                    lastModificationTime = currentTime;
+                    Print("Trailing Stop Updated for Buy Position ", ticket);
+                }
+            }
+        }
+    }
+    else if (type == POSITION_TYPE_SELL)
+    {
+        double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+        double new_stop_loss = price + trailing_stop;
+
+        if (new_stop_loss < stop_loss || stop_loss == 0.0)
+        {
+            if (MathAbs(price - stop_loss) >= min_price_change)
+            {
+                if (tradeUtility.PositionModify(ticket, new_stop_loss, PositionGetDouble(POSITION_TP)))
+                {
+                    lastModificationTime = currentTime;
+                    Print("Trailing Stop Updated for Sell Position ", ticket);
+                }
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Place Buy Limit Order                                            |
+//+------------------------------------------------------------------+
+void PlaceBuyLimitOrder(string symbol, double limitPrice, double tpPrice, double slPrice, double riskPercent)
+{
+    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double lot_size = CalculateDynamicLotSize(
+        symbol,                          // symbol
+        (slPrice - limitPrice) / _Point, // stop_loss_pips
+        accountBalance,                  // accountBalance
+        riskPercent,                    // riskPercent
+        minVolume,                      // minVolume
+        maxVolume                       // maxVolume
+    );
+    
+    if (tradeUtility.BuyLimit(lot_size, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Buy Limit Order"))
+    {
+        LogTradeDetails(symbol, lot_size, slPrice, tpPrice);
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("Buy Limit Order Failed with Error: ", error);
+        ResetLastError();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Place Sell Limit Order                                           |
+//+------------------------------------------------------------------+
+void PlaceSellLimitOrder(string symbol, double limitPrice, double tpPrice, double slPrice, double riskPercent)
+{
+    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double lot_size = CalculateDynamicLotSize(
+        symbol,                          // symbol
+        slPrice / _Point,               // stop_loss_pips
+        accountBalance,                  // accountBalance
+        riskPercent,                    // riskPercent
+        minVolume,                      // minVolume
+        maxVolume                       // maxVolume
+    );
+    
+    if (tradeUtility.SellLimit(lot_size, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Sell Limit Order"))
+    {
+        LogTradeDetails(symbol, lot_size, slPrice, tpPrice);
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("Sell Limit Order Failed with Error: ", error);
+        ResetLastError();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Order Placement Functions                                        |
+//+------------------------------------------------------------------+
+void PlaceBuyOrder(string symbol, double riskPercent, double atrMultiplier, 
+                   ENUM_TIMEFRAMES timeframe, double fixedStopLossPips)
+{
+    double stop_loss, take_profit;
+    CalculateDynamicSLTP(symbol, stop_loss, take_profit, atrMultiplier, timeframe, fixedStopLossPips);
+
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+    double lot_size = CalculateDynamicLotSize(
+        symbol,                          // symbol
+        stop_loss / _Point,             // stop_loss_pips
+        accountBalance,                  // accountBalance
+        riskPercent,                    // riskPercent
+        minVolume,                      // minVolume
+        maxVolume                       // maxVolume
+    );
+    double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+    double limit_price = price - 10 * _Point; // Place limit order 10 points below current price
+    double sl = limit_price - stop_loss;
+    double tp = limit_price + take_profit;
+
+    // Normalize SL and TP
+    int price_digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    sl = NormalizeDouble(sl, price_digits);
+    tp = NormalizeDouble(tp, price_digits);
+    limit_price = NormalizeDouble(limit_price, price_digits);
+
+    if (tradeUtility.BuyLimit(lot_size, limit_price, symbol, sl, tp, ORDER_TIME_GTC, 0, "Buy Limit Order with Dynamic SL/TP"))
+    {
+        LogTradeDetails(symbol, lot_size, stop_loss, take_profit);
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("Buy Limit Order Failed with Error: ", error);
+        ResetLastError();
+    }
+}
+
+void PlaceSellOrder(string symbol, double riskPercent, double atrMultiplier, 
+                    ENUM_TIMEFRAMES timeframe, double fixedStopLossPips)
+{
+    double stop_loss, take_profit;
+    CalculateDynamicSLTP(symbol, stop_loss, take_profit, atrMultiplier, timeframe, fixedStopLossPips);
+
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+    double lot_size = CalculateDynamicLotSize(
+        symbol,                          // symbol
+        stop_loss / _Point,             // stop_loss_pips
+        accountBalance,                  // accountBalance
+        riskPercent,                    // riskPercent
+        minVolume,                      // minVolume
+        maxVolume                       // maxVolume
+    );
+    double price = SymbolInfoDouble(symbol, SYMBOL_BID);
+    double limit_price = price + 10 * _Point; // Place limit order 10 points above current price
+    double sl = limit_price + stop_loss;
+    double tp = limit_price - take_profit;
+
+    // Normalize SL and TP
+    int price_digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    sl = NormalizeDouble(sl, price_digits);
+    tp = NormalizeDouble(tp, price_digits);
+    limit_price = NormalizeDouble(limit_price, price_digits);
+
+    if (tradeUtility.SellLimit(lot_size, limit_price, symbol, sl, tp, ORDER_TIME_GTC, 0, "Sell Limit Order with Dynamic SL/TP"))
+    {
+        LogTradeDetails(symbol, lot_size, stop_loss, take_profit);
+    }
+    else
+    {
+        int error = GetLastError();
+        Print("Sell Limit Order Failed with Error: ", error);
+        ResetLastError();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Signal Processing Functions                                      |
+//+------------------------------------------------------------------+
+bool CheckConsecutiveSignals(string symbol, int requiredBars, bool isBuySignal)
+{
+    // Minimum required bars for confirmation
+    if(requiredBars < 2) requiredBars = 2;  // Force minimum of 2 bars
+    
+    // Arrays to store historical values
+    double ema_short_values[];
+    double ema_medium_values[];
+    double ema_long_values[];
+    double macd_histogram_values[];
+    double rsi_values[];
+    
+    // Initialize arrays
+    ArrayResize(ema_short_values, requiredBars);
+    ArrayResize(ema_medium_values, requiredBars);
+    ArrayResize(ema_long_values, requiredBars);
+    ArrayResize(macd_histogram_values, requiredBars);
+    ArrayResize(rsi_values, requiredBars);
+    
+    // Get historical values for all indicators
+    for(int i = 0; i < requiredBars; i++)
+    {
+        ema_short_values[i] = CalculateEMA(symbol, UtilitySettings.EMA_PERIODS_SHORT, UtilitySettings.Timeframe, i);
+        ema_medium_values[i] = CalculateEMA(symbol, UtilitySettings.EMA_PERIODS_MEDIUM, UtilitySettings.Timeframe, i);
+        ema_long_values[i] = CalculateEMA(symbol, UtilitySettings.EMA_PERIODS_LONG, UtilitySettings.Timeframe, i);
+        
+        double macdMain, macdSignal, macdHistogram;
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, i, UtilitySettings.Timeframe);
+        macd_histogram_values[i] = macdHistogram;
+        
+        rsi_values[i] = CalculateRSI(symbol, UtilitySettings.RSI_Period, UtilitySettings.Timeframe, i);
+    }
+    
+    int confirmedBars = 0;
+    
+    for(int i = 0; i < requiredBars; i++)
+    {
+        bool signalConfirmed = false;
+        
+        if(isBuySignal)
+        {
+            bool emaAligned = (ema_short_values[i] > ema_medium_values[i] && 
+                             ema_medium_values[i] > ema_long_values[i]);
+            bool macdPositive = (macd_histogram_values[i] > 0);
+            bool rsiSupport = (rsi_values[i] > UtilitySettings.RSI_Neutral);
+            
+            signalConfirmed = (emaAligned && macdPositive && rsiSupport);
+        }
+        else
+        {
+            bool emaAligned = (ema_short_values[i] < ema_medium_values[i] && 
+                             ema_medium_values[i] < ema_long_values[i]);
+            bool macdNegative = (macd_histogram_values[i] < 0);
+            bool rsiSupport = (rsi_values[i] < UtilitySettings.RSI_Neutral);
+            
+            signalConfirmed = (emaAligned && macdNegative && rsiSupport);
+        }
+        
+        if(signalConfirmed)
+        {
+            confirmedBars++;
+        }
+        else
+        {
+            return false;
+        }
+    }
+    
+    return (confirmedBars >= requiredBars);
+}
+
+//+------------------------------------------------------------------+
+//| Check for Bullish Candle Pattern                                |
+//+------------------------------------------------------------------+
+bool IsBullishCandlePattern(string symbol)
+{
+    CandleData current, previous;
+    current = GetCandleData(symbol, 1, UtilitySettings.Timeframe);
+    previous = GetCandleData(symbol, 2, UtilitySettings.Timeframe);
+    
+    double avgCandleSize = 0;
+    double avgVolume = 0;
+    for(int i = 1; i <= 10; i++)
+    {
+        CandleData temp = GetCandleData(symbol, i, UtilitySettings.Timeframe);
+        avgCandleSize += temp.body;
+        avgVolume += iVolume(symbol, UtilitySettings.Timeframe, i);
+    }
+    avgCandleSize /= 10;
+    avgVolume /= 10;
+    
+    bool isStrongBullishEngulfing = 
+        current.isBullish &&
+        !previous.isBullish &&
+        current.open < previous.close &&
+        current.close > previous.open &&
+        current.body > previous.body * 1.5 &&
+        current.body > avgCandleSize * 1.2 &&
+        iVolume(symbol, UtilitySettings.Timeframe, 1) > avgVolume * 1.5;
+    
+    CandleData twoDaysAgo = GetCandleData(symbol, 3, UtilitySettings.Timeframe);
+    bool isPerfectMorningStar =
+        !twoDaysAgo.isBullish &&
+        current.isBullish &&
+        previous.body < avgCandleSize * 0.3 &&
+        twoDaysAgo.body > avgCandleSize * 1.2 &&
+        current.body > avgCandleSize * 1.2 &&
+        current.close > twoDaysAgo.open &&
+        iVolume(symbol, UtilitySettings.Timeframe, 1) > avgVolume * 1.5;
+    
+    bool isClearHammer = 
+        current.isBullish &&
+        current.lowerWick > current.body * 3 &&
+        current.upperWick < current.body * 0.1 &&
+        current.body > avgCandleSize * 0.8 &&
+        current.low < previous.low &&
+        iVolume(symbol, UtilitySettings.Timeframe, 1) > avgVolume * 1.5;
+    
+    return (isStrongBullishEngulfing || isPerfectMorningStar || isClearHammer);
+}
+
+//+------------------------------------------------------------------+
+//| Check for Bearish Candle Pattern                                |
+//+------------------------------------------------------------------+
+bool IsBearishCandlePattern(string symbol)
+{
+    CandleData current, previous;
+    current = GetCandleData(symbol, 1, UtilitySettings.Timeframe);
+    previous = GetCandleData(symbol, 2, UtilitySettings.Timeframe);
+    
+    double avgCandleSize = 0;
+    double avgVolume = 0;
+    for(int i = 1; i <= 10; i++)
+    {
+        CandleData temp = GetCandleData(symbol, i, UtilitySettings.Timeframe);
+        avgCandleSize += temp.body;
+        avgVolume += iVolume(symbol, UtilitySettings.Timeframe, i);
+    }
+    avgCandleSize /= 10;
+    avgVolume /= 10;
+    
+    bool isStrongBearishEngulfing = 
+        !current.isBullish &&
+        previous.isBullish &&
+        current.open > previous.close &&
+        current.close < previous.open &&
+        current.body > previous.body * 1.5 &&
+        current.body > avgCandleSize * 1.2 &&
+        iVolume(symbol, UtilitySettings.Timeframe, 1) > avgVolume * 1.5;
+    
+    CandleData twoDaysAgo = GetCandleData(symbol, 3, UtilitySettings.Timeframe);
+    bool isPerfectEveningStar =
+        twoDaysAgo.isBullish &&
+        !current.isBullish &&
+        previous.body < avgCandleSize * 0.3 &&
+        twoDaysAgo.body > avgCandleSize * 1.2 &&
+        current.body > avgCandleSize * 1.2 &&
+        current.close < twoDaysAgo.open &&
+        iVolume(symbol, UtilitySettings.Timeframe, 1) > avgVolume * 1.5;
+    
+    bool isClearShootingStar = 
+        !current.isBullish &&
+        current.upperWick > current.body * 3 &&
+        current.lowerWick < current.body * 0.1 &&
+        current.body > avgCandleSize * 0.8 &&
+        current.high > previous.high &&
+        iVolume(symbol, UtilitySettings.Timeframe, 1) > avgVolume * 1.5;
+    
+    return (isStrongBearishEngulfing || isPerfectEveningStar || isClearShootingStar);
+}
+
+//+------------------------------------------------------------------+
+//| Manage Positions                                                 |
+//+------------------------------------------------------------------+
+bool ManagePositions(string symbol, int checkType = -1)
+{
+    bool hasPosition = false;
+    int total = PositionsTotal();
+    
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(PositionSelectByTicket(ticket))
+        {
+            string posSymbol = PositionGetString(POSITION_SYMBOL);
+            if(posSymbol != symbol) continue;
+            
+            int posType = (int)PositionGetInteger(POSITION_TYPE);
+            if(checkType != -1 && posType != checkType) continue;
+            
+            hasPosition = true;
+            
+            if(UtilitySettings.UseTrailingStop || UtilitySettings.UseBreakeven)
+            {
+                double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
+                double current_price = PositionGetDouble(POSITION_PRICE_CURRENT);
+                double stop_loss = PositionGetDouble(POSITION_SL);
+                
+                if(UtilitySettings.UseTrailingStop)
+                    ApplyTrailingStop(symbol, ticket, posType, open_price, stop_loss, UtilitySettings.TrailingStopPips, MinPriceChangeThreshold);
+                if(UtilitySettings.UseBreakeven)
+                    ApplyBreakeven(symbol, ticket, posType, open_price, current_price, 
+                                 UtilitySettings.BreakevenActivationPips * _Point,
+                                 UtilitySettings.BreakevenOffsetPips * _Point,
+                                 MinPriceChangeThreshold * _Point);
+            }
+        }
+    }
+    
+    return hasPosition;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate MACD Values                                            |
+//+------------------------------------------------------------------+
+void CalculateMACD(string symbol, double &macdMain, double &macdSignal, double &macdHistogram, int shift, ENUM_TIMEFRAMES timeframe)
+{
+    if (!IsValidTimeframe(timeframe)) return;
+    
+    int handle = iMACD(symbol, timeframe, 
+                      UtilitySettings.MACD_Fast,    // Fast EMA period
+                      UtilitySettings.MACD_Slow,    // Slow EMA period
+                      UtilitySettings.MACD_Signal,  // Signal period
+                      PRICE_CLOSE);
+                      
+    if (handle == INVALID_HANDLE)
+    {
+        Print("Failed to create MACD handle for symbol ", symbol);
+        return;
+    }
+
+    double macdBuffer[];
+    double signalBuffer[];
+    double histogramBuffer[];
+    
+    ArraySetAsSeries(macdBuffer, true);
+    ArraySetAsSeries(signalBuffer, true);
+    ArraySetAsSeries(histogramBuffer, true);
+    
+    if (CopyBuffer(handle, 0, shift, 1, macdBuffer) > 0 &&
+        CopyBuffer(handle, 1, shift, 1, signalBuffer) > 0 &&
+        CopyBuffer(handle, 2, shift, 1, histogramBuffer) > 0)
+    {
+        macdMain = macdBuffer[0];
+        macdSignal = signalBuffer[0];
+        macdHistogram = histogramBuffer[0];
+    }
+    
+    IndicatorRelease(handle);
+}
+//+------------------------------------------------------------------+
+//| Calculate Dynamic RSI Thresholds                                 |
+//+------------------------------------------------------------------+
+void GetDynamicRSIThresholds(string symbol, ENUM_TIMEFRAMES timeframe, double rsiUpperThreshold, double rsiLowerThreshold, double &upper_threshold, double &lower_threshold)
+{
+    double atr = CalculateATR(symbol, 14, timeframe);
+    double avg_atr = 0;
+    
+    // Calculate average ATR for last 20 periods
+    for(int i = 0; i < 20; i++)
+    {
+        avg_atr += CalculateATR(symbol, 14, timeframe, i);
+    }
+    avg_atr /= 20;
+    
+    // Adjust thresholds based on relative volatility
+    double volatility_factor = atr / avg_atr;
+    
+    // More volatile market = wider thresholds
+    upper_threshold = rsiUpperThreshold + (volatility_factor - 1) * 10;
+    lower_threshold = rsiLowerThreshold - (volatility_factor - 1) * 10;
+    
+    // Keep thresholds within reasonable bounds
+    upper_threshold = MathMin(MathMax(upper_threshold, 65), 85);
+    lower_threshold = MathMax(MathMin(lower_threshold, 35), 15);
+}
+
+//+------------------------------------------------------------------+
+//| Check for RSI Divergence                                         |
+//+------------------------------------------------------------------+
+bool CheckRSIDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, int lookback, bool &bullish, bool &bearish)
+{
+    double rsi_values[];
+    double price_values[];
+    ArrayResize(rsi_values, lookback);
+    ArrayResize(price_values, lookback);
+    
+    // Get RSI and price values
+    for(int i = 0; i < lookback; i++)
+    {
+        rsi_values[i] = CalculateRSI(symbol, rsiPeriod, timeframe, i);
+        price_values[i] = iLow(symbol, timeframe, i);
+    }
+    
+    // Find local extremes
+    double rsi_low = rsi_values[ArrayMinimum(rsi_values)];
+    double rsi_high = rsi_values[ArrayMaximum(rsi_values)];
+    double price_low = price_values[ArrayMinimum(price_values)];
+    double price_high = price_values[ArrayMaximum(price_values)];
+    
+    // Check for bullish divergence (price lower, RSI higher)
+    bullish = (price_values[0] < price_low && rsi_values[0] > rsi_low);
+    
+    // Check for bearish divergence (price higher, RSI lower)
+    bearish = (price_values[0] > price_high && rsi_values[0] < rsi_high);
+    
+    return (bullish || bearish);
+}
+
+//+------------------------------------------------------------------+
+//| Detect Order Flow Imbalances                                     |
+//+------------------------------------------------------------------+
+int DetectOrderFlowImbalances(double buyVolume, double sellVolume, double imbalanceThreshold)
+{
+    // Calculate imbalance ratio for logging
+    double imbalanceRatio = 0;
+    if (sellVolume > 0) imbalanceRatio = buyVolume / sellVolume;
+    
+    if (buyVolume > sellVolume * imbalanceThreshold)
+    {
+        Print("Order Flow Imbalance Detected: More Buy Orders (Ratio: ", imbalanceRatio, ")");
+        return 1;  // Buy signal
+    }
+    else if (sellVolume > buyVolume * imbalanceThreshold)
+    {
+        Print("Order Flow Imbalance Detected: More Sell Orders (Ratio: ", imbalanceRatio, ")");
+        return -1; // Sell signal
+    }
+    
+    return 0;  // No significant imbalance
+}
+
+//+------------------------------------------------------------------+
+//| Monitor Order Flow                                               |
+//+------------------------------------------------------------------+
+int MonitorOrderFlow(string symbol, bool useDOMAnalysis, double liquidityThreshold, double imbalanceThreshold)
+{
+    if (!useDOMAnalysis)
+        return 1; // Return neutral signal if DOM analysis is disabled
+
+    MqlBookInfo book_info[];
+    int book_count = MarketBookGet(symbol, book_info);
+    
+    if (book_count <= 0)
+    {
+        static datetime lastWarningTime = 0;
+        datetime currentTime = TimeCurrent();
+        if (currentTime - lastWarningTime >= 300) // Log warning every 5 minutes
+        {
+            Print("Warning: No DOM data available. Returning neutral signal.");
+            lastWarningTime = currentTime;
+        }
+        return 1; // Return neutral instead of 0 to not block trades
+    }
+
+    double buyVolume = 0.0;
+    double sellVolume = 0.0;
+    double totalVolume = 0.0;
+    double maxBuyPrice = 0.0;
+    double minSellPrice = DBL_MAX;
+    double largestBuyOrder = 0.0;
+    double largestSellOrder = 0.0;
+    int buyLevels = 0;
+    int sellLevels = 0;
+    
+    // Calculate average order size for normalization
+    double totalOrderSize = 0.0;
+    int orderCount = 0;
+
+    // First pass - calculate averages
+    for (int i = 0; i < book_count; i++)
+    {
+        totalOrderSize += book_info[i].volume;
+        orderCount++;
+    }
+    double avgOrderSize = (orderCount > 0) ? totalOrderSize / orderCount : 0;
+
+    // Second pass - analyze order flow with normalized volumes
+    for (int i = 0; i < book_count; i++)
+    {
+        double normalizedVolume = (avgOrderSize > 0) ? book_info[i].volume / avgOrderSize : book_info[i].volume;
+        
+        if (book_info[i].type == BOOK_TYPE_BUY)
+        {
+            buyVolume += normalizedVolume;
+            buyLevels++;
+            maxBuyPrice = MathMax(maxBuyPrice, book_info[i].price);
+            largestBuyOrder = MathMax(largestBuyOrder, normalizedVolume);
+        }
+        else if (book_info[i].type == BOOK_TYPE_SELL)
+        {
+            sellVolume += normalizedVolume;
+            sellLevels++;
+            minSellPrice = MathMin(minSellPrice, book_info[i].price);
+            largestSellOrder = MathMax(largestSellOrder, normalizedVolume);
+        }
+    }
+
+    totalVolume = buyVolume + sellVolume;
+    double buyPercentage = (totalVolume > 0) ? (buyVolume / totalVolume) * 100 : 0;
+    double sellPercentage = (totalVolume > 0) ? (sellVolume / totalVolume) * 100 : 0;
+    double imbalanceRatio = (sellVolume > 0) ? buyVolume / sellVolume : 1.0;
+
+    // Reduced imbalance threshold for more frequent signals
+    double adjustedImbalanceThreshold = imbalanceThreshold * 0.8; // 20% more lenient
+
+    // More lenient liquidity check
+    bool sufficientLiquidity = (totalVolume >= liquidityThreshold * 0.7); // 30% more lenient
+
+    // Log order flow analysis
+    static datetime lastDetailedLog = 0;
+    datetime currentTime = TimeCurrent();
+    
+    if (currentTime - lastDetailedLog >= 300) // Log details every 5 minutes
+    {
+        string flowDirection = "NEUTRAL";
+        if (imbalanceRatio > adjustedImbalanceThreshold) flowDirection = "BUY";
+        else if (imbalanceRatio < 1/adjustedImbalanceThreshold) flowDirection = "SELL";
+
+        Print("=== Order Flow Analysis ===");
+        Print("Buy Volume: ", buyVolume, " (", buyPercentage, "%)");
+        Print("Sell Volume: ", sellVolume, " (", sellPercentage, "%)");
+        Print("Imbalance Ratio: ", imbalanceRatio);
+        Print("Adjusted Threshold: ", adjustedImbalanceThreshold);
+        Print("Flow Direction: ", flowDirection);
+        Print("Liquidity Status: ", (sufficientLiquidity ? "Sufficient" : "Insufficient"));
+        Print("========================");
+        
+        lastDetailedLog = currentTime;
+    }
+
+    // Return signals with more lenient conditions
+    if (sufficientLiquidity)
+    {
+        if (imbalanceRatio > adjustedImbalanceThreshold)
+            return 1;  // Buy signal
+        else if (imbalanceRatio < 1/adjustedImbalanceThreshold)
+            return -1; // Sell signal
+        else
+            return 1;  // Return neutral signal instead of 0 when no clear imbalance
+    }
+    
+    // Even with insufficient liquidity, return neutral instead of blocking
+    return 1;
+}
+
+//+------------------------------------------------------------------+
+//| Check RSI and MACD Combination Signal                            |
+//+------------------------------------------------------------------+
+int CheckRSIMACDSignal(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, double rsiUpperThreshold, double rsiLowerThreshold)
+{
+    double rsi = CalculateRSI(symbol, rsiPeriod, timeframe, 0);
+    double macdMain, macdSignal, macdHistogram;
+    CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0, timeframe);
+    
+    // Get dynamic thresholds
+    double upper_threshold, lower_threshold;
+    GetDynamicRSIThresholds(symbol, timeframe, rsiUpperThreshold, rsiLowerThreshold, upper_threshold, lower_threshold);
+    
+    // Check for divergence
+    bool bullish_div, bearish_div;
+    CheckRSIDivergence(symbol, timeframe, rsiPeriod, 10, bullish_div, bearish_div);
+    
+    // Enhanced Buy Signal Conditions
+    bool buySignal = 
+        ((rsi < lower_threshold) || bullish_div) &&    // RSI oversold OR bullish divergence
+        macdMain > macdSignal &&                     // MACD above signal
+        macdHistogram > 0 &&                         // Positive momentum
+        rsi > CalculateRSI(symbol, rsiPeriod, timeframe, 1);          // RSI increasing
+        
+    // Enhanced Sell Signal Conditions    
+    bool sellSignal = 
+        ((rsi > upper_threshold) || bearish_div) &&    // RSI overbought OR bearish divergence
+        macdMain < macdSignal &&                     // MACD below signal
+        macdHistogram < 0 &&                         // Negative momentum
+        rsi < CalculateRSI(symbol, rsiPeriod, timeframe, 1);          // RSI decreasing
+    
+    // Return signals with logging
+    if(buySignal)
+    {
+        Print("RSI Buy Signal - Value: ", rsi, 
+              " Dynamic Lower: ", lower_threshold,
+              " Divergence: ", bullish_div);
+        return 1;
+    }
+    if(sellSignal)
+    {
+        Print("RSI Sell Signal - Value: ", rsi,
+              " Dynamic Upper: ", upper_threshold,
+              " Divergence: ", bearish_div);
+        return -1;
+    }
+    return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate RSI Trend Strength                                     |
+//+------------------------------------------------------------------+
+double GetRSITrendStrength(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, int periods)
+{
+    double strength = 0;
+    double prev_rsi = CalculateRSI(symbol, rsiPeriod, timeframe, periods);
+    
+    // Calculate the strength of the RSI trend
+    for(int i = periods - 1; i >= 0; i--)
+    {
+        double current_rsi = CalculateRSI(symbol, rsiPeriod, timeframe, i);
+        strength += (current_rsi - prev_rsi);
+        prev_rsi = current_rsi;
+    }
+    
+    return strength / periods;  // Positive = strengthening, Negative = weakening
+}
+
+//+------------------------------------------------------------------+
+//| Initialize log times for all symbols                             |
+//+------------------------------------------------------------------+
+// Add these variables to track last log times
+struct LogTimes {
+    datetime calculationLogTime;
+    datetime analysisLogTime;
+    datetime signalLogTime;
+};
+static LogTimes symbolLogTimes[];  // Array to store log times for each symbol
+
+void InitializeLogTimes(LogTimes &symbolLogTimes[], int symbolCount)
+{
+    datetime currentTime = TimeCurrent();
+    for(int i = 0; i < symbolCount; i++)
+    {
+        symbolLogTimes[i].calculationLogTime = currentTime;
+        symbolLogTimes[i].analysisLogTime = currentTime;
+        symbolLogTimes[i].signalLogTime = currentTime;
+    }
+}
+// Add this helper function to close all positions
+void CloseAllPositions(string symbol, CTrade &trade)
+{
+    for (int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if (PositionSelectByTicket(ticket))
+        {
+            if (PositionGetString(POSITION_SYMBOL) == symbol)
+            {
+                trade.PositionClose(ticket);
+            }
+        }
+    }
+}
+
+// Add this function to check if a symbol is a stock
+bool IsStockSymbol(string symbol)
+{
+    // Check for common stock exchange suffixes
+    return StringFind(symbol, ".NYSE") >= 0 || 
+           StringFind(symbol, ".NAS") >= 0 || 
+           StringFind(symbol, ".LSE") >= 0;
+}
+
+// Add this function to check US market hours
+bool IsWithinUSMarketHours()
+{
+    datetime serverTime = TimeCurrent();
+    MqlDateTime dt;
+    TimeToStruct(serverTime, dt);
+    
+    // Check if it's a weekday (1-5, Monday-Friday)
+    if(dt.day_of_week <= 0 || dt.day_of_week > 5)
+        return false;
+        
+    // Convert current time to minutes since midnight
+    int currentMinutes = dt.hour * 60 + dt.min;
+    int openMinutes = US_MARKET_OPEN_HOUR * 60 + US_MARKET_OPEN_MINUTE;
+    int closeMinutes = US_MARKET_CLOSE_HOUR * 60 + US_MARKET_CLOSE_MINUTE;
+    
+    return (currentMinutes >= openMinutes && currentMinutes < closeMinutes);
+}
+
+//+------------------------------------------------------------------+
+//| Validate input parameters                                        |
+//+------------------------------------------------------------------+
+void ValidateInputs(double riskPercent, double maxDrawdownPercent, double atrMultiplier, int adxPeriod, double trendADXThreshold, double trailingStopPips, double breakevenActivationPips, double breakevenOffsetPips, double liquidityThreshold, double imbalanceThreshold, int emaPeriodsShort, int emaPeriodsMedium, int emaPeriodsLong, int patternLookback, double goldenCrossThreshold)
+{
+    // Validate RiskPercent
+    if (riskPercent <= 0.0 || riskPercent > 10.0)
+    {
+        Alert("RiskPercent must be between 0.1 and 10.0");
+        ExpertRemove();
+        return;
+    }
+
+    // Validate MaxDrawdownPercent
+    if (maxDrawdownPercent <= 0.0 || maxDrawdownPercent > 100.0)
+    {
+        Alert("MaxDrawdownPercent must be between 0.1 and 100.0");
+        ExpertRemove();
+        return;
+    }
+
+    // Validate ATRMultiplier
+    if (atrMultiplier <= 0.0 || atrMultiplier > 5.0)
+    {
+        Alert("ATRMultiplier must be between 0.1 and 5.0");
+        ExpertRemove();
+        return;
+    }
+
+    // Validate ADXPeriod
+    if (adxPeriod <= 0)
+    {
+        Alert("ADXPeriod must be greater than 0");
+        ExpertRemove();
+        return;
+    }
+
+    // Validate TrendADXThreshold
+    if (trendADXThreshold <= 0.0 || trendADXThreshold > 100.0)
+    {
+        Alert("TrendADXThreshold must be between 0.1 and 100.0");
+        ExpertRemove();
+        return;
+    }
+
+    // Validate TrailingStopPips
+    if (trailingStopPips <= 0.0)
+    {
+        Alert("TrailingStopPips must be greater than 0");
+        ExpertRemove();
+        return;
+    }
+
+    // Validate BreakevenActivationPips and BreakevenOffsetPips
+    if (breakevenActivationPips <= 0.0 || breakevenOffsetPips < 0.0)
+    {
+        Alert("BreakevenActivationPips must be greater than 0 and BreakevenOffsetPips cannot be negative");
+        ExpertRemove();
+        return;
+    }
+
+    // Validate LiquidityThreshold
+    if (liquidityThreshold <= 0.0)
+    {
+        Alert("LiquidityThreshold must be greater than 0");
+        ExpertRemove();
+        return;
+    }
+
+    // Validate ImbalanceThreshold
+    if (imbalanceThreshold <= 1.0)
+    {
+        Alert("ImbalanceThreshold must be greater than 1.0");
+        ExpertRemove();
+        return;
+    }
+
+    // Validate Pattern Recognition parameters
+    if (emaPeriodsShort >= emaPeriodsMedium || emaPeriodsMedium >= emaPeriodsLong)
+    {
+        Alert("EMA periods must be in ascending order: SHORT < MEDIUM < LONG");
+        ExpertRemove();
+        return;
+    }
+
+    if (patternLookback <= 0 || patternLookback > 100)
+    {
+        Alert("PATTERN_LOOKBACK must be between 1 and 100");
+        ExpertRemove();
+        return;
+    }
+
+    if (goldenCrossThreshold <= 0)
+    {
+        Alert("GOLDEN_CROSS_THRESHOLD must be greater than 0");
+        ExpertRemove();
+        return;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Process a sell signal for a given symbol                         |
+//+------------------------------------------------------------------+
+void ProcessSellSignal(string symbol, double lotSize, double stopLoss, double takeProfit, double liquidityThreshold, double takeProfitPips, double stopLossPips, double riskPercent, CTrade &trade)
+{
+    // Require 3 bars of confirmation for more reliability
+    if(!CheckConsecutiveSignals(symbol, 3, false))
+    {
+        Print("Sell signal rejected - Failed 3-bar persistence check");
+        return;
+    }
+
+    if (!IsBullishCandlePattern(symbol))
+    {
+        if (!ManagePositions(symbol, POSITION_TYPE_SELL) && !HasPendingOrder(symbol, ORDER_TYPE_SELL_LIMIT))
+        {
+            double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+            double tpPrice = bid - takeProfit;
+            double slPrice = bid + stopLoss;
+            
+            double limitPrice = GetBestLimitOrderPrice(symbol, ORDER_TYPE_SELL_LIMIT, tpPrice, slPrice, 
+                                                       liquidityThreshold, takeProfitPips, stopLossPips);
+            
+            if (limitPrice > 0.0)
+            {
+                Print("Sell Limit Order Placed - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
+                trade.SellLimit(lotSize, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Sell Limit Order");
+            }
+            else
+            {
+                Print("Sell Market Order Placed - TP: ", tpPrice, " SL: ", slPrice);
+                trade.Sell(lotSize, symbol, slPrice, tpPrice, "Sell Market Order");
+            }
+        }
+    }
+    else
+    {
+        Print("Sell Signal Rejected - Strong bullish pattern detected");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Process a buy signal for a given symbol                          |
+//+------------------------------------------------------------------+
+void ProcessBuySignal(string symbol, double lotSize, double stopLoss, double takeProfit, double liquidityThreshold, double takeProfitPips, double stopLossPips, double riskPercent, CTrade &trade)
+{
+    // Require 3 bars of confirmation for more reliability
+    if(!CheckConsecutiveSignals(symbol, 3, true))
+    {
+        Print("Buy signal rejected - Failed 3-bar persistence check");
+        return;
+    }
+
+    if (!IsBearishCandlePattern(symbol))
+    {
+        if (!ManagePositions(symbol, POSITION_TYPE_BUY) && !HasPendingOrder(symbol, ORDER_TYPE_BUY_LIMIT))
+        {
+            double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+            double tpPrice = ask + takeProfit;
+            double slPrice = ask - stopLoss;
+            
+            double limitPrice = GetBestLimitOrderPrice(symbol, ORDER_TYPE_BUY_LIMIT, tpPrice, slPrice, 
+                                                       liquidityThreshold, takeProfitPips, stopLossPips);
+            
+            if (limitPrice > 0.0)
+            {
+                Print("Buy Limit Order Placed - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
+                trade.BuyLimit(lotSize, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Buy Limit Order");
+            }
+            else
+            {
+                Print("Buy Market Order Placed - TP: ", tpPrice, " SL: ", slPrice);
+                trade.Buy(lotSize, symbol, slPrice, tpPrice, "Buy Market Order");
+            }
+        }
+    }
+    else
+    {
+        Print("Buy Signal Rejected - Strong bearish pattern detected");
     }
 }

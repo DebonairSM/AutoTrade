@@ -177,7 +177,7 @@ void OnTick()
             double lotSize = CalculateDynamicLotSize(symbol, stopLoss / point, accountBalance, RiskPercent, minVolume, maxVolume);
 
             Print("Placing Buy Trade for symbol ", symbol);
-            PlaceBuyOrder(symbol);  // Update to include symbol parameter
+            PlaceBuyOrder(symbol, RiskPercent, ATRMultiplier, Timeframe, fixedStopLossPips);
          }
       }
       else if (AllowShortTrades && trendSignal == -1 && rsiMacdSignal == -1 && orderFlowSignal == -1)
@@ -201,7 +201,7 @@ void OnTick()
             double lotSize = CalculateDynamicLotSize(symbol, stopLoss / point, accountBalance, RiskPercent, minVolume, maxVolume);
 
             Print("Placing Sell Trade for symbol ", symbol);
-            PlaceSellOrder(symbol); // Update to include symbol parameter
+            PlaceSellOrder(symbol, RiskPercent, ATRMultiplier, Timeframe, fixedStopLossPips);
          }
       }
    }
