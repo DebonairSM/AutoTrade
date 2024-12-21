@@ -62,9 +62,9 @@ static datetime lastLotSizeCalcTimes[];   // Array to store last calculation tim
 const int LOT_SIZE_CALC_INTERVAL = 60;    // Minimum seconds between lot size calculations
 
 // Declare US market open and close times
-const int US_MARKET_OPEN_HOUR = 9;    // 9 AM
+const int US_MARKET_OPEN_HOUR = 16;    // 9 AM
 const int US_MARKET_OPEN_MINUTE = 30; // 9:30 AM
-const int US_MARKET_CLOSE_HOUR = 16;  // 4 PM
+const int US_MARKET_CLOSE_HOUR = 23;  // 4 PM
 const int US_MARKET_CLOSE_MINUTE = 0; // 4:00 PM
 
 // Define a simple LogMessage function
@@ -945,7 +945,7 @@ void LogMarketAnalysis(const string symbol, const MarketAnalysisData& data,
     
     // Create base analysis message with emoji delimiter
     string analysis = StringFormat(
-        "\n=== 📈 Trend Pattern Analysis (Timeframe: %s) ===\n"
+        "\n=== 📈 Trend Pattern Analysis for %s (Timeframe: %s) ===\n"  // Added symbol here
         "Time: %s\n"
         "Symbol: %s\n"
         "Current Price: %.5f\n\n"
@@ -958,6 +958,7 @@ void LogMarketAnalysis(const string symbol, const MarketAnalysisData& data,
         "RSI(%d): %.2f\n"
         "MACD: %.5f (Signal: %.5f, Hist: %.5f)\n"
         "ATR(14): %.5f\n\n",
+        symbol,  // Added symbol here
         EnumToString(timeframe),
         TimeToString(current_time, TIME_DATE|TIME_MINUTES|TIME_SECONDS),
         symbol,

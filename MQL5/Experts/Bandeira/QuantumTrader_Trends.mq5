@@ -182,7 +182,6 @@ int OnInit()
                 
                 AddTradingSymbol(symbol, count);
                 count++;
-                Print("Added symbol for trading: ", symbol);
             }
         }
         
@@ -275,7 +274,7 @@ void ExecuteTradingLogic(string symbol)
     if (UseScalpingStrategy)
     {
         // Add start delimiter for scalping logic
-        Print("💥💸 Scalping Logic Start for Symbol: ", symbol, " 💸💥");
+        Print("💰 Scalping Logic Start for Symbol: ", symbol, " 💰");
 
         // Calculate RSI using scalping-specific period
         double rsi = CalculateRSI(symbol, SCALP_RSI_PERIOD, ScalpingTimeframe);
@@ -317,7 +316,7 @@ void ExecuteTradingLogic(string symbol)
         }
 
         // Add end delimiter for scalping logic
-        Print("🔚💰 Scalping Logic End for Symbol: ", symbol, " 💰🔚");
+        Print("💰 Scalping Logic End for Symbol: ", symbol, " 💰");
     }
 
     // Continue with existing trend strategy
