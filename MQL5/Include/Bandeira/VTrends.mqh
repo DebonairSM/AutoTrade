@@ -722,8 +722,8 @@ double GetBestLimitOrderPrice(string symbol, ENUM_ORDER_TYPE orderType, double &
         // Adjust TP/SL based on the limit price
         if (bestPrice > 0.0)
         {
-            tpPrice = bestPrice + (takeProfitPips * _Point);
-            slPrice = bestPrice - (stopLossPips * _Point);
+            tpPrice = bestPrice + (takeProfitPips * SymbolInfoDouble(symbol, SYMBOL_POINT));
+            slPrice = bestPrice - (stopLossPips * SymbolInfoDouble(symbol, SYMBOL_POINT));
             
             Print("Buy Limit Analysis - Price: ", bestPrice, 
                   " Volume: ", maxVolume,
@@ -759,8 +759,8 @@ double GetBestLimitOrderPrice(string symbol, ENUM_ORDER_TYPE orderType, double &
         // Adjust TP/SL based on the limit price
         if (bestPrice > 0.0)
         {
-            tpPrice = bestPrice - (takeProfitPips * _Point);
-            slPrice = bestPrice + (stopLossPips * _Point);
+            tpPrice = bestPrice - (takeProfitPips * SymbolInfoDouble(symbol, SYMBOL_POINT));
+            slPrice = bestPrice + (stopLossPips * SymbolInfoDouble(symbol, SYMBOL_POINT));
             
             Print("Sell Limit Analysis - Price: ", bestPrice,
                   " Volume: ", maxVolume,
@@ -799,7 +799,7 @@ double GetBestLimitOrderPrice(string symbol, ENUM_ORDER_TYPE orderType, double &
 //+------------------------------------------------------------------+
 //| Detect Liquidity Pools Near TP/SL                                |
 //+------------------------------------------------------------------+
-bool DetectLiquidityPoolsNearTPSL(MqlBookInfo &book_info[], int book_count, double liquidityThreshold, double tpPrice, double slPrice, double &poolPrice, double &poolVolume)
+bool DetectLiquidityPoolsNearTPSL(string symbol, MqlBookInfo &book_info[], int book_count, double liquidityThreshold, double tpPrice, double slPrice, double &poolPrice, double &poolVolume)
 {
     bool liquidityPoolDetected = false;
     poolPrice = 0.0;
@@ -813,7 +813,7 @@ bool DetectLiquidityPoolsNearTPSL(MqlBookInfo &book_info[], int book_count, doub
             double tpDistance = MathAbs(currentPrice - tpPrice);
             double slDistance = MathAbs(currentPrice - slPrice);
 
-            if (tpDistance <= 10 * _Point || slDistance <= 10 * _Point)
+            if (tpDistance <= 10 * SymbolInfoDouble(symbol, SYMBOL_POINT) || slDistance <= 10 * SymbolInfoDouble(symbol, SYMBOL_POINT))
             {
                 liquidityPoolDetected = true;
                 poolPrice = currentPrice;
@@ -1042,7 +1042,7 @@ void LogTradeRejection(const string reason, string symbol, double currentPrice, 
     
     // 1. EMA Analysis
     log_message += "EMA Analysis:\n";
-    double emaGap = MathAbs(emaShort - emaMedium) / _Point;
+    double emaGap = MathAbs(emaShort - emaMedium) / SymbolInfoDouble(symbol, SYMBOL_POINT);
     log_message += StringFormat("- EMA Gap: %.1f points\n", emaGap);
     
     if (emaShort > emaMedium && emaMedium > emaLong)
@@ -1321,7 +1321,7 @@ void PlaceBuyLimitOrder(string symbol, double limitPrice, double riskPercent)
         double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
         double lot_size = CalculateDynamicLotSize(
             symbol,                          // symbol
-            (stop_loss / _Point),            // stop_loss_pips
+            (stop_loss / SymbolInfoDouble(symbol, SYMBOL_POINT)),            // stop_loss_pips
             accountBalance,                  // accountBalance
             riskPercent,                     // riskPercent
             minVolume,                       // minVolume
@@ -1369,7 +1369,7 @@ void PlaceSellLimitOrder(string symbol, double limitPrice, double riskPercent)
         double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
         double lot_size = CalculateDynamicLotSize(
             symbol,                          // symbol
-            (stop_loss / _Point),            // stop_loss_pips
+            (stop_loss / SymbolInfoDouble(symbol, SYMBOL_POINT)),            // stop_loss_pips
             accountBalance,                  // accountBalance
             riskPercent,                     // riskPercent
             minVolume,                       // minVolume
@@ -1416,14 +1416,14 @@ void PlaceBuyOrder(string symbol, double riskPercent, double atrMultiplier,
     double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
     double lot_size = CalculateDynamicLotSize(
         symbol,                          // symbol
-        stop_loss / _Point,             // stop_loss_pips
+        stop_loss / SymbolInfoDouble(symbol, SYMBOL_POINT),             // stop_loss_pips
         accountBalance,                  // accountBalance
         riskPercent,                    // riskPercent
         minVolume,                      // minVolume
         maxVolume                       // maxVolume
     );
     double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
-    double limit_price = price - 10 * _Point; // Place limit order 10 points below current price
+    double limit_price = price - 10 * SymbolInfoDouble(symbol, SYMBOL_POINT); // Place limit order 10 points below current price
     double sl = limit_price - stop_loss;
     double tp = limit_price + take_profit;
 
@@ -1456,14 +1456,14 @@ void PlaceSellOrder(string symbol, double riskPercent, double atrMultiplier,
     double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
     double lot_size = CalculateDynamicLotSize(
         symbol,                          // symbol
-        stop_loss / _Point,             // stop_loss_pips
+        stop_loss / SymbolInfoDouble(symbol, SYMBOL_POINT),             // stop_loss_pips
         accountBalance,                  // accountBalance
         riskPercent,                    // riskPercent
         minVolume,                      // minVolume
         maxVolume                       // maxVolume
     );
     double price = SymbolInfoDouble(symbol, SYMBOL_BID);
-    double limit_price = price + 10 * _Point; // Place limit order 10 points above current price
+    double limit_price = price + 10 * SymbolInfoDouble(symbol, SYMBOL_POINT); // Place limit order 10 points above current price
     double sl = limit_price + stop_loss;
     double tp = limit_price - take_profit;
 
@@ -1704,9 +1704,9 @@ bool ManagePositions(string symbol, int checkType = -1)
                     ApplyTrailingStop(symbol, ticket, posType, open_price, stop_loss, UtilitySettings.TrailingStopPips, MinPriceChangeThreshold);
                 if(UtilitySettings.UseBreakeven)
                     ApplyBreakeven(symbol, ticket, posType, open_price, current_price, 
-                                 UtilitySettings.BreakevenActivationPips * _Point,
-                                 UtilitySettings.BreakevenOffsetPips * _Point,
-                                 MinPriceChangeThreshold * _Point);
+                                 UtilitySettings.BreakevenActivationPips * SymbolInfoDouble(symbol, SYMBOL_POINT),
+                                 UtilitySettings.BreakevenOffsetPips * SymbolInfoDouble(symbol, SYMBOL_POINT),
+                                 MinPriceChangeThreshold * SymbolInfoDouble(symbol, SYMBOL_POINT));
             }
         }
     }
