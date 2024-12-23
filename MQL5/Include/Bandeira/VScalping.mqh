@@ -106,7 +106,7 @@ bool CheckBuyCondition(double rsi, double macdMain, double macdSignal, string sy
     
     // Get Bollinger Bands
     double bbUpper, bbMiddle, bbLower;
-    CalculateBollingerBands(bbUpper, bbMiddle, bbLower);
+    CalculateBollingerBands(symbol, bbUpper, bbMiddle, bbLower);
     
     LogMessage("Checking Enhanced Buy Condition:" +
               "\nRSI=" + DoubleToString(rsi, 2) +
@@ -149,7 +149,7 @@ bool CheckSellCondition(double rsi, double macdMain, double macdSignal, string s
     
     // Get Bollinger Bands
     double bbUpper, bbMiddle, bbLower;
-    CalculateBollingerBands(bbUpper, bbMiddle, bbLower);
+    CalculateBollingerBands(symbol, bbUpper, bbMiddle, bbLower);
     
     LogMessage("Checking Enhanced Sell Condition:" +
               "\nRSI=" + DoubleToString(rsi, 2) +
@@ -176,10 +176,10 @@ bool CheckSellCondition(double rsi, double macdMain, double macdSignal, string s
 }
 
 // Add Bollinger Bands calculation
-void CalculateBollingerBands(double &upper, double &middle, double &lower) {
-    int bb_handle = iBands(_Symbol, PERIOD_CURRENT, 20, 0, 2.0, PRICE_CLOSE);
+void CalculateBollingerBands(string symbol, double &upper, double &middle, double &lower) {
+    int bb_handle = iBands(symbol, PERIOD_CURRENT, 20, 0, 2.0, PRICE_CLOSE);
     if(bb_handle == INVALID_HANDLE) {
-        LogMessage("Error creating Bollinger Bands indicator", _Symbol);
+        LogMessage("Error creating Bollinger Bands indicator", symbol);
         return;
     }
     

@@ -561,7 +561,7 @@ bool HasPendingOrder(string symbol, int type)
         ulong ticket = OrderGetTicket(i);
         if (OrderSelect(ticket))
         {
-            if (OrderGetInteger(ORDER_TYPE) == type && OrderGetString(ORDER_SYMBOL) == _Symbol)
+            if (OrderGetInteger(ORDER_TYPE) == type && OrderGetString(ORDER_SYMBOL) == symbol)
             {
                 return true;
             }
@@ -673,7 +673,7 @@ double GetBestLimitOrderPrice(string symbol, ENUM_ORDER_TYPE orderType, double &
     MqlBookInfo book_info[];
     
     // Get market depth data
-    if (!MarketBookGet(_Symbol, book_info))
+    if (!MarketBookGet(symbol, book_info))
     {
         Print("Failed to get market depth data - Error: ", GetLastError());
         return 0.0;
@@ -686,10 +686,10 @@ double GetBestLimitOrderPrice(string symbol, ENUM_ORDER_TYPE orderType, double &
         return 0.0;
     }
     
-    double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double currentAsk = SymbolInfoDouble(symbol, SYMBOL_ASK);
+    double currentBid = SymbolInfoDouble(symbol, SYMBOL_BID);
     double spread = currentAsk - currentBid;
-    double atr = CalculateATR(_Symbol, 14, PERIOD_CURRENT, 0);
+    double atr = CalculateATR(symbol, 14, PERIOD_CURRENT, 0);
     
     // Initialize variables for liquidity analysis
     double bestPrice = 0.0;
@@ -1077,7 +1077,7 @@ void LogTradeRejection(const string reason, string symbol, double currentPrice, 
     if (useDOMAnalysis)
     {
         MqlBookInfo book_info[];
-        if (MarketBookGet(_Symbol, book_info))
+        if (MarketBookGet(symbol, book_info))
         {
             double buyVolume = 0.0, sellVolume = 0.0;
             double buyValue = 0.0, sellValue = 0.0;
@@ -1109,9 +1109,9 @@ void LogTradeRejection(const string reason, string symbol, double currentPrice, 
     // 5. Pattern Recognition
     log_message += "\nPattern Recognition:\n";
     CandleData currentCandle;
-    currentCandle = GetCandleData(_Symbol, 0, PERIOD_CURRENT);
+    currentCandle = GetCandleData(symbol, 0, PERIOD_CURRENT);
     CandleData prevCandle;
-    prevCandle = GetCandleData(_Symbol, 1, PERIOD_CURRENT);
+    prevCandle = GetCandleData(symbol, 1, PERIOD_CURRENT);
     
     // Body/Wick Analysis
     double bodyToWickRatio = currentCandle.body / (currentCandle.upperWick + currentCandle.lowerWick + 0.000001);
@@ -1311,33 +1311,46 @@ void ApplyTrailingStop(string symbol, ulong ticket, int type, double open_price,
 //+------------------------------------------------------------------+
 void PlaceBuyLimitOrder(string symbol, double limitPrice, double riskPercent)
 {
-    double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, 1.5, UtilitySettings.Timeframe, 20); // Example ATR multiplier and fixed SL
-
-    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double lot_size = CalculateDynamicLotSize(
-        symbol,                          // symbol
-        (stop_loss / _Point),            // stop_loss_pips
-        accountBalance,                  // accountBalance
-        riskPercent,                     // riskPercent
-        minVolume,                       // minVolume
-        maxVolume                        // maxVolume
-    );
-
-    double tpPrice = limitPrice + take_profit;
-    double slPrice = limitPrice - stop_loss;
-
-    if (tradeUtility.BuyLimit(lot_size, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Buy Limit Order"))
+    if (!ManagePositions(symbol, POSITION_TYPE_BUY) && !HasPendingOrder(symbol, ORDER_TYPE_BUY_LIMIT))
     {
-        LogTradeDetails(symbol, lot_size, slPrice, tpPrice);
+        double stop_loss, take_profit;
+        CalculateDynamicSLTP(symbol, stop_loss, take_profit, 1.5, UtilitySettings.Timeframe, 20); // Example ATR multiplier and fixed SL
+
+        double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+        double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+        double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double lot_size = CalculateDynamicLotSize(
+            symbol,                          // symbol
+            (stop_loss / _Point),            // stop_loss_pips
+            accountBalance,                  // accountBalance
+            riskPercent,                     // riskPercent
+            minVolume,                       // minVolume
+            maxVolume                        // maxVolume
+        );
+
+        double tpPrice = limitPrice + take_profit;
+        double slPrice = limitPrice - stop_loss;
+
+        if (tradeUtility.BuyLimit(lot_size, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Buy Limit Order"))
+        {
+            LogTradeDetails(symbol, lot_size, slPrice, tpPrice);
+            Print("🚀🚀 Buy Limit Order Placed - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
+            Print("  ____  _     _     _ _ _   _ _ _ ");
+            Print(" |  _ \\| |__ (_) __| (_) |_(_) | |");
+            Print(" | |_) | '_ \\| |/ _` | | __| | | |");
+            Print(" |  __/| | | | | (_| | | |_| | | |");
+            Print(" |_|   |_| |_|_|\\__,_|_|\\__|_|_|_|");
+        }
+        else
+        {
+            int error = GetLastError();
+            Print("Buy Limit Order Failed with Error: ", error);
+            ResetLastError();
+        }
     }
     else
     {
-        int error = GetLastError();
-        Print("Buy Limit Order Failed with Error: ", error);
-        ResetLastError();
+        Print("Buy Limit Order not placed - Duplicate order or active position exists.");
     }
 }
 
@@ -1346,33 +1359,46 @@ void PlaceBuyLimitOrder(string symbol, double limitPrice, double riskPercent)
 //+------------------------------------------------------------------+
 void PlaceSellLimitOrder(string symbol, double limitPrice, double riskPercent)
 {
-    double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, 1.5, UtilitySettings.Timeframe, 20); // Example ATR multiplier and fixed SL
-
-    double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-    double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double lot_size = CalculateDynamicLotSize(
-        symbol,                          // symbol
-        (stop_loss / _Point),            // stop_loss_pips
-        accountBalance,                  // accountBalance
-        riskPercent,                     // riskPercent
-        minVolume,                       // minVolume
-        maxVolume                        // maxVolume
-    );
-
-    double tpPrice = limitPrice - take_profit;
-    double slPrice = limitPrice + stop_loss;
-
-    if (tradeUtility.SellLimit(lot_size, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Sell Limit Order"))
+    if (!ManagePositions(symbol, POSITION_TYPE_SELL) && !HasPendingOrder(symbol, ORDER_TYPE_SELL_LIMIT))
     {
-        LogTradeDetails(symbol, lot_size, slPrice, tpPrice);
+        double stop_loss, take_profit;
+        CalculateDynamicSLTP(symbol, stop_loss, take_profit, 1.5, UtilitySettings.Timeframe, 20); // Example ATR multiplier and fixed SL
+
+        double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+        double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+        double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double lot_size = CalculateDynamicLotSize(
+            symbol,                          // symbol
+            (stop_loss / _Point),            // stop_loss_pips
+            accountBalance,                  // accountBalance
+            riskPercent,                     // riskPercent
+            minVolume,                       // minVolume
+            maxVolume                        // maxVolume
+        );
+
+        double tpPrice = limitPrice - take_profit;
+        double slPrice = limitPrice + stop_loss;
+
+        if (tradeUtility.SellLimit(lot_size, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Sell Limit Order"))
+        {
+            LogTradeDetails(symbol, lot_size, slPrice, tpPrice);
+            Print("🔻🔻 Sell Limit Order Placed - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
+            Print("  ____  _     _     _ _ _   _ _ _ ");
+            Print(" |  _ \\| |__ (_) __| (_) |_(_) | |");
+            Print(" | |_) | '_ \\| |/ _` | | __| | | |");
+            Print(" |  __/| | | | | (_| | | |_| | | |");
+            Print(" |_|   |_| |_|_|\\__,_|_|\\__|_|_|_|");
+        }
+        else
+        {
+            int error = GetLastError();
+            Print("Sell Limit Order Failed with Error: ", error);
+            ResetLastError();
+        }
     }
     else
     {
-        int error = GetLastError();
-        Print("Sell Limit Order Failed with Error: ", error);
-        ResetLastError();
+        Print("Sell Limit Order not placed - Duplicate order or active position exists.");
     }
 }
 
@@ -2176,11 +2202,21 @@ void ProcessSellSignal(string symbol, double lotSize, double stopLoss, double ta
             {
                 Print("🔻🔻 Sell Limit Order Placed - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
                 trade.SellLimit(lotSize, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Sell Limit Order");
+                Print("  ____  _     _     _ _ _   _ _ _ ");
+                Print(" |  _ \\| |__ (_) __| (_) |_(_) | |");
+                Print(" | |_) | '_ \\| |/ _` | | __| | | |");
+                Print(" |  __/| | | | | (_| | | |_| | | |");
+                Print(" |_|   |_| |_|_|\\__,_|_|\\__|_|_|_|");
             }
             else
             {
                 Print("🔻 Sell Market Order Placed - TP: ", tpPrice, " SL: ", slPrice);
                 trade.Sell(lotSize, symbol, slPrice, tpPrice, "Sell Market Order");
+                Print("  ____  _     _     _ _ _   _ _ _ ");
+                Print(" |  _ \\| |__ (_) __| (_) |_(_) | |");
+                Print(" | |_) | '_ \\| |/ _` | | __| | | |");
+                Print(" |  __/| | | | | (_| | | |_| | | |");
+                Print(" |_|   |_| |_|_|\\__,_|_|\\__|_|_|_|");
             }
         }
     }
@@ -2203,19 +2239,29 @@ void ProcessBuySignal(string symbol, double lotSize, double stopLoss, double tak
             double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
             double tpPrice = ask + takeProfit;
             double slPrice = ask - stopLoss;
-            
+
             double limitPrice = GetBestLimitOrderPrice(symbol, ORDER_TYPE_BUY_LIMIT, tpPrice, slPrice, 
                                                        liquidityThreshold, takeProfitPips, stopLossPips);
-            
+
             if (limitPrice > 0.0)
             {
                 Print("🚀🚀 Buy Limit Order Placed - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
                 trade.BuyLimit(lotSize, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Buy Limit Order");
+                Print("  ____  _     _     _ _ _   _ _ _ ");
+                Print(" |  _ \\| |__ (_) __| (_) |_(_) | |");
+                Print(" | |_) | '_ \\| |/ _` | | __| | | |");
+                Print(" |  __/| | | | | (_| | | |_| | | |");
+                Print(" |_|   |_| |_|_|\\__,_|_|\\__|_|_|_|");
             }
             else
             {
                 Print("🚀 Buy Market Order Placed - TP: ", tpPrice, " SL: ", slPrice);
                 trade.Buy(lotSize, symbol, slPrice, tpPrice, "Buy Market Order");
+                Print("  ____  _     _     _ _ _   _ _ _ ");
+                Print(" |  _ \\| |__ (_) __| (_) |_(_) | |");
+                Print(" | |_) | '_ \\| |/ _` | | __| | | |");
+                Print(" |  __/| | | | | (_| | | |_| | | |");
+                Print(" |_|   |_| |_|_|\\__,_|_|\\__|_|_|_|");
             }
         }
     }

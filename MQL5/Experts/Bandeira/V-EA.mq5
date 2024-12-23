@@ -231,7 +231,7 @@ void OnTick()
             continue;
         
         // Add start delimiter with emoji
-        Print("🚀🚀🚀 Start Processing Symbol: ", symbol, " 🚀🚀🚀");
+        Print("🌟🌟🌟 Start Processing Symbol: ", symbol, " 🌟🌟🌟");
         
         ProcessSymbol(symbol, UseScalpingStrategy, MaxDrawdownPercent, ScalpingRiskPercent, ScalpingStopLoss, Timeframe, TradingStartHour, TradingStartMinute, TradingEndHour, TradingEndMinute);
         
