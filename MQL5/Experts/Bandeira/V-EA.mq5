@@ -18,9 +18,15 @@ input double RSI_LOWER_THRESHOLD = 30.0;
 input double DI_DIFFERENCE_THRESHOLD = 2.0; // Minimum difference between DI+ and DI-
 
 // Add these constants near the top of the file
-const int LOG_INTERVAL_CALCULATIONS = 300;  // 5 minutes between calculation logs
-const int LOG_INTERVAL_ANALYSIS = 900;      // 15 minutes between analysis logs
-const int LOG_INTERVAL_SIGNALS = 600;       // 10 minutes between signal logs
+const int LOG_INTERVAL_CALCULATIONS = 10;  // 5 minutes between calculation logs
+const int LOG_INTERVAL_ANALYSIS = 10;      // 15 minutes between analysis logs
+const int LOG_INTERVAL_SIGNALS = 10;       // 10 minutes between signal logs
+
+// Declare global variables for trading times
+int tradingStartHour;
+int tradingStartMinute;
+int tradingEndHour;
+int tradingEndMinute;
 
 //+------------------------------------------------------------------+
 //| Input parameters                                                 |
@@ -29,7 +35,7 @@ const int LOG_INTERVAL_SIGNALS = 600;       // 10 minutes between signal logs
 // Strategy Activation
 input group "Strategy Settings"
 input bool UseTrendStrategy = true;         // Enable or disable the Trend Following strategy
-input ENUM_TIMEFRAMES Timeframe = PERIOD_H1; // Default timeframe
+input ENUM_TIMEFRAMES Timeframe = PERIOD_M15; // Default timeframe
 input bool AllowShortTrades = true;         // Allow short (sell) trades
 
 // Risk Management
@@ -42,14 +48,16 @@ input double fixedStopLossPips = 20.0;      // Fixed Stop Loss in pips
 // Trend Indicators
 input group "Trend Indicators"
 input int ADXPeriod = 14;                   // ADX indicator period
-input double TrendADXThreshold = 25.0;      // ADX threshold for trend
-input double RSIUpperThreshold = 70.0;      // RSI overbought level
-input double RSILowerThreshold = 30.0;      // RSI oversold level
+input double TrendADXThreshold = 37.5;      // ADX threshold for trend
+input double RSIUpperThreshold = 75.0;      // RSI overbought level
+input double RSILowerThreshold = 25.0;      // RSI oversold level
 
 // Trading Hours
 input group "Trading Time Settings"
-input string TradingStartTime = "00:00";    // Trading session start time
-input string TradingEndTime = "23:59";      // Trading session end time
+input int TradingStartHour = 0;    // Trading session start hour (0-23)
+input int TradingStartMinute = 0;  // Trading session start minute (0-59) 
+input int TradingEndHour = 24;     // Trading session end hour (0-23)
+input int TradingEndMinute = 0;    // Trading session end minute (0-59)
 
 // Position Management
 input group "Position Management"
@@ -71,7 +79,7 @@ input int EMA_PERIODS_SHORT = 20;           // Short EMA period
 input int EMA_PERIODS_MEDIUM = 50;          // Medium EMA period
 input int EMA_PERIODS_LONG = 200;           // Long EMA period
 input int PATTERN_LOOKBACK = 5;             // Pattern lookback periods
-input double GOLDEN_CROSS_THRESHOLD = 0.001; // Golden cross threshold
+input double GOLDEN_CROSS_THRESHOLD = 0.0015; // Golden cross threshold
 
 // RSI/MACD Settings
 input group "RSI/MACD Settings"
@@ -88,13 +96,12 @@ input double StopLossPips = 30.0;           // Stop Loss in pips
 
 // Order Entry Settings
 input group "Order Entry Settings"
-input bool StrictOrderChecks = true;         // Use strict order entry conditions
-input double SignalTolerancePercent = 20.0;  // Signal tolerance (lower = more trades)
+input bool StrictOrderChecks = false;         // Use strict order entry conditions
 
 // Modify symbol settings inputs
 input group "Symbol Settings"
 input bool UseMultipleSymbols = true;        // Trade multiple symbols
-input int MaxSymbolsToTrade = 100;           // Maximum number of symbols to trade
+input int MaxSymbolsToTrade = 300;           // Maximum number of symbols to trade
 
 // Scalping Strategy Parameters
 input group "Scalping Strategy Parameters"
@@ -125,6 +132,8 @@ double takeProfitPips = 50.0;     // Example value, adjust as needed
 double stopLossPips = 30.0;       // Example value, adjust as needed
 double riskPercent = 2.0;         // Example value, adjust as needed
 
+
+
 //+------------------------------------------------------------------+
 //| Core EA Functions                                                 |
 //+------------------------------------------------------------------+
@@ -137,6 +146,9 @@ int OnInit()
     // Log version and copyright information
     Print("=== Expert Advisor Initialized ===");
     Print("===================================");
+
+    // Log StrictOrderChecks status with a strict emoji
+    Print("Strict Order Checks Mode: ", StrictOrderChecks ? "🔒 Enabled" : "🔓 Disabled");
 
     // Initialize with current chart symbol if not using multiple symbols
     if(!UseMultipleSymbols)
@@ -221,7 +233,7 @@ void OnTick()
         // Add start delimiter with emoji
         Print("🚀🚀🚀 Start Processing Symbol: ", symbol, " 🚀🚀🚀");
         
-        ProcessSymbol(symbol, UseScalpingStrategy, MaxDrawdownPercent, ScalpingRiskPercent, ScalpingStopLoss, Timeframe, TradingStartTime, TradingEndTime);
+        ProcessSymbol(symbol, UseScalpingStrategy, MaxDrawdownPercent, ScalpingRiskPercent, ScalpingStopLoss, Timeframe, TradingStartHour, TradingStartMinute, TradingEndHour, TradingEndMinute);
         
         // Add end delimiter with emoji
         Print("🏁🏁🏁 End Processing Symbol: ", symbol, " 🏁🏁🏁");
@@ -246,7 +258,7 @@ void OnDeinit(const int reason)
 void ExecuteTradingLogic(string symbol)
 {
     // Check if within trading hours first
-    if (!IsWithinTradingHours(TradingStartTime, TradingEndTime))
+    if (!IsWithinTradingHours(TradingStartHour, TradingStartMinute, TradingEndHour, TradingEndMinute))
         return;
 
     // Check drawdown before proceeding
@@ -277,6 +289,7 @@ void ExecuteTradingLogic(string symbol)
         Print("💰 Scalping Logic Start for Symbol: ", symbol, " 💰");
 
         // Calculate RSI using scalping-specific period
+        const int SCALP_RSI_PERIOD = 5;           // Even shorter RSI period
         double rsi = CalculateRSI(symbol, SCALP_RSI_PERIOD, ScalpingTimeframe);
         
         // Calculate MACD using scalping-specific parameters
@@ -321,6 +334,12 @@ void ExecuteTradingLogic(string symbol)
 
     if (UseTrendStrategy)
     {
+        // Set weights for trend strategy
+        int trendWeight = 2;
+        int patternWeight = 2;
+        int rsiMacdWeight = 1;
+        int orderFlowWeight = 1;
+
         int symbolIdx = GetSymbolIndex(symbol);
         if(symbolIdx == -1)
         {
@@ -394,6 +413,11 @@ void ExecuteTradingLogic(string symbol)
         double stopLoss, takeProfit;
         CalculateDynamicSLTP(symbol, stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
 
+        // Ensure SL and TP are calculated based on pip values
+        double pipValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+        double stopLossPrice = SymbolInfoDouble(symbol, SYMBOL_BID) - (stopLoss * pipValue); // Adjust SL based on pip value
+        double takeProfitPrice = SymbolInfoDouble(symbol, SYMBOL_BID) + (takeProfit * pipValue); // Adjust TP based on pip value
+
         // Calculate lot size using the now-defined stopLoss
         double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
         double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
@@ -408,54 +432,69 @@ void ExecuteTradingLogic(string symbol)
             maxVolume            // maximum volume
         );
 
+        // Declare totalScore and scoreThreshold at the beginning of the function or globally if needed
+        int totalScore = 0; // Initialize totalScore
+        double scoreThreshold = 0.0; // Initialize scoreThreshold
+
+        // Calculate total score and score threshold
+        totalScore = trendSignal * trendWeight + 
+                     patternSignal * patternWeight + 
+                     rsiMacdSignal * rsiMacdWeight + 
+                     orderFlowSignal * orderFlowWeight;
+
+        // Add score for consecutive signals
+        int consecutiveScore = 0;
+        if (CheckConsecutiveSignals(symbol, 2, true)) // Adjust parameters as needed
+        {
+            consecutiveScore = 1; // Assign a score for consecutive buy signals
+        }
+        else if (CheckConsecutiveSignals(symbol, 2, false)) // Adjust parameters as needed
+        {
+            consecutiveScore = -1; // Assign a score for consecutive sell signals
+        }
+        totalScore += consecutiveScore; // Add the consecutive score to the total score
+
+        // Calculate scoreThreshold based on the maximum score
+        int maxScore = (trendWeight + patternWeight + rsiMacdWeight + orderFlowWeight) * 1;
+        scoreThreshold = maxScore - 1;
+
         // For BUY signals
         if (StrictOrderChecks)
         {
             // Original strict conditions
             if (trendSignal == 1 && patternSignal == 1 && rsiMacdSignal == 1 && orderFlowSignal == 1)
             {
-                ProcessBuySignal(symbol, lotSize, stopLoss, takeProfit, liquidityThreshold, takeProfitPips, stopLossPips, riskPercent, trade);
+                // Check for consecutive signals as an additional filter
+                if (CheckConsecutiveSignals(symbol, 2, true)) // Adjust parameters as needed
+                {
+                    ProcessBuySignal(symbol, lotSize, stopLossPrice, takeProfitPrice, liquidityThreshold, takeProfitPips, stopLossPips, riskPercent, trade);
+                }
             }
         }
         else
         {
-            // More lenient conditions - only need majority of signals
-            int totalBuySignals = (trendSignal == 1 ? 1 : 0) + 
-                                   (patternSignal == 1 ? 1 : 0) + 
-                                   (rsiMacdSignal == 1 ? 1 : 0) + 
-                                   (orderFlowSignal == 1 ? 1 : 0);
-            
-            double requiredSignals = 4 * (1 - SignalTolerancePercent/100.0);  // Adjust threshold based on tolerance
-            if (totalBuySignals >= requiredSignals)
+            // Decision making based on total score
+            if (totalScore >= scoreThreshold)
             {
-                ProcessBuySignal(symbol, lotSize, stopLoss, takeProfit, liquidityThreshold, takeProfitPips, stopLossPips, riskPercent, trade);
-            }
-        }
-
-        // For SELL signals
-        if (AllowShortTrades)
-        {
-            if (StrictOrderChecks)
-            {
-                // Original strict conditions
-                if (trendSignal == -1 && patternSignal == -1 && rsiMacdSignal == -1 && orderFlowSignal == -1)
-                {
-                    ProcessSellSignal(symbol, lotSize, stopLoss, takeProfit, liquidityThreshold, takeProfitPips, stopLossPips, riskPercent, trade);
-                }
-            }
-            else
-            {
-                // More lenient conditions - only need majority of signals
-                int totalSellSignals = (trendSignal == -1 ? 1 : 0) + 
-                                      (patternSignal == -1 ? 1 : 0) + 
-                                      (rsiMacdSignal == -1 ? 1 : 0) + 
-                                      (orderFlowSignal == -1 ? 1 : 0);
+                // Fun and clear log for buy setup
+                Print("🚀🚀🚀 Buy Setup for ", symbol, " 🚀🚀🚀");
+                Print("📈 Current Bid: ", SymbolInfoDouble(symbol, SYMBOL_BID));
+                Print("🔒 Stop Loss: ", stopLossPrice, " | 🎯 Take Profit: ", takeProfitPrice);
+                Print("Lot Size: ", lotSize, " | Min Stop Level: ", SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(symbol, SYMBOL_POINT));
                 
-                double requiredSignals = 4 * (1 - SignalTolerancePercent/100.0);  // Adjust threshold based on tolerance
-                if (totalSellSignals >= requiredSignals)
-                {
-                    ProcessSellSignal(symbol, lotSize, stopLoss, takeProfit, liquidityThreshold, takeProfitPips, stopLossPips, riskPercent, trade);
-                }
+                // Use PlaceBuyLimitOrder instead of trade.Buy
+                PlaceBuyLimitOrder(symbol, SymbolInfoDouble(symbol, SYMBOL_BID) - 10 * _Point, RiskPercent);
+            }
+            else if (totalScore <= -scoreThreshold && AllowShortTrades)
+            {
+                // Fun and clear log for sell setup
+                Print("🔻🔻🔻 Sell Setup for ", symbol, " 🔻🔻🔻");
+                Print("📉 Current Ask: ", SymbolInfoDouble(symbol, SYMBOL_ASK));
+                Print("🔒 Stop Loss: ", stopLossPrice, " | 🎯 Take Profit: ", takeProfitPrice);
+                Print("Lot Size: ", lotSize, " | Min Stop Level: ", SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(symbol, SYMBOL_POINT));
+                
+                // Use PlaceSellLimitOrder instead of trade.Sell
+                PlaceSellLimitOrder(symbol, SymbolInfoDouble(symbol, SYMBOL_ASK) + 10 * _Point, RiskPercent);
             }
         }
 
@@ -471,22 +510,32 @@ void ExecuteTradingLogic(string symbol)
         if (currentTime - symbolLogTimes[symbolIdx].signalLogTime >= LOG_INTERVAL_SIGNALS)
         {
             Print("Updated Signals and Parameters for ", symbol, ":");
-            Print("  Last Order Flow Signal: ", lastOrderFlowSignal);
-            Print("  Last Trend Signal: ", lastTrendSignal);
-            Print("  Last RSI/MACD Signal: ", lastRsiMacdSignal);
-            Print("  Last Pattern Signal: ", patternSignal); 
+            Print("  Trend Signal (weight ", trendWeight, "): ", trendSignal);
+            Print("  Pattern Signal (weight ", patternWeight, "): ", patternSignal);
+            Print("  RSI/MACD Signal (weight ", rsiMacdWeight, "): ", rsiMacdSignal);
+            Print("  Order Flow Signal (weight ", orderFlowWeight, "): ", orderFlowSignal);
+            Print("  Total Score: ", totalScore);
+            Print("  Score Threshold: ", scoreThreshold);
             Print("  Last Stop Loss: ", lastStopLoss);
             Print("  Last Take Profit: ", lastTakeProfit);
             Print("  Last Calculation Time: ", TimeToString(lastCalculationTime, TIME_DATE | TIME_MINUTES));
+            
+            // New detailed breakdown of totalScore
+            Print("Score Breakdown:");
+            Print("  Trend Contribution: ", trendSignal * trendWeight);
+            Print("  Pattern Contribution: ", patternSignal * patternWeight);
+            Print("  RSI/MACD Contribution: ", rsiMacdSignal * rsiMacdWeight);
+            Print("  Order Flow Contribution: ", orderFlowSignal * orderFlowWeight);
+            
             symbolLogTimes[symbolIdx].signalLogTime = currentTime;
         }
 
         // If no trade signal is generated, log the reason
-        if (orderFlowSignal == 0)
+        if (totalScore > -scoreThreshold && totalScore < scoreThreshold)
         {
             if (TimeCurrent() - lastLogTime >= 3600) // Check if an hour has passed
             {
-                LogTradeRejection("No order flow signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
+                LogTradeRejection("Insufficient total score for trade", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
                                  ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
                 lastLogTime = TimeCurrent(); // Update last log time
@@ -769,9 +818,10 @@ int IdentifyTrendPattern(string symbol)
         analysis += "- " + score.reasons[i] + "\n";
     }
     Print(analysis);
+    Print("=== End of Trend Pattern Analysis ===");  // Simple end delimiter
 
     // 7. Final Decision Making with Minimum Threshold
-    const double MIN_SCORE_THRESHOLD = 5.0; // Minimum score required for signal
+    const double MIN_SCORE_THRESHOLD = 3.0; // Minimum score required for signal (lowered from 5.0)
     const double SCORE_DIFFERENCE_THRESHOLD = 2.0; // Minimum difference between bull/bear scores
     
     if(score.bullish >= MIN_SCORE_THRESHOLD && 
@@ -787,7 +837,7 @@ int IdentifyTrendPattern(string symbol)
 //+------------------------------------------------------------------+
 //| Process trading logic for a single symbol                        |
 //+------------------------------------------------------------------+
-void ProcessSymbol(string symbol, bool useScalpingStrategy, double maxDrawdownPercent, double scalpingRiskPercent, double scalpingStopLoss, ENUM_TIMEFRAMES timeframe, double tradingStartTime, double tradingEndTime)
+void ProcessSymbol(string symbol, bool useScalpingStrategy, double maxDrawdownPercent, double scalpingRiskPercent, double scalpingStopLoss, ENUM_TIMEFRAMES timeframe, int tradingStartHour, int tradingStartMinute, int tradingEndHour, int tradingEndMinute)
 {
     // Check if symbol is a stock and if we're within market hours
     if(IsStockSymbol(symbol) && !IsWithinUSMarketHours())
@@ -797,8 +847,11 @@ void ProcessSymbol(string symbol, bool useScalpingStrategy, double maxDrawdownPe
     }
 
     // Check if within trading hours (for non-stock symbols)
-    if(!IsStockSymbol(symbol) && !IsWithinTradingHours(tradingStartTime, tradingEndTime))
+    if(!IsStockSymbol(symbol) && !IsWithinTradingHours(tradingStartHour, tradingStartMinute, tradingEndHour, tradingEndMinute))
+    {
+        Print("Skipping ", symbol, " - Outside trading hours: ", tradingStartHour, ":", tradingStartMinute, " to ", tradingEndHour, ":", tradingEndMinute);
         return;
+    }
 
     // Check drawdown
     double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);

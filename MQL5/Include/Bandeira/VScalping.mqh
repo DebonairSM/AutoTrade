@@ -10,7 +10,7 @@
 CTrade tradeScalp;
 
 // Add these constants at the top of the file
-const int SCALP_RSI_PERIOD = 5;           // Even shorter RSI period
+
 const int SCALP_MACD_FAST = 5;            // More aggressive MACD settings
 const int SCALP_MACD_SLOW = 13;
 const int SCALP_MACD_SIGNAL = 4;
