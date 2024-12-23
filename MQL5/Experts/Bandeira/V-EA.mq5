@@ -158,6 +158,9 @@ int OnInit()
         AddTradingSymbol(symbol, 0);
         SetSymbolCount(1);
         ValidateInputs(RiskPercent, MaxDrawdownPercent, ATRMultiplier, ADXPeriod, TrendADXThreshold, TrailingStopPips, BreakevenActivationPips, BreakevenOffsetPips, LiquidityThreshold, ImbalanceThreshold, EMA_PERIODS_SHORT, EMA_PERIODS_MEDIUM, EMA_PERIODS_LONG, PATTERN_LOOKBACK, GOLDEN_CROSS_THRESHOLD);
+        
+        // Cleanup pending orders for the current symbol
+        //CleanupPendingOrders(symbol);
     }
     else
     {
@@ -194,6 +197,9 @@ int OnInit()
                 
                 AddTradingSymbol(symbol, count);
                 count++;
+                
+                // Cleanup pending orders for each symbol
+                //CleanupPendingOrders(symbol);
             }
         }
         

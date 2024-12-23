@@ -2270,3 +2270,32 @@ void ProcessBuySignal(string symbol, double lotSize, double stopLoss, double tak
         Print("Buy Signal Rejected - Strong bearish pattern detected");
     }
 }
+//+------------------------------------------------------------------+
+//| Cleanup Pending Orders                                           |
+//+------------------------------------------------------------------+
+void CleanupPendingOrders(string symbol)
+{
+    int totalOrders = OrdersTotal();
+    for (int i = totalOrders - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if (OrderSelect(ticket))
+        {
+            if (OrderGetString(ORDER_SYMBOL) == symbol)
+            {
+                int orderType = (int)OrderGetInteger(ORDER_TYPE);
+                if (orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_SELL_LIMIT)
+                {
+                    if (tradeUtility.OrderDelete(ticket))
+                    {
+                        Print("Deleted pending order for symbol: ", symbol, " with ticket: ", ticket);
+                    }
+                    else
+                    {
+                        Print("Failed to delete pending order for symbol: ", symbol, " with ticket: ", ticket, " Error: ", GetLastError());
+                    }
+                }
+            }
+        }
+    }
+}
