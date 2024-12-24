@@ -1190,6 +1190,7 @@ bool IsValidTimeframe(ENUM_TIMEFRAMES timeframe)
         case PERIOD_M1:
         case PERIOD_M5:
         case PERIOD_M15:
+        case PERIOD_M20:
         case PERIOD_M30:
         case PERIOD_H1:
         case PERIOD_H4:
