@@ -10,6 +10,7 @@
 #include <Trade/Trade.mqh>
 #include <Bandeira/VTrends.mqh>
 #include <Bandeira/VScalping.mqh>
+#include <Bandeira/VLogging.mqh>
 
 // Define threshold values
 input double ADX_THRESHOLD = 20.0;
@@ -559,63 +560,42 @@ void ExecuteTradingLogic(string symbol)
         lastTakeProfit = takeProfit;
         lastCalculationTime = currentTime;
 
-            Print("Updated Signals and Parameters for ", symbol, ":");
-            Print("  Trend Signal (weight ", trendWeight, "): ", trendSignal);
-            Print("  Pattern Signal (weight ", patternWeight, "): ", patternSignal);
-            Print("  RSI/MACD Signal (weight ", rsiMacdWeight, "): ", rsiMacdSignal);
-            Print("  Order Flow Signal (weight ", orderFlowWeight, "): ", orderFlowSignal);
-            Print("  Total Score: ", totalScore);
-            Print("  Score Threshold: ", scoreThreshold);
-            Print("  Last Stop Loss: ", lastStopLoss);
-            Print("  Last Take Profit: ", lastTakeProfit);
-            Print("  Last Calculation Time: ", TimeToString(lastCalculationTime, TIME_DATE | TIME_MINUTES));
-            
-            // New detailed breakdown of totalScore
-            Print("Score Breakdown:");
-            Print("  Trend Contribution: ", trendSignal * trendWeight);
-            Print("  Pattern Contribution: ", patternSignal * patternWeight);
-            Print("  RSI/MACD Contribution: ", rsiMacdSignal * rsiMacdWeight);
-            Print("  Order Flow Contribution: ", orderFlowSignal * orderFlowWeight);
+        // Log signal updates
+        LogSignalUpdates(symbol, 
+                         trendSignal, trendWeight,
+                         patternSignal, patternWeight,
+                         rsiMacdSignal, rsiMacdWeight,
+                         orderFlowSignal, orderFlowWeight,
+                         totalScore, scoreThreshold,
+                         lastStopLoss, lastTakeProfit,
+                         lastCalculationTime);
 
-        // If no trade signal is generated, log the reason
+        // Log lot size calculation
+        LogLotSizeCalculation(symbol, 
+                              accountBalance, 
+                              RiskPercent,
+                              stopLoss,
+                              tickValue,
+                              lotSize);
+
+        // Check and log trade rejections
         if (totalScore > -scoreThreshold && totalScore < scoreThreshold)
         {
-                LogTradeRejection("Insufficient total score for trade", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
-                                 adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
+            LogTradeRejection("Insufficient total score for trade", symbol, SymbolInfoDouble(symbol, SYMBOL_BID),
+                              adx, rsi, ema_short, ema_medium, ema_long,
+                              ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
         }
-        if (trendSignal == 0)
+
+        if (trendSignal == 0 || rsiMacdSignal == 0 || patternSignal == 0)
         {
-                LogTradeRejection("No trend signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
-                                 adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
+            string reason = trendSignal == 0 ? "No trend signal detected" :
+                           rsiMacdSignal == 0 ? "No RSI/MACD signal detected" :
+                           "No pattern signal detected";
+                   
+            LogTradeRejection(reason, symbol, SymbolInfoDouble(symbol, SYMBOL_BID),
+                              adx, rsi, ema_short, ema_medium, ema_long,
+                              ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
         }
-        if (rsiMacdSignal == 0)
-        {
-                LogTradeRejection("No RSI/MACD signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
-                                 adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
-        }
-        if (patternSignal == 0)
-        {
-                LogTradeRejection("No pattern signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
-                                 adx, rsi, ema_short, ema_medium, ema_long,
-                                 ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
-        }
-        
-            Print("=== CalculateDynamicLotSize Debug for ", symbol, " ===");
-            Print("Symbol: ", symbol);
-            Print("Account Balance: ", accountBalance);
-            Print("Risk Percent: ", RiskPercent, "%");
-            Print("Intended Monetary Risk: ", localRiskPercent * accountBalance / 100);
-            Print("Stop Loss Pips: ", stopLoss / SymbolInfoDouble(symbol, SYMBOL_POINT));
-            Print("Tick Value: ", tickValue);
-            Print("Tick Size: ", SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE));
-            Print("Lot Step: ", SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP));
-            Print("Pip Value: ", tickValue);
-            Print("Calculated Lot Size: ", lotSize);
-            Print("Actual Monetary Risk: ", lotSize * stopLoss * tickValue);
-            Print("==============================");
     }
 }
 
