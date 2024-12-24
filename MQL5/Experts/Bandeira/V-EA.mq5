@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| V-EA.mq5                               |
+//| V-EA.mq5                                                         |
 //| VSol Software                                                    |
 //+------------------------------------------------------------------+
 
@@ -18,9 +18,9 @@ input double RSI_LOWER_THRESHOLD = 30.0;
 input double DI_DIFFERENCE_THRESHOLD = 2.0; // Minimum difference between DI+ and DI-
 
 // Add these constants near the top of the file
-const int LOG_INTERVAL_CALCULATIONS = 10;  // 5 minutes between calculation logs
-const int LOG_INTERVAL_ANALYSIS = 10;      // 15 minutes between analysis logs
-const int LOG_INTERVAL_SIGNALS = 10;       // 10 minutes between signal logs
+const int LOG_INTERVAL_CALCULATIONS = 1;  
+const int LOG_INTERVAL_ANALYSIS = 1;      
+const int LOG_INTERVAL_SIGNALS = 1;       
 
 // Declare global variables for trading times
 int tradingStartHour;
@@ -132,8 +132,7 @@ double takeProfitPips = 50.0;     // Example value, adjust as needed
 double stopLossPips = 30.0;       // Example value, adjust as needed
 double riskPercent = 2.0;         // Example value, adjust as needed
 
-
-
+Music music
 //+------------------------------------------------------------------+
 //| Core EA Functions                                                 |
 //+------------------------------------------------------------------+
@@ -184,22 +183,10 @@ int OnInit()
                     Print("Failed to add symbol to Market Watch: ", symbol);
                     continue;
                 }
-                
-                // Log whether symbol is stock or not
-                if(IsStockSymbol(symbol))
-                {
-                    Print("Added stock symbol (US Market Hours): ", symbol);
-                }
-                else
-                {
-                    Print("Added non-stock symbol (24/5): ", symbol);
-                }
-                
+            
                 AddTradingSymbol(symbol, count);
                 count++;
                 
-                // Cleanup pending orders for each symbol
-                //CleanupPendingOrders(symbol);
             }
         }
         
@@ -235,15 +222,10 @@ void OnTick()
         // Skip invalid symbols
         if(symbol == "" || !SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE))
             continue;
+
         
-        // Add start delimiter with emoji
-        Print("🌟🌟🌟 Start Processing Symbol: ", symbol, " 🌟🌟🌟");
-        
-        ProcessSymbol(symbol, UseScalpingStrategy, MaxDrawdownPercent, ScalpingRiskPercent, ScalpingStopLoss, Timeframe, TradingStartHour, TradingStartMinute, TradingEndHour, TradingEndMinute);
-        
-        // Add end delimiter with emoji
-        Print("🏁🏁🏁 End Processing Symbol: ", symbol, " 🏁🏁🏁");
-        
+        ProcessSymbol(symbol, UseScalpingStrategy, MaxDrawdownPercent, ScalpingRiskPercent, ScalpingStopLoss, ScalpingTimeframe, Timeframe, TradingStartHour, TradingStartMinute, TradingEndHour, TradingEndMinute);
+
         // Add delay between symbol processing to avoid overloading
         Sleep(100);  // 100ms delay
     }
@@ -256,6 +238,71 @@ void OnDeinit(const int reason)
 {
     Print("Deinitializing EA...");
     // Additional cleanup code can be added here
+}
+
+
+//+------------------------------------------------------------------+
+//| Process trading logic for a single symbol                        |
+//+------------------------------------------------------------------+
+void ProcessSymbol(string symbol, bool useScalpingStrategy, double maxDrawdownPercent, double scalpingRiskPercent, double scalpingStopLoss, ENUM_TIMEFRAMES timeframe, 
+                    ENUM_TIMEFRAMES scalpingTimeframe, int tradingStartHour, int tradingStartMinute, int tradingEndHour, int tradingEndMinute)
+{
+    // Add prominent warning if symbol has active trades
+    if(HasActiveTradeOrPendingOrder(symbol, POSITION_TYPE_BUY) || 
+       HasActiveTradeOrPendingOrder(symbol, POSITION_TYPE_SELL))
+    {
+        Print("⚠️ ⚠️ ⚠️ ATTENTION ⚠️ ⚠️ ⚠️");
+        Print("🔴 ACTIVE TRADE(S) DETECTED FOR SYMBOL: ", symbol, " 🔴");
+        Print("=====================================");
+    }
+
+    // Check if symbol is a stock and if we're within market hours
+    if(IsStockSymbol(symbol) && !IsWithinUSMarketHours())
+    {
+        LogGenericMessage("Skipping " + symbol + " - Outside US market hours", symbol);
+        return;
+    }
+        
+    // Add start delimiter with emoji
+    Print("🌟🌟🌟 Start Processing Symbol: ", symbol, " 🌟🌟🌟");
+
+    // Check if within trading hours (for non-stock symbols)
+    if(!IsStockSymbol(symbol) && !IsWithinTradingHours(tradingStartHour, tradingStartMinute, tradingEndHour, tradingEndMinute))
+    {
+        Print("Skipping ", symbol, " - Outside trading hours: ", tradingStartHour, ":", tradingStartMinute, " to ", tradingEndHour, ":", tradingEndMinute);
+        return;
+    }
+
+    // Check drawdown
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    if(CheckDrawdown(symbol, maxDrawdownPercent, accountBalance, accountEquity))
+        return;
+
+    // Add volatility check for scalping
+    if (useScalpingStrategy)
+    {
+        double atr = CalculateATR(symbol, 14, scalpingTimeframe);
+        double avgAtr = 0;
+        for(int i = 1; i <= 20; i++)
+        {
+            avgAtr += CalculateATR(symbol, 14, scalpingTimeframe, i);
+        }
+        avgAtr /= 20;
+
+        // Only allow scalping in normal volatility conditions
+        if (atr > avgAtr * 1.5)
+        {
+            Print("Scalping disabled due to high volatility: ATR=", atr, " AvgATR=", avgAtr);
+            return;
+        }
+    }
+
+    // Execute trading logic for this symbol
+    ExecuteTradingLogic(symbol);        
+    // Add end delimiter with emoji
+    Print("🏁🏁🏁 End Processing Symbol: ", symbol, " 🏁🏁🏁");
+    
 }
 
 //+------------------------------------------------------------------+
@@ -417,7 +464,7 @@ void ExecuteTradingLogic(string symbol)
 
         // Calculate stop loss and take profit only when needed
         double stopLoss, takeProfit;
-        CalculateDynamicSLTP(symbol, stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
+        CalculateDynamicSLTPInPips(symbol, stopLoss, takeProfit, ATRMultiplier, Timeframe, fixedStopLossPips);
 
         // Ensure SL and TP are calculated based on pip values
         double pipValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
@@ -512,9 +559,6 @@ void ExecuteTradingLogic(string symbol)
         lastTakeProfit = takeProfit;
         lastCalculationTime = currentTime;
 
-        // Only log signals if enough time has passed for this symbol
-        if (currentTime - symbolLogTimes[symbolIdx].signalLogTime >= LOG_INTERVAL_SIGNALS)
-        {
             Print("Updated Signals and Parameters for ", symbol, ":");
             Print("  Trend Signal (weight ", trendWeight, "): ", trendSignal);
             Print("  Pattern Signal (weight ", patternWeight, "): ", patternSignal);
@@ -532,55 +576,33 @@ void ExecuteTradingLogic(string symbol)
             Print("  Pattern Contribution: ", patternSignal * patternWeight);
             Print("  RSI/MACD Contribution: ", rsiMacdSignal * rsiMacdWeight);
             Print("  Order Flow Contribution: ", orderFlowSignal * orderFlowWeight);
-            
-            symbolLogTimes[symbolIdx].signalLogTime = currentTime;
-        }
 
         // If no trade signal is generated, log the reason
         if (totalScore > -scoreThreshold && totalScore < scoreThreshold)
         {
-            if (TimeCurrent() - lastLogTime >= 3600) // Check if an hour has passed
-            {
                 LogTradeRejection("Insufficient total score for trade", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
                                  ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
-                lastLogTime = TimeCurrent(); // Update last log time
-            }
         }
         if (trendSignal == 0)
         {
-            if (TimeCurrent() - lastLogTime >= 3600)
-            {
                 LogTradeRejection("No trend signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
                                  ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
-                lastLogTime = TimeCurrent();
-            }
         }
         if (rsiMacdSignal == 0)
         {
-            if (TimeCurrent() - lastLogTime >= 3600)
-            {
                 LogTradeRejection("No RSI/MACD signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
                                  ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
-                lastLogTime = TimeCurrent();
-            }
         }
         if (patternSignal == 0)
         {
-            if (TimeCurrent() - lastLogTime >= 3600)
-            {
                 LogTradeRejection("No pattern signal detected", symbol, SymbolInfoDouble(symbol, SYMBOL_BID), 
                                  adx, rsi, ema_short, ema_medium, ema_long,
                                  ADX_THRESHOLD, RSI_UPPER_THRESHOLD, RSI_LOWER_THRESHOLD, UseDOMAnalysis, Timeframe);
-                lastLogTime = TimeCurrent();
-            }
         }
         
-        // Only log calculations if enough time has passed for this symbol
-        if (currentTime - symbolLogTimes[symbolIdx].calculationLogTime >= LOG_INTERVAL_CALCULATIONS)
-        {
             Print("=== CalculateDynamicLotSize Debug for ", symbol, " ===");
             Print("Symbol: ", symbol);
             Print("Account Balance: ", accountBalance);
@@ -594,8 +616,6 @@ void ExecuteTradingLogic(string symbol)
             Print("Calculated Lot Size: ", lotSize);
             Print("Actual Monetary Risk: ", lotSize * stopLoss * tickValue);
             Print("==============================");
-            symbolLogTimes[symbolIdx].calculationLogTime = currentTime;
-        }
     }
 }
 
@@ -612,58 +632,29 @@ int TrendFollowingCore(string symbol)
     double adx, plusDI, minusDI;
     CalculateADX(symbol, ADXPeriod, Timeframe, adx, plusDI, minusDI);
     
-    static datetime lastBuySignalTime = 0;
-    static datetime lastSellSignalTime = 0;
-    
-    // Define a minimum time interval between log messages (in seconds)
-    int minLogInterval = 300; // 5 minutes
-    
     // Calculate DI difference
     double diDifference = MathAbs(plusDI - minusDI);
-
     
     if (ema > sma && rsi < RSIUpperThreshold && adx > TrendADXThreshold && 
         plusDI > minusDI && diDifference > DI_DIFFERENCE_THRESHOLD)
     {
-        if (HasActiveTradeOrPendingOrder(symbol, POSITION_TYPE_BUY))
-        {
-            datetime currentTime = TimeCurrent();
-            if (currentTime - lastBuySignalTime >= minLogInterval)
-            {
-                Print("Trend Following: Buy Signal - Active Position");
-                Print("DI+ (", plusDI, ") > DI- (", minusDI, "), Difference: ", diDifference);
-                lastBuySignalTime = currentTime;
-            }
-        }
+        Print("Trend Following: Buy Signal");
+        Print("DI+ (", plusDI, ") > DI- (", minusDI, "), Difference: ", diDifference);
         return 1;
     }
     else if (ema < sma && rsi > RSILowerThreshold && adx > TrendADXThreshold && 
              minusDI > plusDI && diDifference > DI_DIFFERENCE_THRESHOLD)
     {
-        if (HasActiveTradeOrPendingOrder(symbol, POSITION_TYPE_SELL))
-        {
-            datetime currentTime = TimeCurrent();
-            if (currentTime - lastSellSignalTime >= minLogInterval)
-            {
-                Print("Trend Following: Sell Signal - Active Position");
-                Print("DI- (", minusDI, ") > DI+ (", plusDI, "), Difference: ", diDifference);
-                lastSellSignalTime = currentTime;
-            }
-        }
+        Print("Trend Following: Sell Signal");
+        Print("DI- (", minusDI, ") > DI+ (", plusDI, "), Difference: ", diDifference);
         return -1;
     }
     
     // Log rejection reason if DI difference is too small
     if (diDifference <= DI_DIFFERENCE_THRESHOLD)
     {
-        static datetime lastDILogTime = 0;
-        datetime currentTime = TimeCurrent();
-        if (currentTime - lastDILogTime >= minLogInterval)
-        {
-            Print("Trade rejected: DI difference (", diDifference, 
-                  ") below threshold (", DI_DIFFERENCE_THRESHOLD, ")");
-            lastDILogTime = currentTime;
-        }
+        Print("Trade rejected: DI difference (", diDifference, 
+              ") below threshold (", DI_DIFFERENCE_THRESHOLD, ")");
     }
     
     return 0;
@@ -838,52 +829,4 @@ int IdentifyTrendPattern(string symbol)
         return -1; // Strong bearish pattern
     
     return 0;     // No clear pattern or insufficient strength
-}
-
-//+------------------------------------------------------------------+
-//| Process trading logic for a single symbol                        |
-//+------------------------------------------------------------------+
-void ProcessSymbol(string symbol, bool useScalpingStrategy, double maxDrawdownPercent, double scalpingRiskPercent, double scalpingStopLoss, ENUM_TIMEFRAMES timeframe, int tradingStartHour, int tradingStartMinute, int tradingEndHour, int tradingEndMinute)
-{
-    // Check if symbol is a stock and if we're within market hours
-    if(IsStockSymbol(symbol) && !IsWithinUSMarketHours())
-    {
-        LogGenericMessage("Skipping " + symbol + " - Outside US market hours", symbol);
-        return;
-    }
-
-    // Check if within trading hours (for non-stock symbols)
-    if(!IsStockSymbol(symbol) && !IsWithinTradingHours(tradingStartHour, tradingStartMinute, tradingEndHour, tradingEndMinute))
-    {
-        Print("Skipping ", symbol, " - Outside trading hours: ", tradingStartHour, ":", tradingStartMinute, " to ", tradingEndHour, ":", tradingEndMinute);
-        return;
-    }
-
-    // Check drawdown
-    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-    if(CheckDrawdown(symbol, maxDrawdownPercent, accountBalance, accountEquity))
-        return;
-
-    // Add volatility check for scalping
-    if (useScalpingStrategy)
-    {
-        double atr = CalculateATR(symbol, 14, timeframe);
-        double avgAtr = 0;
-        for(int i = 1; i <= 20; i++)
-        {
-            avgAtr += CalculateATR(symbol, 14, timeframe, i);
-        }
-        avgAtr /= 20;
-
-        // Only allow scalping in normal volatility conditions
-        if (atr > avgAtr * 1.5)
-        {
-            Print("Scalping disabled due to high volatility: ATR=", atr, " AvgATR=", avgAtr);
-            return;
-        }
-    }
-
-    // Execute trading logic for this symbol
-    ExecuteTradingLogic(symbol);
 }

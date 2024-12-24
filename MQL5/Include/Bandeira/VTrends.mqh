@@ -149,7 +149,11 @@ double CalculateSMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
 {
     if (!IsValidTimeframe(timeframe)) return 0;
     
-    int handle = iMA(symbol, timeframe, period, 0, MODE_SMA, PRICE_CLOSE);
+    // Declare the handle variable
+    int handle;
+
+    // Example usage
+    handle = iMA(symbol, timeframe, period, 0, MODE_SMA, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
         int error = GetLastError();
@@ -164,7 +168,11 @@ double CalculateSMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
 
 double CalculateEMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
 {
-    if (!IsValidTimeframe(timeframe)) return 0;
+    if (!IsValidTimeframe(timeframe))
+    {
+        Print("Invalid timeframe in CalculateEMA for symbol ", symbol);
+        return 0;
+    }
     
     // Use the appropriate EMA period from UtilitySettings based on input
     int emaPeriod;
@@ -177,22 +185,50 @@ double CalculateEMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
     else
         emaPeriod = period;  // Use provided period if it doesn't match any standard ones
     
+    // Declare the handle variable
     int handle = iMA(symbol, timeframe, emaPeriod, 0, MODE_EMA, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
         int error = GetLastError();
-        Print("Failed to create EMA indicator handle for symbol ", symbol, ": ", error);
-        ResetLastError();
+        Print("Failed to create EMA indicator handle for symbol ", symbol, ". Error code: ", error,
+              " (", ErrorDescription(error), ")");
         return 0;
     }
-    double value = GetIndicatorValue(symbol, handle, 0, shift);
+
+    double buffer[];
+    ArraySetAsSeries(buffer, true);
+    int copied = CopyBuffer(handle, 0, shift, 1, buffer);
+    
+    // Release the handle immediately after use
     IndicatorRelease(handle);
-    return value;
+    
+    if(copied <= 0)
+    {
+        int error = GetLastError();
+        Print("Error copying EMA data for symbol ", symbol, ": Error code ", error,
+              " (", ErrorDescription(error), ")",
+              ". Shift: ", shift,
+              ", Period: ", emaPeriod,
+              ", Timeframe: ", EnumToString(timeframe));
+        return 0;
+    }
+    
+    if(ArraySize(buffer) > 0)
+    {
+        return buffer[0];
+    }
+    
+    Print("Error: EMA array is empty for symbol ", symbol);
+    return 0;
 }
 
 double CalculateRSI(string symbol, int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
 {
-    if (!IsValidTimeframe(timeframe)) return 0;
+    if (!IsValidTimeframe(timeframe))
+    {
+        Print("Invalid timeframe in CalculateRSI for symbol ", symbol);
+        return 0;
+    }
     
     double rsi[];
     ArraySetAsSeries(rsi, true);
@@ -201,41 +237,107 @@ double CalculateRSI(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
     if (handle == INVALID_HANDLE)
     {
         int error = GetLastError();
-        Print("Failed to create RSI indicator handle for symbol ", symbol, ": ", error);
-        ResetLastError();
+        Print("Failed to create RSI indicator handle for symbol ", symbol, ". Error code: ", error,
+              " (", ErrorDescription(error), ")");
         return 0;
     }
-    if (CopyBuffer(handle, 0, shift, 1, rsi) <= 0)
-    {
-        Print("Error copying RSI data: ", GetLastError());
-        return 0;
-    }
+
+    int copied = CopyBuffer(handle, 0, shift, 1, rsi);
+    
+    // Release the handle immediately after use
     IndicatorRelease(handle);
-    return rsi[0];
+    
+    if(copied <= 0)
+    {
+        int error = GetLastError();
+        Print("Error copying RSI data for symbol ", symbol, ": Error code ", error,
+              " (", ErrorDescription(error), ")",
+              ". Shift: ", shift,
+              ", Period: ", period,
+              ", Timeframe: ", EnumToString(timeframe));
+        return 0;
+    }
+    
+    if(ArraySize(rsi) > 0)
+    {
+        if(rsi[0] < 0 || rsi[0] > 100)
+        {
+            Print("Warning: RSI value out of range [0,100] for symbol ", symbol,
+                  ". Value: ", rsi[0]);
+            return 50; // Return neutral RSI value
+        }
+        return rsi[0];
+    }
+    
+    Print("Error: RSI array is empty for symbol ", symbol);
+    return 50; // Return neutral RSI value
 }
 
 double CalculateATR(string symbol, int period, ENUM_TIMEFRAMES timeframe, int shift = 0)
 {
-    if (!IsValidTimeframe(timeframe)) return 0;
-    
-    double atr[];
-    ArraySetAsSeries(atr, true);
-    
-    int handle = iATR(symbol, timeframe, period);
-    if(handle == INVALID_HANDLE)
+    if (!IsValidTimeframe(timeframe))
     {
-        Print("Error creating ATR indicator: ", GetLastError());
-        return -1;
+        Print("Invalid timeframe in CalculateATR for symbol ", symbol);
+        return 0;
     }
     
-    if(CopyBuffer(handle, 0, shift, 1, atr) <= 0)
+    const int MAX_RETRIES = 3;
+    const int RETRY_DELAY_MS = 100;
+    
+    for(int retry = 0; retry < MAX_RETRIES; retry++)
     {
-        Print("Error copying ATR data: ", GetLastError());
-        return -1;
+        if(retry > 0)
+        {
+            Print("Retrying ATR calculation for symbol ", symbol, ". Attempt ", retry + 1, " of ", MAX_RETRIES);
+            Sleep(RETRY_DELAY_MS); // Add a small delay between retries
+        }
+        
+        double atr[];
+        ArraySetAsSeries(atr, true);
+        
+        int handle = iATR(symbol, timeframe, period);
+        if(handle == INVALID_HANDLE)
+        {
+            int error = GetLastError();
+            Print("Failed to create ATR handle for symbol ", symbol, ". Error code: ", error, 
+                  " (", ErrorDescription(error), ")");
+            continue; // Try again
+        }
+        
+        int copied = CopyBuffer(handle, 0, shift, 1, atr);
+        IndicatorRelease(handle);
+        
+        if(copied <= 0)
+        {
+            int error = GetLastError();
+            Print("Error copying ATR data for symbol ", symbol, ": Error code ", error,
+                  " (", ErrorDescription(error), ")",
+                  ". Shift: ", shift,
+                  ", Period: ", period,
+                  ", Timeframe: ", EnumToString(timeframe),
+                  ", Attempt: ", retry + 1);
+            continue; // Try again
+        }
+        
+        if(ArraySize(atr) > 0)
+        {
+            if(atr[0] <= 0)
+            {
+                Print("Warning: ATR value is zero or negative for symbol ", symbol,
+                      ". Value: ", atr[0],
+                      ", Shift: ", shift,
+                      ", Period: ", period);
+                continue; // Try again
+            }
+            return atr[0]; // Success!
+        }
+        
+        Print("Error: ATR array is empty for symbol ", symbol);
     }
     
-    IndicatorRelease(handle);
-    return atr[0];
+    // If we get here, all retries failed
+    Print("All attempts to calculate ATR failed for symbol ", symbol);
+    return 0;
 }
 
 //+------------------------------------------------------------------+
@@ -290,91 +392,27 @@ int GetVolumeStepDigits(double volume_step)
 //| Enhanced and Renamed to Avoid Function Overloading               |
 //+------------------------------------------------------------------+
 double CalculateDynamicLotSize(
-    string symbol,
-    double stop_loss_pips,  // Already in correct units (e.g., 1 pip = 1 price unit)
-    double accountBalance,  // Current account balance
-    double riskPercent,     // e.g., 2.0 for 2%
-    double minVolume,       // Minimum allowed volume
-    double maxVolume        // Maximum allowed volume
+    string symbol, 
+    double stopLossPips, 
+    double accountBalance, 
+    double riskPercent, 
+    double minVolume, 
+    double maxVolume
 )
 {
-    // Validate Inputs
-    if (stop_loss_pips <= 0)
-    {
-        Print("Error: Invalid stop loss pips (", stop_loss_pips, ") for symbol ", symbol);
-        return minVolume;
-    }
+    // Calculate the amount of money to risk per trade
+    double riskAmount = accountBalance * (riskPercent / 100.0);
 
-    if (accountBalance <= 0)
-    {
-        Print("Error: Invalid account balance (", accountBalance, ") for symbol ", symbol);
-        return minVolume;
-    }
+    // Get the value of one pip for the symbol
+    double pipValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
 
-    if (riskPercent <= 0 || riskPercent > 100)
-    {
-        Print("Error: Invalid risk percent (", riskPercent, ") for symbol ", symbol);
-        return minVolume;
-    }
+    // Calculate the lot size based on the risk amount and stop loss in pips
+    double lotSize = riskAmount / (stopLossPips * pipValue);
 
-    // Retrieve Symbol Properties
-    double tick_value = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-    double tick_size = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-    double lot_step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    // Ensure the lot size is within the allowed range
+    lotSize = MathMax(minVolume, MathMin(lotSize, maxVolume));
 
-    if (tick_value <= 0 || tick_size <= 0 || lot_step <= 0)
-    {
-        string error = StringFormat("Invalid symbol properties - Tick Value: %.5f, Tick Size: %.5f, Lot Step: %.5f for symbol %s",
-                                    tick_value, tick_size, lot_step, symbol);
-        Print(error);
-        return minVolume;
-    }
-
-    // Calculate Pip Value
-    // For most indices like US500, 1 pip is typically 1 point. Adjust if different.
-    double pip_value = tick_value; // Assuming 1 pip = 1 point
-
-    // Calculate Intended Monetary Risk
-    double risk_amount = accountBalance * (riskPercent / 100.0);
-
-    // Calculate Lot Size
-    double lot_size = risk_amount / (stop_loss_pips * pip_value);
-
-    // Round to Nearest Lot Step
-    lot_size = MathFloor(lot_size / lot_step) * lot_step;
-
-    // Ensure Lot Size is Within Allowed Range
-    lot_size = MathMax(lot_size, minVolume);
-    lot_size = MathMin(lot_size, maxVolume);
-
-    // Normalize Lot Size to Allowed Decimal Places
-    int volume_step_digits = GetVolumeStepDigits(lot_step);
-    lot_size = NormalizeDouble(lot_size, volume_step_digits);
-
-    // Calculate Actual Monetary Risk
-    double actual_risk = lot_size * stop_loss_pips * pip_value;
-
-    // Comprehensive Debug Logging
-    Print(
-        "=== CalculateDynamicLotSizeNew Debug ===\n",
-        "Symbol: ", symbol, "\n",
-        "Account Balance: ", accountBalance, "\n",
-        "Risk Percent: ", riskPercent, "%\n",
-        "Intended Monetary Risk: ", risk_amount, "\n",
-        "Stop Loss Pips: ", stop_loss_pips, "\n",
-        "Tick Value: ", tick_value, "\n",
-        "Tick Size: ", tick_size, "\n",
-        "Lot Step: ", lot_step, "\n",
-        "Digits: ", digits, "\n",
-        "Pip Value: ", pip_value, "\n",
-        "Calculated Lot Size (Pre-Round): ", (risk_amount / (stop_loss_pips * pip_value)), "\n",
-        "Calculated Lot Size (Rounded): ", lot_size, "\n",
-        "Actual Monetary Risk: ", actual_risk, "\n",
-        "=============================="
-    );
-
-    return lot_size;
+    return lotSize;
 }
 
 
@@ -400,36 +438,6 @@ bool CheckDrawdown(string symbol, double maxDrawdownPercent, double accountBalan
     }
     
     return false;
-}
-
-//+------------------------------------------------------------------+
-//| Calculate Dynamic SL/TP Levels Based on ATR                      |
-//+------------------------------------------------------------------+
-void CalculateDynamicSLTP(string symbol, double &stop_loss, double &take_profit, double atr_multiplier, ENUM_TIMEFRAMES timeframe, double inFixedStopLossPips)
-{
-    double atr = CalculateATR(symbol, 14, timeframe);
-    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-    
-    if (point <= 0)
-    {
-        Print("Error: Invalid point value for symbol ", symbol);
-        return;
-    }
-
-    if (atr <= 0)
-    {
-        Print("ATR calculation failed or returned zero for ", symbol, ". Using default SL/TP values.");
-        stop_loss = inFixedStopLossPips * point;
-        take_profit = 40 * point;
-        return;
-    }
-
-    double dynamicStopLoss = atr * atr_multiplier;
-    stop_loss = MathMax(dynamicStopLoss, inFixedStopLossPips * point);
-    take_profit = atr * atr_multiplier * 2.0;
-
-    // Use the new logging function
-    LogDynamicSLTP(stop_loss, take_profit, symbol, timeframe);
 }
 
 //+------------------------------------------------------------------+
@@ -1313,33 +1321,36 @@ void PlaceBuyLimitOrder(string symbol, double limitPrice, double riskPercent)
 {
     if (!ManagePositions(symbol, POSITION_TYPE_BUY) && !HasPendingOrder(symbol, ORDER_TYPE_BUY_LIMIT))
     {
-        double stop_loss, take_profit;
-        CalculateDynamicSLTP(symbol, stop_loss, take_profit, 1.5, UtilitySettings.Timeframe, 20); // Example ATR multiplier and fixed SL
+        double stopLossPips, takeProfitPips;
+        CalculateDynamicSLTPInPips(
+            symbol, 
+            stopLossPips, 
+            takeProfitPips, 
+            1.5, 
+            UtilitySettings.Timeframe, 
+            20.0 // Example fallback stop loss in pips
+        );
 
         double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
         double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
         double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
         double lot_size = CalculateDynamicLotSize(
-            symbol,                          // symbol
-            (stop_loss / SymbolInfoDouble(symbol, SYMBOL_POINT)),            // stop_loss_pips
-            accountBalance,                  // accountBalance
-            riskPercent,                     // riskPercent
-            minVolume,                       // minVolume
-            maxVolume                        // maxVolume
+            symbol, 
+            stopLossPips, 
+            accountBalance, 
+            riskPercent, 
+            minVolume, 
+            maxVolume
         );
 
-        double tpPrice = limitPrice + take_profit;
-        double slPrice = limitPrice - stop_loss;
+        double pointSize = SymbolInfoDouble(symbol, SYMBOL_POINT);
+        double tpPrice = limitPrice + (takeProfitPips * pointSize);
+        double slPrice = limitPrice - (stopLossPips * pointSize);
 
         if (tradeUtility.BuyLimit(lot_size, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Buy Limit Order"))
         {
             LogTradeDetails(symbol, lot_size, slPrice, tpPrice);
             Print("🚀🚀 Buy Limit Order Placed - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
-            Print("  ____  _     _     _ _ _   _ _ _ ");
-            Print(" |  _ \\| |__ (_) __| (_) |_(_) | |");
-            Print(" | |_) | '_ \\| |/ _` | | __| | | |");
-            Print(" |  __/| | | | | (_| | | |_| | | |");
-            Print(" |_|   |_| |_|_|\\__,_|_|\\__|_|_|_|");
         }
         else
         {
@@ -1361,33 +1372,36 @@ void PlaceSellLimitOrder(string symbol, double limitPrice, double riskPercent)
 {
     if (!ManagePositions(symbol, POSITION_TYPE_SELL) && !HasPendingOrder(symbol, ORDER_TYPE_SELL_LIMIT))
     {
-        double stop_loss, take_profit;
-        CalculateDynamicSLTP(symbol, stop_loss, take_profit, 1.5, UtilitySettings.Timeframe, 20); // Example ATR multiplier and fixed SL
+        double stopLossPips, takeProfitPips;
+        CalculateDynamicSLTPInPips(
+            symbol, 
+            stopLossPips, 
+            takeProfitPips, 
+            1.5, 
+            UtilitySettings.Timeframe, 
+            20.0 // Example fallback stop loss in pips
+        );
 
         double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
         double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
         double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
         double lot_size = CalculateDynamicLotSize(
-            symbol,                          // symbol
-            (stop_loss / SymbolInfoDouble(symbol, SYMBOL_POINT)),            // stop_loss_pips
-            accountBalance,                  // accountBalance
-            riskPercent,                     // riskPercent
-            minVolume,                       // minVolume
-            maxVolume                        // maxVolume
+            symbol, 
+            stopLossPips, 
+            accountBalance, 
+            riskPercent, 
+            minVolume, 
+            maxVolume
         );
 
-        double tpPrice = limitPrice - take_profit;
-        double slPrice = limitPrice + stop_loss;
+        double pointSize = SymbolInfoDouble(symbol, SYMBOL_POINT);
+        double tpPrice = limitPrice - (takeProfitPips * pointSize);
+        double slPrice = limitPrice + (stopLossPips * pointSize);
 
         if (tradeUtility.SellLimit(lot_size, limitPrice, symbol, slPrice, tpPrice, ORDER_TIME_GTC, 0, "Sell Limit Order"))
         {
             LogTradeDetails(symbol, lot_size, slPrice, tpPrice);
             Print("🔻🔻 Sell Limit Order Placed - Price: ", limitPrice, " TP: ", tpPrice, " SL: ", slPrice);
-            Print("  ____  _     _     _ _ _   _ _ _ ");
-            Print(" |  _ \\| |__ (_) __| (_) |_(_) | |");
-            Print(" | |_) | '_ \\| |/ _` | | __| | | |");
-            Print(" |  __/| | | | | (_| | | |_| | | |");
-            Print(" |_|   |_| |_|_|\\__,_|_|\\__|_|_|_|");
         }
         else
         {
@@ -1409,7 +1423,7 @@ void PlaceBuyOrder(string symbol, double riskPercent, double atrMultiplier,
                    ENUM_TIMEFRAMES timeframe, double fixedStopLossPips)
 {
     double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, atrMultiplier, timeframe, fixedStopLossPips);
+    CalculateDynamicSLTPInPips(symbol, stop_loss, take_profit, atrMultiplier, timeframe, fixedStopLossPips);
 
     double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
     double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
@@ -1449,7 +1463,14 @@ void PlaceSellOrder(string symbol, double riskPercent, double atrMultiplier,
                     ENUM_TIMEFRAMES timeframe, double fixedStopLossPips)
 {
     double stop_loss, take_profit;
-    CalculateDynamicSLTP(symbol, stop_loss, take_profit, atrMultiplier, timeframe, fixedStopLossPips);
+    CalculateDynamicSLTPInPips(
+        symbol, 
+        stop_loss, 
+        take_profit, 
+        atrMultiplier, 
+        timeframe, 
+        fixedStopLossPips
+    );
 
     double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
     double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
@@ -2232,8 +2253,7 @@ void ProcessSellSignal(string symbol, double lotSize, double stopLoss, double ta
 void ProcessBuySignal(string symbol, double lotSize, double stopLoss, double takeProfit, double liquidityThreshold, double takeProfitPips, double stopLossPips, double riskPercent, CTrade &trade)
 {
 
-    if (!IsBearishCandlePattern(symbol))
-    {
+    if (!IsBearishCandlePattern(symbol))    {
         if (!ManagePositions(symbol, POSITION_TYPE_BUY) && !HasPendingOrder(symbol, ORDER_TYPE_BUY_LIMIT))
         {
             double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
@@ -2270,6 +2290,42 @@ void ProcessBuySignal(string symbol, double lotSize, double stopLoss, double tak
         Print("Buy Signal Rejected - Strong bearish pattern detected");
     }
 }
+
+// Example function to calculate dynamic SL/TP in pips
+void CalculateDynamicSLTPInPips(
+    string symbol, 
+    double &stopLossPips,      // Output: Stop Loss in pips
+    double &takeProfitPips,   // Output: Take Profit in pips
+    double atrMultiplier, 
+    ENUM_TIMEFRAMES timeframe, 
+    double fallbackStopLossPips  // e.g., your fixedStopLossPips = 20.0
+)
+{
+   // 1. Calculate an ATR-based or alternative dynamic SL and TP in "points"
+   double atr = iATR(symbol, timeframe, 14); 
+   if(atr <= 0.000001)
+   {
+      // fallback if ATR data is invalid
+      stopLossPips    = fallbackStopLossPips;
+      takeProfitPips  = fallbackStopLossPips * 2.0;  // example
+      return;
+   }
+
+   // Example "points" based approach 
+   // (adjust logic to your preference)
+   double dynamicSL_points = atr * atrMultiplier;  
+   double dynamicTP_points = dynamicSL_points * 2.0; // example: 2:1 reward/risk
+
+   // 2. Convert these "points" into "pips"  
+   // For many symbols like indices, 1 pip can be 10 points, but verify with your broker.
+   // If 1 pip = 10 points:
+   double PIPS_PER_POINT = 10.0;   
+
+   stopLossPips   = dynamicSL_points / PIPS_PER_POINT;
+   takeProfitPips = dynamicTP_points / PIPS_PER_POINT;
+}
+
+// ... existing code ...
 //+------------------------------------------------------------------+
 //| Cleanup Pending Orders                                           |
 //+------------------------------------------------------------------+
@@ -2297,5 +2353,23 @@ void CleanupPendingOrders(string symbol)
                 }
             }
         }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Helper function to get error description                          |
+//+------------------------------------------------------------------+
+string ErrorDescription(int error_code)
+{
+    switch(error_code)
+    {
+        case 4807: return "Indicator buffer not ready";
+        case 4806: return "Requested data not ready";
+        case 4805: return "Time series not available";
+        case 4804: return "Not enough memory for data calculation";
+        case 4803: return "Different arrays required";
+        case 4802: return "Wrong index requested";
+        case 4801: return "Wrong array size";
+        default: return "Unknown error";
     }
 }
