@@ -489,7 +489,7 @@ void ExecuteTradingLogic(string symbol)
                 Print("Lot Size: ", lotSize, " | Min Stop Level: ", SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(symbol, SYMBOL_POINT));
                 
                 // Use PlaceBuyLimitOrder instead of trade.Buy
-                PlaceBuyLimitOrder(symbol, SymbolInfoDouble(symbol, SYMBOL_BID) - 10 * _Point, RiskPercent);
+                PlaceBuyLimitOrder(symbol, SymbolInfoDouble(symbol, SYMBOL_BID) - 10 * SymbolInfoDouble(symbol, SYMBOL_POINT), RiskPercent);
             }
             else if (totalScore <= -scoreThreshold && AllowShortTrades)
             {
@@ -500,7 +500,7 @@ void ExecuteTradingLogic(string symbol)
                 Print("Lot Size: ", lotSize, " | Min Stop Level: ", SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(symbol, SYMBOL_POINT));
                 
                 // Use PlaceSellLimitOrder instead of trade.Sell
-                PlaceSellLimitOrder(symbol, SymbolInfoDouble(symbol, SYMBOL_ASK) + 10 * _Point, RiskPercent);
+                PlaceSellLimitOrder(symbol, SymbolInfoDouble(symbol, SYMBOL_ASK) + 10 * SymbolInfoDouble(symbol, SYMBOL_POINT), RiskPercent);
             }
         }
 
@@ -586,7 +586,7 @@ void ExecuteTradingLogic(string symbol)
             Print("Account Balance: ", accountBalance);
             Print("Risk Percent: ", RiskPercent, "%");
             Print("Intended Monetary Risk: ", localRiskPercent * accountBalance / 100);
-            Print("Stop Loss Pips: ", stopLoss / _Point);
+            Print("Stop Loss Pips: ", stopLoss / SymbolInfoDouble(symbol, SYMBOL_POINT));
             Print("Tick Value: ", tickValue);
             Print("Tick Size: ", SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE));
             Print("Lot Step: ", SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP));
@@ -754,7 +754,7 @@ int IdentifyTrendPattern(string symbol)
 
     // Check for golden cross with momentum confirmation
     if(current_ema_short > current_ema_long && past_ema_short[0] < past_ema_long[0]) {
-        cross_strength = MathAbs(current_ema_short - current_ema_long) / _Point;
+        cross_strength = MathAbs(current_ema_short - current_ema_long) / SymbolInfoDouble(symbol, SYMBOL_POINT);
         if(cross_strength > GOLDEN_CROSS_THRESHOLD) {
             golden_cross = true;
             score.bullish += 3.0 * (cross_strength / GOLDEN_CROSS_THRESHOLD);
@@ -764,7 +764,7 @@ int IdentifyTrendPattern(string symbol)
     }
     // Check for death cross with momentum confirmation
     else if(current_ema_short < current_ema_long && past_ema_short[0] > past_ema_long[0]) {
-        cross_strength = MathAbs(current_ema_short - current_ema_long) / _Point;
+        cross_strength = MathAbs(current_ema_short - current_ema_long) / SymbolInfoDouble(symbol, SYMBOL_POINT);
         if(cross_strength > GOLDEN_CROSS_THRESHOLD) {
             death_cross = true;
             score.bearish += 3.0 * (cross_strength / GOLDEN_CROSS_THRESHOLD);
