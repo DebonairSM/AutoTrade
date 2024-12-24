@@ -289,19 +289,20 @@ double CalculateATR(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
         if(retry > 0)
         {
             Print("Retrying ATR calculation for symbol ", symbol, ". Attempt ", retry + 1, " of ", MAX_RETRIES);
-            Sleep(RETRY_DELAY_MS); // Add a small delay between retries
+            Sleep(RETRY_DELAY_MS);
         }
         
         double atr[];
         ArraySetAsSeries(atr, true);
         
+        // Fix: Add PRICE_CLOSE parameter
         int handle = iATR(symbol, timeframe, period);
         if(handle == INVALID_HANDLE)
         {
             int error = GetLastError();
             Print("Failed to create ATR handle for symbol ", symbol, ". Error code: ", error, 
                   " (", ErrorDescription(error), ")");
-            continue; // Try again
+            continue;
         }
         
         int copied = CopyBuffer(handle, 0, shift, 1, atr);
@@ -315,8 +316,8 @@ double CalculateATR(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
                   ". Shift: ", shift,
                   ", Period: ", period,
                   ", Timeframe: ", EnumToString(timeframe),
-                  ", Attempt: ", retry + 1);
-            continue; // Try again
+                  ". Attempt: ", retry + 1);
+            continue;
         }
         
         if(ArraySize(atr) > 0)
@@ -327,15 +328,14 @@ double CalculateATR(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
                       ". Value: ", atr[0],
                       ", Shift: ", shift,
                       ", Period: ", period);
-                continue; // Try again
+                continue;
             }
-            return atr[0]; // Success!
+            return atr[0];
         }
         
         Print("Error: ATR array is empty for symbol ", symbol);
     }
     
-    // If we get here, all retries failed
     Print("All attempts to calculate ATR failed for symbol ", symbol);
     return 0;
 }
@@ -1736,102 +1736,417 @@ bool ManagePositions(string symbol, int checkType = -1)
     return hasPosition;
 }
 
-//+------------------------------------------------------------------+
-//| Calculate MACD Values                                            |
-//+------------------------------------------------------------------+
-void CalculateMACD(string symbol, double &macdMain, double &macdSignal, double &macdHistogram, int shift, ENUM_TIMEFRAMES timeframe)
-{
-    if (!IsValidTimeframe(timeframe)) return;
-    
-    int handle = iMACD(symbol, timeframe, 
-                      UtilitySettings.MACD_Fast,    // Fast EMA period
-                      UtilitySettings.MACD_Slow,    // Slow EMA period
-                      UtilitySettings.MACD_Signal,  // Signal period
-                      PRICE_CLOSE);
-                      
-    if (handle == INVALID_HANDLE)
-    {
-        Print("Failed to create MACD handle for symbol ", symbol);
-        return;
-    }
+//==================================================================//
+// 1) MACD Initialization and Calculation                           //
+//==================================================================//
+static int g_macdHandle = INVALID_HANDLE;
 
-    double macdBuffer[];
-    double signalBuffer[];
-    double histogramBuffer[];
-    
-    ArraySetAsSeries(macdBuffer, true);
-    ArraySetAsSeries(signalBuffer, true);
-    ArraySetAsSeries(histogramBuffer, true);
-    
-    if (CopyBuffer(handle, 0, shift, 1, macdBuffer) > 0 &&
-        CopyBuffer(handle, 1, shift, 1, signalBuffer) > 0 &&
-        CopyBuffer(handle, 2, shift, 1, histogramBuffer) > 0)
-    {
-        macdMain = macdBuffer[0];
-        macdSignal = signalBuffer[0];
-        macdHistogram = histogramBuffer[0];
-    }
-    
-    IndicatorRelease(handle);
-}
-//+------------------------------------------------------------------+
-//| Calculate Dynamic RSI Thresholds                                 |
-//+------------------------------------------------------------------+
-void GetDynamicRSIThresholds(string symbol, ENUM_TIMEFRAMES timeframe, double rsiUpperThreshold, double rsiLowerThreshold, double &upper_threshold, double &lower_threshold)
+// Call this from your EA's OnInit() once
+bool InitMACDHandle(string symbol, ENUM_TIMEFRAMES timeframe, int fastEMA, int slowEMA, int signalPeriod)
 {
-    double atr = CalculateATR(symbol, 14, timeframe);
-    double avg_atr = 0;
-    
-    // Calculate average ATR for last 20 periods
-    for(int i = 0; i < 20; i++)
-    {
-        avg_atr += CalculateATR(symbol, 14, timeframe, i);
-    }
-    avg_atr /= 20;
-    
-    // Adjust thresholds based on relative volatility
-    double volatility_factor = atr / avg_atr;
-    
-    // More volatile market = wider thresholds
-    upper_threshold = rsiUpperThreshold + (volatility_factor - 1) * 10;
-    lower_threshold = rsiLowerThreshold - (volatility_factor - 1) * 10;
-    
-    // Keep thresholds within reasonable bounds
-    upper_threshold = MathMin(MathMax(upper_threshold, 65), 85);
-    lower_threshold = MathMax(MathMin(lower_threshold, 35), 15);
+   // If previously created, release first
+   if(g_macdHandle != INVALID_HANDLE)
+      IndicatorRelease(g_macdHandle);
+   
+   g_macdHandle = iMACD(symbol, timeframe, fastEMA, slowEMA, signalPeriod, PRICE_CLOSE);
+   if(g_macdHandle == INVALID_HANDLE)
+   {
+      Print("Failed to create MACD handle for symbol ", symbol, 
+            " with timeframe ", timeframe);
+      return false;
+   }
+   return true;
 }
 
-//+------------------------------------------------------------------+
-//| Check for RSI Divergence                                         |
-//+------------------------------------------------------------------+
-bool CheckRSIDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, int lookback, bool &bullish, bool &bearish)
+// Call this from your EA's OnDeinit() 
+void DeinitMACDHandle()
 {
-    double rsi_values[];
-    double price_values[];
-    ArrayResize(rsi_values, lookback);
-    ArrayResize(price_values, lookback);
+   if(g_macdHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(g_macdHandle);
+      g_macdHandle = INVALID_HANDLE;
+   }
+}
+
+// Fix for CalculateMACD function - add symbol parameter
+void CalculateMACD(string symbol, double &macdMain, double &macdSignal, double &macdHistogram, int shift=0, ENUM_TIMEFRAMES timeframe=PERIOD_CURRENT)
+{
+   macdMain = 0.0;
+   macdSignal = 0.0;
+   macdHistogram = 0.0;
+   
+   if(g_macdHandle == INVALID_HANDLE)
+   {
+      Print("MACD handle is invalid. Did you call InitMACDHandle()?");
+      return;
+   }
+   
+   double macdBuffer[];
+   double signalBuffer[];
+   double histBuffer[];
+   
+   ArraySetAsSeries(macdBuffer,   true);
+   ArraySetAsSeries(signalBuffer, true);
+   ArraySetAsSeries(histBuffer,   true);
+   
+   // Index 0 => main line, index 1 => signal line, index 2 => histogram
+   if(CopyBuffer(g_macdHandle, 0, shift, 1, macdBuffer)   > 0 &&
+      CopyBuffer(g_macdHandle, 1, shift, 1, signalBuffer) > 0 &&
+      CopyBuffer(g_macdHandle, 2, shift, 1, histBuffer)   > 0)
+   {
+      macdMain     = macdBuffer[0];
+      macdSignal   = signalBuffer[0];
+      macdHistogram= histBuffer[0];
+   }
+   else
+   {
+      Print("Failed to copy MACD buffers for symbol ", symbol, ". Error: ", GetLastError());
+   }
+}
+
+//==================================================================//
+// 2) Dynamic RSI Threshold Calculation                             //
+//==================================================================//
+
+/*
+  Parameterizing the volatility factor scaling so you can optimize 
+  or adjust it for different symbols/timeframes.
+*/
+input double g_volatilityAdjustFactor = 10.0; // default scaling factor
+
+/*
+  This function computes a short-term ATR (for current volatility)
+  and a longer-term average ATR to gauge relative volatility. 
+*/
+void GetDynamicRSIThresholds(string symbol,
+                             ENUM_TIMEFRAMES timeframe,
+                             double baseRsiUpper,    
+                             double baseRsiLower,    
+                             double &dynamicUpper,
+                             double &dynamicLower)
+{
+   // Fix iATR calls - remove extra parameter
+   int atrHandle = iATR(symbol, timeframe, 14);
+   if(atrHandle == INVALID_HANDLE)
+   {
+      Print("Error creating ATR handle for symbol ", symbol);
+      dynamicUpper = baseRsiUpper;
+      dynamicLower = baseRsiLower;
+      return;
+   }
+
+   double atrBuffer[];
+   ArraySetAsSeries(atrBuffer, true);
+   
+   // Get current ATR
+   if(CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) <= 0)
+   {
+      Print("Error copying ATR data for symbol ", symbol);
+      IndicatorRelease(atrHandle);
+      dynamicUpper = baseRsiUpper;
+      dynamicLower = baseRsiLower;
+      return;
+   }
+   double currentATR = atrBuffer[0];
+
+   // Calculate average ATR
+   double sumATR = 0.0;
+   if(CopyBuffer(atrHandle, 0, 0, 20, atrBuffer) <= 0)
+   {
+      Print("Error copying ATR history for symbol ", symbol);
+      IndicatorRelease(atrHandle);
+      dynamicUpper = baseRsiUpper;
+      dynamicLower = baseRsiLower;
+      return;
+   }
+   
+   for(int i = 0; i < 20; i++)
+   {
+      sumATR += atrBuffer[i];
+   }
+   
+   IndicatorRelease(atrHandle);
+   double avgATR = sumATR / 20.0;
+   
+   // Rest of the function remains the same
+   if(currentATR <= 0.0 || avgATR <= 0.0)
+   {
+      Print("Invalid ATR values for dynamic threshold. Reverting to base thresholds.");
+      dynamicUpper = baseRsiUpper;
+      dynamicLower = baseRsiLower;
+      return;
+   }
+   
+   double volatilityFactor = currentATR / avgATR;
+   double adjustment = (volatilityFactor - 1.0) * g_volatilityAdjustFactor;
+   dynamicUpper = baseRsiUpper + adjustment;
+   dynamicLower = baseRsiLower - adjustment;
+   
+   dynamicUpper = MathMin(MathMax(dynamicUpper, 65), 85);
+   dynamicLower = MathMax(MathMin(dynamicLower, 35), 15);
+}
+
+//==================================================================//
+// 3) Advanced RSI Divergence Detection                             //
+//==================================================================//
+
+/*
+  We'll differentiate between "regular" (reversal) divergence and 
+  "hidden" (continuation) divergence. For now, we provide an 
+  example that detects "regular" bullish/bearish divergence by 
+  comparing the last two swing points in price vs. RSI. 
+*/
+
+bool DetectBullishDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, int lookback)
+{
+    // Identify two recent lows in price
+    double firstLowPrice = DBL_MAX;
+    double secondLowPrice = DBL_MAX;
+    int firstLowIndex = -1;
+    int secondLowIndex = -1;
     
-    // Get RSI and price values
+    // Search the bar range [0 ... lookback-1] for major lows
     for(int i = 0; i < lookback; i++)
     {
-        rsi_values[i] = CalculateRSI(symbol, rsiPeriod, timeframe, i);
-        price_values[i] = iLow(symbol, timeframe, i);
+        double priceLow = iLow(symbol, timeframe, i);
+        if(priceLow < firstLowPrice)
+        {
+            // shift the old
+            secondLowPrice = firstLowPrice;
+            secondLowIndex = firstLowIndex;
+            // record the new
+            firstLowPrice = priceLow;
+            firstLowIndex = i;
+        }
+        else if(priceLow < secondLowPrice)
+        {
+            secondLowPrice = priceLow;
+            secondLowIndex = i;
+        }
     }
     
-    // Find local extremes
-    double rsi_low = rsi_values[ArrayMinimum(rsi_values)];
-    double rsi_high = rsi_values[ArrayMaximum(rsi_values)];
-    double price_low = price_values[ArrayMinimum(price_values)];
-    double price_high = price_values[ArrayMaximum(price_values)];
+    // If we couldn't find at least two lows, exit
+    if(firstLowIndex < 0 || secondLowIndex < 0) return false;
     
-    // Check for bullish divergence (price lower, RSI higher)
-    bullish = (price_values[0] < price_low && rsi_values[0] > rsi_low);
+    // The more recent low is the one with the smaller index
+    if(firstLowIndex > secondLowIndex)
+    {
+        // swap
+        int tempIndex = firstLowIndex;
+        double tempPrice = firstLowPrice;
+        
+        firstLowIndex = secondLowIndex;
+        firstLowPrice = secondLowPrice;
+        secondLowIndex = tempIndex;
+        secondLowPrice = tempPrice;
+    }
     
-    // Check for bearish divergence (price higher, RSI lower)
-    bearish = (price_values[0] > price_high && rsi_values[0] < rsi_high);
+    // Fix RSI calculations
+    int rsiHandle = iRSI(symbol, timeframe, rsiPeriod, PRICE_CLOSE);
+    if(rsiHandle == INVALID_HANDLE)
+    {
+        Print("Failed to create RSI handle for symbol ", symbol);
+        return false;
+    }
     
-    return (bullish || bearish);
+    double rsiBuffer[];
+    ArraySetAsSeries(rsiBuffer, true);
+    
+    if(CopyBuffer(rsiHandle, 0, firstLowIndex, 1, rsiBuffer) <= 0)
+    {
+        Print("Failed to copy first RSI value for symbol ", symbol);
+        IndicatorRelease(rsiHandle);
+        return false;
+    }
+    double rsiFirst = rsiBuffer[0];
+    
+    if(CopyBuffer(rsiHandle, 0, secondLowIndex, 1, rsiBuffer) <= 0)
+    {
+        Print("Failed to copy second RSI value for symbol ", symbol);
+        IndicatorRelease(rsiHandle);
+        return false;
+    }
+    double rsiSecond = rsiBuffer[0];
+    
+    IndicatorRelease(rsiHandle);
+    
+    bool bullish = (secondLowPrice < firstLowPrice) && (rsiSecond > rsiFirst);
+    return bullish;
 }
+
+bool DetectBearishDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, int lookback)
+{
+    // Identify two recent highs in price
+    double firstHighPrice = -DBL_MAX;
+    double secondHighPrice = -DBL_MAX;
+    int firstHighIndex = -1;
+    int secondHighIndex = -1;
+    
+    for(int i = 0; i < lookback; i++)
+    {
+        double priceHigh = iHigh(symbol, timeframe, i);
+        if(priceHigh > firstHighPrice)
+        {
+            secondHighPrice = firstHighPrice;
+            secondHighIndex = firstHighIndex;
+            firstHighPrice = priceHigh;
+            firstHighIndex = i;
+        }
+        else if(priceHigh > secondHighPrice)
+        {
+            secondHighPrice = priceHigh;
+            secondHighIndex = i;
+        }
+    }
+    
+    if(firstHighIndex < 0 || secondHighIndex < 0) return false;
+    
+    // Reorder if needed so that firstHighIndex < secondHighIndex
+    if(firstHighIndex > secondHighIndex)
+    {
+        int tempIndex = firstHighIndex;
+        double tempPrice = firstHighPrice;
+        
+        firstHighIndex = secondHighIndex;
+        firstHighPrice = secondHighPrice;
+        secondHighIndex = tempIndex;
+        secondHighPrice = tempPrice;
+    }
+    
+    // Fix RSI calculations
+    int rsiHandle = iRSI(symbol, timeframe, rsiPeriod, PRICE_CLOSE);
+    if(rsiHandle == INVALID_HANDLE)
+    {
+        Print("Failed to create RSI handle for symbol ", symbol);
+        return false;
+    }
+    
+    double rsiBuffer[];
+    ArraySetAsSeries(rsiBuffer, true);
+    
+    if(CopyBuffer(rsiHandle, 0, firstHighIndex, 1, rsiBuffer) <= 0)
+    {
+        Print("Failed to copy first RSI value for symbol ", symbol);
+        IndicatorRelease(rsiHandle);
+        return false;
+    }
+    double rsiFirst = rsiBuffer[0];
+    
+    if(CopyBuffer(rsiHandle, 0, secondHighIndex, 1, rsiBuffer) <= 0)
+    {
+        Print("Failed to copy second RSI value for symbol ", symbol);
+        IndicatorRelease(rsiHandle);
+        return false;
+    }
+    double rsiSecond = rsiBuffer[0];
+    
+    IndicatorRelease(rsiHandle);
+    
+    bool bearish = (secondHighPrice > firstHighPrice) && (rsiSecond < rsiFirst);
+    return bearish;
+}
+
+// Combined function to detect both bullish and bearish
+bool CheckRSIDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, int lookback, bool &bullish, bool &bearish)
+{
+   bullish = DetectBullishDivergence(symbol, timeframe, rsiPeriod, lookback);
+   bearish = DetectBearishDivergence(symbol, timeframe, rsiPeriod, lookback);
+   return (bullish || bearish);
+}
+
+//==================================================================//
+// 4) Combined RSI + MACD Signal                                    //
+//==================================================================//
+
+/*
+  This function checks:
+    - RSI oversold/overbought or bullish/bearish divergence
+    - MACD main vs. signal lines, histogram sign
+    - RSI momentum (comparing current bar to previous bar)
+  and returns:
+    1  => Buy Signal
+    -1 => Sell Signal
+    0  => No Signal
+*/
+
+int CheckRSIMACDSignal(string symbol, 
+                       ENUM_TIMEFRAMES timeframe, 
+                       int rsiPeriod, 
+                       double rsiUpperThreshold, 
+                       double rsiLowerThreshold)
+{
+    // Initialize RSI handle
+    int rsiHandle = iRSI(symbol, timeframe, rsiPeriod, PRICE_CLOSE);
+    if(rsiHandle == INVALID_HANDLE)
+    {
+        Print("Invalid RSI handle. Check data availability for symbol ", symbol);
+        return 0;
+    }
+    
+    double rsiBuffer[];
+    ArraySetAsSeries(rsiBuffer, true);
+    
+    // Get current RSI value
+    if(CopyBuffer(rsiHandle, 0, 0, 1, rsiBuffer) <= 0)
+    {
+        Print("Failed to copy RSI data for symbol ", symbol);
+        IndicatorRelease(rsiHandle);
+        return 0;
+    }
+    double rsiCurrent = rsiBuffer[0];
+    
+    // Get previous RSI value
+    if(CopyBuffer(rsiHandle, 0, 1, 1, rsiBuffer) <= 0)
+    {
+        Print("Failed to copy previous RSI data for symbol ", symbol);
+        IndicatorRelease(rsiHandle);
+        return 0;
+    }
+    double rsiPrevious = rsiBuffer[0];
+    
+    IndicatorRelease(rsiHandle);
+    
+    // Get dynamic RSI thresholds
+    double dynamicUpper, dynamicLower;
+    GetDynamicRSIThresholds(symbol, timeframe, rsiUpperThreshold, rsiLowerThreshold, dynamicUpper, dynamicLower);
+    
+    // Calculate MACD
+    double macdMain, macdSignal, macdHistogram;
+    CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0);
+    
+    // Check RSI Divergence
+    bool bullishDiv = false, bearishDiv = false;
+    CheckRSIDivergence(symbol, timeframe, rsiPeriod, 10, bullishDiv, bearishDiv);
+    
+    // Combine conditions for buy/sell signals
+    bool buySignal = 
+        ((rsiCurrent < dynamicLower) || bullishDiv) &&
+        (macdMain > macdSignal) &&
+        (macdHistogram > 0) &&
+        (rsiCurrent > rsiPrevious);
+    
+    bool sellSignal = 
+        ((rsiCurrent > dynamicUpper) || bearishDiv) &&
+        (macdMain < macdSignal) &&
+        (macdHistogram < 0) &&
+        (rsiCurrent < rsiPrevious);
+    
+    if(buySignal)
+    {
+        Print("Buy Signal | RSI=", rsiCurrent, ", Lower=", dynamicLower, 
+              ", Divergence=", bullishDiv);
+        return 1;
+    }
+    if(sellSignal)
+    {
+        Print("Sell Signal | RSI=", rsiCurrent, ", Upper=", dynamicUpper, 
+              ", Divergence=", bearishDiv);
+        return -1;
+    }
+    
+    return 0;
+}
+
 
 //+------------------------------------------------------------------+
 //| Detect Order Flow Imbalances                                     |
@@ -1970,54 +2285,6 @@ int MonitorOrderFlow(string symbol, bool useDOMAnalysis, double liquidityThresho
     return 1;
 }
 
-//+------------------------------------------------------------------+
-//| Check RSI and MACD Combination Signal                            |
-//+------------------------------------------------------------------+
-int CheckRSIMACDSignal(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, double rsiUpperThreshold, double rsiLowerThreshold)
-{
-    double rsi = CalculateRSI(symbol, rsiPeriod, timeframe, 0);
-    double macdMain, macdSignal, macdHistogram;
-    CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0, timeframe);
-    
-    // Get dynamic thresholds
-    double upper_threshold, lower_threshold;
-    GetDynamicRSIThresholds(symbol, timeframe, rsiUpperThreshold, rsiLowerThreshold, upper_threshold, lower_threshold);
-    
-    // Check for divergence
-    bool bullish_div, bearish_div;
-    CheckRSIDivergence(symbol, timeframe, rsiPeriod, 10, bullish_div, bearish_div);
-    
-    // Enhanced Buy Signal Conditions
-    bool buySignal = 
-        ((rsi < lower_threshold) || bullish_div) &&    // RSI oversold OR bullish divergence
-        macdMain > macdSignal &&                     // MACD above signal
-        macdHistogram > 0 &&                         // Positive momentum
-        rsi > CalculateRSI(symbol, rsiPeriod, timeframe, 1);          // RSI increasing
-        
-    // Enhanced Sell Signal Conditions    
-    bool sellSignal = 
-        ((rsi > upper_threshold) || bearish_div) &&    // RSI overbought OR bearish divergence
-        macdMain < macdSignal &&                     // MACD below signal
-        macdHistogram < 0 &&                         // Negative momentum
-        rsi < CalculateRSI(symbol, rsiPeriod, timeframe, 1);          // RSI decreasing
-    
-    // Return signals with logging
-    if(buySignal)
-    {
-        Print("RSI Buy Signal - Value: ", rsi, 
-              " Dynamic Lower: ", lower_threshold,
-              " Divergence: ", bullish_div);
-        return 1;
-    }
-    if(sellSignal)
-    {
-        Print("RSI Sell Signal - Value: ", rsi,
-              " Dynamic Upper: ", upper_threshold,
-              " Divergence: ", bearish_div);
-        return -1;
-    }
-    return 0;
-}
 
 //+------------------------------------------------------------------+
 //| Calculate RSI Trend Strength                                     |

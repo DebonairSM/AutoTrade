@@ -205,6 +205,12 @@ int OnInit()
     InitializeLogTimes(symbolLogTimes, symbolCount);
     InitializeLotSizeCalcTimes();
 
+    if(!InitMACDHandle(_Symbol, Timeframe, MACD_Fast, MACD_Slow, MACD_Signal))
+    {
+        Print("Failed to initialize MACD indicator");
+        return INIT_FAILED;
+    }
+
     return INIT_SUCCEEDED;
 }
 
@@ -237,6 +243,8 @@ void OnDeinit(const int reason)
 {
     Print("Deinitializing EA...");
     // Additional cleanup code can be added here
+
+    DeinitMACDHandle();
 }
 
 
