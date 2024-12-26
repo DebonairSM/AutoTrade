@@ -19,9 +19,9 @@ input ENUM_TIMEFRAMES InpTimeFrame = PERIOD_M5; // Timeframe for signals
 input bool   InpDebugMode        = false; // Enable debug mode
 
 // RSI thresholds (for demonstration; you can refine these as needed)
-input int    InpRSIPeriod        = 14;
-input double InpRSIOverbought    = 80.0;
-input double InpRSIOversold      = 20.0;
+input int    InpRSIPeriod        = 9;     // Shorter period for faster reaction
+input double InpRSIOverbought    = 75.0;  // Slightly lower overbought level 
+input double InpRSIOversold      = 25.0;  // Slightly higher oversold level
 
 // Global trade object
 CTrade tradeScalp;
@@ -29,16 +29,21 @@ CTrade tradeScalp;
 //--------------------------------------------------------------------
 // These constants come from your original include code
 //--------------------------------------------------------------------
-const int SCALP_MACD_FAST  = 5;     
-const int SCALP_MACD_SLOW  = 13;
-const int SCALP_MACD_SIGNAL= 4;
+const int SCALP_MACD_FAST  = 8;     // Faster MACD line for quicker momentum shifts
+const int SCALP_MACD_SLOW  = 21;    // Slower MACD line to filter out noise
+const int SCALP_MACD_SIGNAL= 5;     // Shorter signal period for responsiveness
 
 const int SCALP_EMA_SHORT  = 5;     
 const int SCALP_EMA_MEDIUM = 13;
 const int SCALP_EMA_LONG   = 34;
 
-const int VOLUME_LOOKBACK  = 10; 
-const double MIN_RVOL      = 1.2;  
+const int VOLUME_LOOKBACK  = 15;  // Longer lookback for smoothing
+const double MIN_RVOL      = 1.0; // Lower threshold for US500's high volume
+
+// Add input parameters for time filters
+input bool   UseTimeFilter       = true;  // Enable/disable time-based filtering
+input string TradingHourStart    = "08:00"; // Start of trading hours (EST)
+input string TradingHourEnd      = "12:00"; // End of trading hours (EST)
 
 //--------------------------------------------------------------------
 // Utility Logging Functions
@@ -104,7 +109,7 @@ double CalculateLotSize(double riskPercentage, double stopLossPips, string symbo
 //| Bollinger Bands Calculation                                      |
 //+------------------------------------------------------------------+
 void CalculateBollingerBands(string symbol, double &upper, double &middle, double &lower) {
-   int bb_handle = iBands(symbol, PERIOD_CURRENT, 20, 0, 2.0, PRICE_CLOSE);
+   int bb_handle = iBands(symbol, PERIOD_CURRENT, 18, 0, 1.9, PRICE_CLOSE);
    if(bb_handle == INVALID_HANDLE) {
       LogMessage("Error creating Bollinger Bands indicator", symbol);
       return;
@@ -129,6 +134,33 @@ void CalculateBollingerBands(string symbol, double &upper, double &middle, doubl
    lower  = lowerBuffer[0];
    
    IndicatorRelease(bb_handle);
+}
+
+//+------------------------------------------------------------------+
+//| Check for Bollinger Squeeze                                      |
+//+------------------------------------------------------------------+
+bool IsBollingerSqueeze(string symbol, int lookbackPeriod = 20, double squeezeFactor = 0.4) {
+   double bbUpper, bbMiddle, bbLower;
+   CalculateBollingerBands(symbol, bbUpper, bbMiddle, bbLower);
+   
+   double currentBandWidth = bbUpper - bbLower;
+   
+   double avgBandWidth = 0;
+   for(int i = 1; i <= lookbackPeriod; i++) {
+      double upper, middle, lower;
+      CalculateBollingerBands(symbol, upper, middle, lower);
+      avgBandWidth += upper - lower;
+   }
+   avgBandWidth /= lookbackPeriod;
+   
+   bool isSqueeze = (currentBandWidth < avgBandWidth * squeezeFactor);
+   
+   if(isSqueeze) {
+      LogMessage("Bollinger Squeeze detected. Current Band Width: " + DoubleToString(currentBandWidth, 5) +
+                 " Avg Band Width: " + DoubleToString(avgBandWidth, 5), symbol);
+   }
+   
+   return isSqueeze;
 }
 
 //+------------------------------------------------------------------+
@@ -296,6 +328,12 @@ void ExecuteSellTrade(double lotSize, string symbol, double riskRewardRatio) {
 //| Check for Buy Condition                                          |
 //+------------------------------------------------------------------+
 bool CheckBuyCondition(double rsi, double macdMain, double macdSignal, string symbol) {
+   MqlTick tick;
+   if(!SymbolInfoTick(symbol, tick)) {
+      LogMessage("Error getting tick info for " + symbol, symbol);
+      return false;
+   }
+   
    // Calculate RVOL
    double currentVolume = iVolume(symbol, PERIOD_CURRENT, 0);
    double avgVolume     = 0;
@@ -309,29 +347,64 @@ bool CheckBuyCondition(double rsi, double macdMain, double macdSignal, string sy
    double bbUpper, bbMiddle, bbLower;
    CalculateBollingerBands(symbol, bbUpper, bbMiddle, bbLower);
    
-   LogMessage("Checking Simplified Buy Condition:" +
-              "\n  RSI=" + DoubleToString(rsi, 2) +
-              "\n  MACD Main=" + DoubleToString(macdMain, 2) +
-              "\n  MACD Signal=" + DoubleToString(macdSignal, 2) +
-              "\n  RVOL=" + DoubleToString(rvol, 2),
-              symbol);
+   // Check for Bollinger Squeeze
+   bool bollingerSqueeze = IsBollingerSqueeze(symbol);
    
+   // Middle Band Trend Confirmation
+   double emaShort = iMA(symbol, PERIOD_CURRENT, 5, 0, MODE_EMA, PRICE_CLOSE);
+   bool middleBandTrendConfirmation = (emaShort > bbMiddle);
+   
+   // Add engulfing pattern check to buy/sell conditions
+   bool engulfingBullish = (tick.last > iHigh(symbol, PERIOD_M5, 1)) && 
+                           (iClose(symbol, PERIOD_M5, 1) < iOpen(symbol, PERIOD_M5, 1));
+   bool engulfingBearish = (tick.last < iLow(symbol, PERIOD_M5, 1)) &&
+                           (iClose(symbol, PERIOD_M5, 1) > iOpen(symbol, PERIOD_M5, 1));
+
+   // Add consecutive candles check
+   int consecutiveCandles = 0;
+   for(int i = 1; i <= 3; i++) {
+      if(iClose(symbol, PERIOD_M5, i) > iOpen(symbol, PERIOD_M5, i)) 
+         consecutiveCandles++;
+      else 
+         break;
+   }
+   bool consecutiveBullish = (consecutiveCandles == 3);
+   bool consecutiveBearish = (consecutiveCandles == 0);
+
    bool momentumConfirmation = (rsi > InpRSIOversold && rsi < InpRSIOverbought && macdMain > macdSignal);
    bool volumeConfirmation   = (rvol >= MIN_RVOL);
    bool priceAction          = (SymbolInfoDouble(symbol, SYMBOL_ASK) < bbUpper * 1.005);
    
-   if (momentumConfirmation && volumeConfirmation && priceAction) {
+   // Modify buy/sell conditions
+   bool buySignal  = momentumConfirmation && volumeConfirmation && priceAction && 
+                     bollingerSqueeze && middleBandTrendConfirmation && 
+                     engulfingBullish && consecutiveBullish;
+   bool sellSignal = momentumConfirmation && volumeConfirmation && priceAction && 
+                     bollingerSqueeze && middleBandTrendConfirmation && 
+                     engulfingBearish && consecutiveBearish;
+
+   if (buySignal) {
       LogMessage("Buy condition met with all confirmations.", symbol);
       return true;
    }
    
+   
+   if(InpDebugMode) {
+   LogMessage("Checking Enhanced Buy Condition:" +
+              "\n  RSI=" + DoubleToString(rsi, 2) +
+              "\n  MACD Main=" + DoubleToString(macdMain, 2) +
+              "\n  MACD Signal=" + DoubleToString(macdSignal, 2) +
+              "\n  RVOL=" + DoubleToString(rvol, 2) +
+              "\n  Bollinger Squeeze=" + (bollingerSqueeze ? "Yes" : "No") +
+              "\n  Middle Band Trend Confirmation=" + (middleBandTrendConfirmation ? "Yes" : "No"),
+              symbol);
    LogMessage("Buy condition not met. Failed confirmations:" +
               (!momentumConfirmation ? " Momentum" : "") +
               (!volumeConfirmation   ? " Volume" : "") +
-              (!priceAction         ? " Price" : ""),
+              (!priceAction         ? " Price" : "") +
+              (!bollingerSqueeze    ? " Bollinger Squeeze" : "") +
+              (!middleBandTrendConfirmation ? " Middle Band Trend" : ""),
               symbol);
-   
-   if(InpDebugMode) {
       LogMessage("Buy Condition Debug:" +
                  "\n  BB Upper=" + DoubleToString(bbUpper, 5) +
                  "\n  BB Middle=" + DoubleToString(bbMiddle, 5) +
@@ -346,6 +419,12 @@ bool CheckBuyCondition(double rsi, double macdMain, double macdSignal, string sy
 //| Check for Sell Condition                                         |
 //+------------------------------------------------------------------+
 bool CheckSellCondition(double rsi, double macdMain, double macdSignal, string symbol) {
+   MqlTick tick;
+   if(!SymbolInfoTick(symbol, tick)) {
+      LogMessage("Error getting tick info for " + symbol, symbol);
+      return false;
+   }
+   
    // Calculate RVOL
    double currentVolume = iVolume(symbol, PERIOD_CURRENT, 0);
    double avgVolume     = 0;
@@ -359,34 +438,69 @@ bool CheckSellCondition(double rsi, double macdMain, double macdSignal, string s
    double bbUpper, bbMiddle, bbLower;
    CalculateBollingerBands(symbol, bbUpper, bbMiddle, bbLower);
    
-   LogMessage("Checking Simplified Sell Condition:" +
-              "\n  RSI=" + DoubleToString(rsi, 2) +
-              "\n  MACD Main=" + DoubleToString(macdMain, 2) +
-              "\n  MACD Signal=" + DoubleToString(macdSignal, 2) +
-              "\n  RVOL=" + DoubleToString(rvol, 2),
-              symbol);
+   // Check for Bollinger Squeeze
+   bool bollingerSqueeze = IsBollingerSqueeze(symbol);
    
+   // Middle Band Trend Confirmation
+   double emaShort = iMA(symbol, PERIOD_CURRENT, 5, 0, MODE_EMA, PRICE_CLOSE);
+   bool middleBandTrendConfirmation = (emaShort < bbMiddle);
+   
+   // Add engulfing pattern check to buy/sell conditions
+   bool engulfingBullish = (tick.last > iHigh(symbol, PERIOD_M5, 1)) && 
+                           (iClose(symbol, PERIOD_M5, 1) < iOpen(symbol, PERIOD_M5, 1));
+   bool engulfingBearish = (tick.last < iLow(symbol, PERIOD_M5, 1)) &&
+                           (iClose(symbol, PERIOD_M5, 1) > iOpen(symbol, PERIOD_M5, 1));
+
+   // Add consecutive candles check
+   int consecutiveCandles = 0;
+   for(int i = 1; i <= 3; i++) {
+      if(iClose(symbol, PERIOD_M5, i) < iOpen(symbol, PERIOD_M5, i)) 
+         consecutiveCandles++;
+      else 
+         break;
+   }
+   bool consecutiveBullish = (consecutiveCandles == 0);
+   bool consecutiveBearish = (consecutiveCandles == 3);
+
    bool momentumConfirmation = (rsi > InpRSIOversold && rsi < InpRSIOverbought && macdMain < macdSignal);
    bool volumeConfirmation   = (rvol >= MIN_RVOL);
    bool priceAction          = (SymbolInfoDouble(symbol, SYMBOL_BID) > bbLower * 0.995);
    
-   if (momentumConfirmation && volumeConfirmation && priceAction) {
+   // Modify buy/sell conditions
+   bool buySignal  = momentumConfirmation && volumeConfirmation && priceAction && 
+                     bollingerSqueeze && middleBandTrendConfirmation && 
+                     engulfingBullish && consecutiveBullish;
+   bool sellSignal = momentumConfirmation && volumeConfirmation && priceAction && 
+                     bollingerSqueeze && middleBandTrendConfirmation && 
+                     engulfingBearish && consecutiveBearish;
+
+   if (sellSignal) {
       LogMessage("Sell condition met with all confirmations.", symbol);
       return true;
    }
    
-   LogMessage("Sell condition not met. Failed confirmations:" +
-              (!momentumConfirmation ? " Momentum" : "") +
-              (!volumeConfirmation   ? " Volume" : "") +
-              (!priceAction         ? " Price" : ""),
-              symbol);
    
    if(InpDebugMode) {
+   LogMessage("Checking Enhanced Sell Condition:" +
+              "\n  RSI=" + DoubleToString(rsi, 2) +
+              "\n  MACD Main=" + DoubleToString(macdMain, 2) +
+              "\n  MACD Signal=" + DoubleToString(macdSignal, 2) +
+              "\n  RVOL=" + DoubleToString(rvol, 2) +
+              "\n  Bollinger Squeeze=" + (bollingerSqueeze ? "Yes" : "No") +
+              "\n  Middle Band Trend Confirmation=" + (middleBandTrendConfirmation ? "Yes" : "No"),
+              symbol);
       LogMessage("Sell Condition Debug:" +
                  "\n  BB Upper=" + DoubleToString(bbUpper, 5) +
                  "\n  BB Middle=" + DoubleToString(bbMiddle, 5) +
                  "\n  BB Lower=" + DoubleToString(bbLower, 5),
                  symbol);
+   LogMessage("Sell condition not met. Failed confirmations:" +
+              (!momentumConfirmation ? " Momentum" : "") +
+              (!volumeConfirmation   ? " Volume" : "") +
+              (!priceAction         ? " Price" : "") +
+              (!bollingerSqueeze    ? " Bollinger Squeeze" : "") +
+              (!middleBandTrendConfirmation ? " Middle Band Trend" : ""),
+              symbol);
    }
    
    return false;
@@ -467,7 +581,7 @@ void OnTick()
    string symbol = _Symbol;
    MqlTick tick;
    if(!SymbolInfoTick(symbol, tick)) {
-      Print("Error getting tick info for ", symbol);
+      LogMessage("Error getting tick info for " + symbol, symbol);
       return;
    }
 
@@ -495,14 +609,14 @@ void OnTick()
    // (In a more advanced EA, you might track multiple positions or MagicNumbers.)
    bool haveOpenPosition = false;
    double openPrice      = 0.0;
-   long   ticket         = -1;
+   ulong  ticket         = 0;
    for(int iPos = PositionsTotal() - 1; iPos >= 0; iPos--) {
       ulong posTicket = PositionGetTicket(iPos);
       if(posTicket > 0) {
          string posSymbol = PositionGetString(POSITION_SYMBOL);
          if(posSymbol == symbol) {
             haveOpenPosition = true;
-            openPrice        = PositionGetDouble(POSITION_PRICE_OPEN);
+            openPrice        = (double)PositionGetDouble(POSITION_PRICE_OPEN);
             ticket           = posTicket;
             break;
          }
@@ -545,5 +659,13 @@ void OnTick()
                  "\n  MACD Signal=" + DoubleToString(macdSignal, 6),
                  symbol);
    }
+
+   // Modify OnTick() to check time filters
+   datetime startTime = StringToTime(TimeToString(TimeCurrent(), TIME_DATE) + " " + TradingHourStart);
+   datetime endTime   = StringToTime(TimeToString(TimeCurrent(), TIME_DATE) + " " + TradingHourEnd);
+
+   if(UseTimeFilter && (TimeCurrent() < startTime || TimeCurrent() > endTime)) {
+      // Outside trading hours, skip checking for signals
+      return;
+   }
 }
-//+------------------------------------------------------------------+
