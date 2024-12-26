@@ -296,9 +296,6 @@ void ExecuteSellTrade(double lotSize, string symbol, double riskRewardRatio) {
 //| Check for Buy Condition                                          |
 //+------------------------------------------------------------------+
 bool CheckBuyCondition(double rsi, double macdMain, double macdSignal, string symbol) {
-   double emaShort  = iMA(symbol, PERIOD_CURRENT, SCALP_EMA_SHORT, 0, MODE_EMA, PRICE_CLOSE);
-   double emaMedium = iMA(symbol, PERIOD_CURRENT, SCALP_EMA_MEDIUM, 0, MODE_EMA, PRICE_CLOSE);
-   
    // Calculate RVOL
    double currentVolume = iVolume(symbol, PERIOD_CURRENT, 0);
    double avgVolume     = 0;
@@ -312,7 +309,7 @@ bool CheckBuyCondition(double rsi, double macdMain, double macdSignal, string sy
    double bbUpper, bbMiddle, bbLower;
    CalculateBollingerBands(symbol, bbUpper, bbMiddle, bbLower);
    
-   LogMessage("Checking Enhanced Buy Condition:" +
+   LogMessage("Checking Simplified Buy Condition:" +
               "\n  RSI=" + DoubleToString(rsi, 2) +
               "\n  MACD Main=" + DoubleToString(macdMain, 2) +
               "\n  MACD Signal=" + DoubleToString(macdSignal, 2) +
@@ -320,26 +317,22 @@ bool CheckBuyCondition(double rsi, double macdMain, double macdSignal, string sy
               symbol);
    
    bool momentumConfirmation = (rsi > InpRSIOversold && rsi < InpRSIOverbought && macdMain > macdSignal);
-   bool trendConfirmation    = (emaShort > emaMedium * 0.995);
    bool volumeConfirmation   = (rvol >= MIN_RVOL);
    bool priceAction          = (SymbolInfoDouble(symbol, SYMBOL_ASK) < bbUpper * 1.005);
    
-   if (momentumConfirmation && trendConfirmation && volumeConfirmation && priceAction) {
+   if (momentumConfirmation && volumeConfirmation && priceAction) {
       LogMessage("Buy condition met with all confirmations.", symbol);
       return true;
    }
    
    LogMessage("Buy condition not met. Failed confirmations:" +
               (!momentumConfirmation ? " Momentum" : "") +
-              (!trendConfirmation    ? " Trend" : "") +
               (!volumeConfirmation   ? " Volume" : "") +
               (!priceAction         ? " Price" : ""),
               symbol);
    
    if(InpDebugMode) {
       LogMessage("Buy Condition Debug:" +
-                 "\n  EMA Short=" + DoubleToString(emaShort, 5) + 
-                 "\n  EMA Medium=" + DoubleToString(emaMedium, 5) +
                  "\n  BB Upper=" + DoubleToString(bbUpper, 5) +
                  "\n  BB Middle=" + DoubleToString(bbMiddle, 5) +
                  "\n  BB Lower=" + DoubleToString(bbLower, 5),
@@ -353,9 +346,6 @@ bool CheckBuyCondition(double rsi, double macdMain, double macdSignal, string sy
 //| Check for Sell Condition                                         |
 //+------------------------------------------------------------------+
 bool CheckSellCondition(double rsi, double macdMain, double macdSignal, string symbol) {
-   double emaShort  = iMA(symbol, PERIOD_CURRENT, SCALP_EMA_SHORT, 0, MODE_EMA, PRICE_CLOSE);
-   double emaMedium = iMA(symbol, PERIOD_CURRENT, SCALP_EMA_MEDIUM, 0, MODE_EMA, PRICE_CLOSE);
-   
    // Calculate RVOL
    double currentVolume = iVolume(symbol, PERIOD_CURRENT, 0);
    double avgVolume     = 0;
@@ -369,7 +359,7 @@ bool CheckSellCondition(double rsi, double macdMain, double macdSignal, string s
    double bbUpper, bbMiddle, bbLower;
    CalculateBollingerBands(symbol, bbUpper, bbMiddle, bbLower);
    
-   LogMessage("Checking Enhanced Sell Condition:" +
+   LogMessage("Checking Simplified Sell Condition:" +
               "\n  RSI=" + DoubleToString(rsi, 2) +
               "\n  MACD Main=" + DoubleToString(macdMain, 2) +
               "\n  MACD Signal=" + DoubleToString(macdSignal, 2) +
@@ -377,26 +367,22 @@ bool CheckSellCondition(double rsi, double macdMain, double macdSignal, string s
               symbol);
    
    bool momentumConfirmation = (rsi > InpRSIOversold && rsi < InpRSIOverbought && macdMain < macdSignal);
-   bool trendConfirmation    = (emaShort < emaMedium * 1.005);
    bool volumeConfirmation   = (rvol >= MIN_RVOL);
    bool priceAction          = (SymbolInfoDouble(symbol, SYMBOL_BID) > bbLower * 0.995);
    
-   if (momentumConfirmation && trendConfirmation && volumeConfirmation && priceAction) {
+   if (momentumConfirmation && volumeConfirmation && priceAction) {
       LogMessage("Sell condition met with all confirmations.", symbol);
       return true;
    }
    
    LogMessage("Sell condition not met. Failed confirmations:" +
               (!momentumConfirmation ? " Momentum" : "") +
-              (!trendConfirmation    ? " Trend" : "") +
               (!volumeConfirmation   ? " Volume" : "") +
               (!priceAction         ? " Price" : ""),
               symbol);
    
    if(InpDebugMode) {
       LogMessage("Sell Condition Debug:" +
-                 "\n  EMA Short=" + DoubleToString(emaShort, 5) + 
-                 "\n  EMA Medium=" + DoubleToString(emaMedium, 5) +
                  "\n  BB Upper=" + DoubleToString(bbUpper, 5) +
                  "\n  BB Middle=" + DoubleToString(bbMiddle, 5) +
                  "\n  BB Lower=" + DoubleToString(bbLower, 5),
