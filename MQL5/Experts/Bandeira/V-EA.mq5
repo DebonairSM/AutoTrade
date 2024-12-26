@@ -205,13 +205,20 @@ int OnInit()
     InitializeLogTimes(symbolLogTimes, symbolCount);
     InitializeLotSizeCalcTimes();
 
-    if(!InitMACDHandle(_Symbol, Timeframe, MACD_Fast, MACD_Slow, MACD_Signal))
+    if(UseDOMAnalysis)
     {
-        Print("Failed to initialize MACD indicator");
-        return INIT_FAILED;
+        for(int i = 0; i < symbolCount; i++)
+        {
+            string symbol = tradingSymbols[i];
+            if(!MarketBookAdd(symbol))
+            {
+                Print("Failed to enable DOM for ", symbol);
+                // Consider if you want to continue or return INIT_FAILED
+            }
+        }
     }
 
-    return INIT_SUCCEEDED;
+    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -242,9 +249,15 @@ void OnTick()
 void OnDeinit(const int reason)
 {
     Print("Deinitializing EA...");
-    // Additional cleanup code can be added here
-
-    DeinitMACDHandle();
+    
+    if(UseDOMAnalysis)
+    {
+        for(int i = 0; i < symbolCount; i++)
+        {
+            string symbol = tradingSymbols[i];
+            MarketBookRelease(symbol);
+        }
+    }
 }
 
 
@@ -354,7 +367,7 @@ void ExecuteTradingLogic(string symbol)
         
         // Calculate MACD using scalping-specific parameters
         double macdMain, macdSignal, macdHistogram;
-        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0, ScalpingTimeframe);
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0);
 
         // Check for existing positions to avoid overlapping trades
         if (!HasActiveTradeOrPendingOrder(symbol, POSITION_TYPE_BUY) && 
@@ -416,7 +429,7 @@ void ExecuteTradingLogic(string symbol)
         double adx, plusDI, minusDI;
         CalculateADX(symbol, ADXPeriod, Timeframe, adx, plusDI, minusDI);
         double macdMain, macdSignal, macdHistogram;
-        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0, Timeframe);
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0);
 
         // Package the data for logging
         MarketAnalysisData analysisData;
@@ -457,7 +470,7 @@ void ExecuteTradingLogic(string symbol)
         int orderFlowSignal = MonitorOrderFlow(symbol, UseDOMAnalysis, LiquidityThreshold, ImbalanceThreshold);
         int trendSignal = TrendFollowingCore(symbol);
         int patternSignal = IdentifyTrendPattern(symbol);
-        int rsiMacdSignal = CheckRSIMACDSignal(symbol, Timeframe, RSI_Period, RSIUpperThreshold, RSILowerThreshold);
+        int rsiMacdSignal = CheckRSIMACDSignal(symbol, (ENUM_TIMEFRAMES)Timeframe, RSI_Period, RSIUpperThreshold, RSILowerThreshold);
         
         // Use a local variable for RiskPercent modification
         double localRiskPercent = RiskPercent;
@@ -694,7 +707,7 @@ int IdentifyTrendPattern(string symbol)
     if(current_ema_short > current_ema_medium && current_ema_medium > current_ema_long) {
         // Get MACD values for momentum confirmation
         double macdMain, macdSignal, macdHistogram;
-        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0, Timeframe);
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0);
         
         // Enhanced bullish scoring with momentum confirmation
         if(macdHistogram > 0) {  // Positive momentum
@@ -710,7 +723,7 @@ int IdentifyTrendPattern(string symbol)
     else if(current_ema_short < current_ema_medium && current_ema_medium < current_ema_long) {
         // Get MACD values for momentum confirmation
         double macdMain, macdSignal, macdHistogram;
-        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0, Timeframe);
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0);
         
         // Enhanced bearish scoring with momentum confirmation
             if(macdHistogram < 0) {  // Negative momentum

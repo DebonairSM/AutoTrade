@@ -1541,7 +1541,7 @@ bool CheckConsecutiveSignals(string symbol, int requiredBars, bool isBuySignal)
         ema_long_values[i-1] = CalculateEMA(symbol, UtilitySettings.EMA_PERIODS_LONG, UtilitySettings.Timeframe, i);
         
         double macdMain, macdSignal, macdHistogram;
-        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, i, UtilitySettings.Timeframe);
+        CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, i);
         macd_histogram_values[i-1] = macdHistogram;
         macd_main_values[i-1] = macdMain;  // Store MACD main value
         macd_signal_values[i-1] = macdSignal; // Store MACD signal value
@@ -1736,555 +1736,62 @@ bool ManagePositions(string symbol, int checkType = -1)
     return hasPosition;
 }
 
-//==================================================================//
-// 1) MACD Initialization and Calculation                           //
-//==================================================================//
-static int g_macdHandle = INVALID_HANDLE;
-
-// Call this from your EA's OnInit() once
-bool InitMACDHandle(string symbol, ENUM_TIMEFRAMES timeframe, int fastEMA, int slowEMA, int signalPeriod)
-{
-   // If previously created, release first
-   if(g_macdHandle != INVALID_HANDLE)
-      IndicatorRelease(g_macdHandle);
-   
-   g_macdHandle = iMACD(symbol, timeframe, fastEMA, slowEMA, signalPeriod, PRICE_CLOSE);
-   if(g_macdHandle == INVALID_HANDLE)
-   {
-      Print("Failed to create MACD handle for symbol ", symbol, 
-            " with timeframe ", timeframe);
-      return false;
-   }
-   return true;
-}
-
-// Call this from your EA's OnDeinit() 
-void DeinitMACDHandle()
-{
-   if(g_macdHandle != INVALID_HANDLE)
-   {
-      IndicatorRelease(g_macdHandle);
-      g_macdHandle = INVALID_HANDLE;
-   }
-}
-
-// Fix for CalculateMACD function - add symbol parameter
-void CalculateMACD(string symbol, double &macdMain, double &macdSignal, double &macdHistogram, int shift=0, ENUM_TIMEFRAMES timeframe=PERIOD_CURRENT)
-{
-   macdMain = 0.0;
-   macdSignal = 0.0;
-   macdHistogram = 0.0;
-   
-   if(g_macdHandle == INVALID_HANDLE)
-   {
-      Print("MACD handle is invalid. Did you call InitMACDHandle()?");
-      return;
-   }
-   
-   double macdBuffer[];
-   double signalBuffer[];
-   double histBuffer[];
-   
-   ArraySetAsSeries(macdBuffer,   true);
-   ArraySetAsSeries(signalBuffer, true);
-   ArraySetAsSeries(histBuffer,   true);
-   
-   // Index 0 => main line, index 1 => signal line, index 2 => histogram
-   if(CopyBuffer(g_macdHandle, 0, shift, 1, macdBuffer)   > 0 &&
-      CopyBuffer(g_macdHandle, 1, shift, 1, signalBuffer) > 0 &&
-      CopyBuffer(g_macdHandle, 2, shift, 1, histBuffer)   > 0)
-   {
-      macdMain     = macdBuffer[0];
-      macdSignal   = signalBuffer[0];
-      macdHistogram= histBuffer[0];
-   }
-   else
-   {
-      Print("Failed to copy MACD buffers for symbol ", symbol, ". Error: ", GetLastError());
-   }
-}
-
-//==================================================================//
-// 2) Dynamic RSI Threshold Calculation                             //
-//==================================================================//
-
-/*
-  Parameterizing the volatility factor scaling so you can optimize 
-  or adjust it for different symbols/timeframes.
-*/
-input double g_volatilityAdjustFactor = 10.0; // default scaling factor
-
-/*
-  This function computes a short-term ATR (for current volatility)
-  and a longer-term average ATR to gauge relative volatility. 
-*/
-void GetDynamicRSIThresholds(string symbol,
-                             ENUM_TIMEFRAMES timeframe,
-                             double baseRsiUpper,    
-                             double baseRsiLower,    
-                             double &dynamicUpper,
-                             double &dynamicLower)
-{
-   // Fix iATR calls - remove extra parameter
-   int atrHandle = iATR(symbol, timeframe, 14);
-   if(atrHandle == INVALID_HANDLE)
-   {
-      Print("Error creating ATR handle for symbol ", symbol);
-      dynamicUpper = baseRsiUpper;
-      dynamicLower = baseRsiLower;
-      return;
-   }
-
-   double atrBuffer[];
-   ArraySetAsSeries(atrBuffer, true);
-   
-   // Get current ATR
-   if(CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) <= 0)
-   {
-      Print("Error copying ATR data for symbol ", symbol);
-      IndicatorRelease(atrHandle);
-      dynamicUpper = baseRsiUpper;
-      dynamicLower = baseRsiLower;
-      return;
-   }
-   double currentATR = atrBuffer[0];
-
-   // Calculate average ATR
-   double sumATR = 0.0;
-   if(CopyBuffer(atrHandle, 0, 0, 20, atrBuffer) <= 0)
-   {
-      Print("Error copying ATR history for symbol ", symbol);
-      IndicatorRelease(atrHandle);
-      dynamicUpper = baseRsiUpper;
-      dynamicLower = baseRsiLower;
-      return;
-   }
-   
-   for(int i = 0; i < 20; i++)
-   {
-      sumATR += atrBuffer[i];
-   }
-   
-   IndicatorRelease(atrHandle);
-   double avgATR = sumATR / 20.0;
-   
-   // Rest of the function remains the same
-   if(currentATR <= 0.0 || avgATR <= 0.0)
-   {
-      Print("Invalid ATR values for dynamic threshold. Reverting to base thresholds.");
-      dynamicUpper = baseRsiUpper;
-      dynamicLower = baseRsiLower;
-      return;
-   }
-   
-   double volatilityFactor = currentATR / avgATR;
-   double adjustment = (volatilityFactor - 1.0) * g_volatilityAdjustFactor;
-   dynamicUpper = baseRsiUpper + adjustment;
-   dynamicLower = baseRsiLower - adjustment;
-   
-   dynamicUpper = MathMin(MathMax(dynamicUpper, 65), 85);
-   dynamicLower = MathMax(MathMin(dynamicLower, 35), 15);
-}
-
-//==================================================================//
-// 3) Advanced RSI Divergence Detection                             //
-//==================================================================//
-
-/*
-  We'll differentiate between "regular" (reversal) divergence and 
-  "hidden" (continuation) divergence. For now, we provide an 
-  example that detects "regular" bullish/bearish divergence by 
-  comparing the last two swing points in price vs. RSI. 
-*/
-
-bool DetectBullishDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, int lookback)
-{
-    // Identify two recent lows in price
-    double firstLowPrice = DBL_MAX;
-    double secondLowPrice = DBL_MAX;
-    int firstLowIndex = -1;
-    int secondLowIndex = -1;
-    
-    // Search the bar range [0 ... lookback-1] for major lows
-    for(int i = 0; i < lookback; i++)
-    {
-        double priceLow = iLow(symbol, timeframe, i);
-        if(priceLow < firstLowPrice)
-        {
-            // shift the old
-            secondLowPrice = firstLowPrice;
-            secondLowIndex = firstLowIndex;
-            // record the new
-            firstLowPrice = priceLow;
-            firstLowIndex = i;
-        }
-        else if(priceLow < secondLowPrice)
-        {
-            secondLowPrice = priceLow;
-            secondLowIndex = i;
-        }
-    }
-    
-    // If we couldn't find at least two lows, exit
-    if(firstLowIndex < 0 || secondLowIndex < 0) return false;
-    
-    // The more recent low is the one with the smaller index
-    if(firstLowIndex > secondLowIndex)
-    {
-        // swap
-        int tempIndex = firstLowIndex;
-        double tempPrice = firstLowPrice;
-        
-        firstLowIndex = secondLowIndex;
-        firstLowPrice = secondLowPrice;
-        secondLowIndex = tempIndex;
-        secondLowPrice = tempPrice;
-    }
-    
-    // Fix RSI calculations
-    int rsiHandle = iRSI(symbol, timeframe, rsiPeriod, PRICE_CLOSE);
-    if(rsiHandle == INVALID_HANDLE)
-    {
-        Print("Failed to create RSI handle for symbol ", symbol);
-        return false;
-    }
-    
-    double rsiBuffer[];
-    ArraySetAsSeries(rsiBuffer, true);
-    
-    if(CopyBuffer(rsiHandle, 0, firstLowIndex, 1, rsiBuffer) <= 0)
-    {
-        Print("Failed to copy first RSI value for symbol ", symbol);
-        IndicatorRelease(rsiHandle);
-        return false;
-    }
-    double rsiFirst = rsiBuffer[0];
-    
-    if(CopyBuffer(rsiHandle, 0, secondLowIndex, 1, rsiBuffer) <= 0)
-    {
-        Print("Failed to copy second RSI value for symbol ", symbol);
-        IndicatorRelease(rsiHandle);
-        return false;
-    }
-    double rsiSecond = rsiBuffer[0];
-    
-    IndicatorRelease(rsiHandle);
-    
-    bool bullish = (secondLowPrice < firstLowPrice) && (rsiSecond > rsiFirst);
-    return bullish;
-}
-
-bool DetectBearishDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, int lookback)
-{
-    // Identify two recent highs in price
-    double firstHighPrice = -DBL_MAX;
-    double secondHighPrice = -DBL_MAX;
-    int firstHighIndex = -1;
-    int secondHighIndex = -1;
-    
-    for(int i = 0; i < lookback; i++)
-    {
-        double priceHigh = iHigh(symbol, timeframe, i);
-        if(priceHigh > firstHighPrice)
-        {
-            secondHighPrice = firstHighPrice;
-            secondHighIndex = firstHighIndex;
-            firstHighPrice = priceHigh;
-            firstHighIndex = i;
-        }
-        else if(priceHigh > secondHighPrice)
-        {
-            secondHighPrice = priceHigh;
-            secondHighIndex = i;
-        }
-    }
-    
-    if(firstHighIndex < 0 || secondHighIndex < 0) return false;
-    
-    // Reorder if needed so that firstHighIndex < secondHighIndex
-    if(firstHighIndex > secondHighIndex)
-    {
-        int tempIndex = firstHighIndex;
-        double tempPrice = firstHighPrice;
-        
-        firstHighIndex = secondHighIndex;
-        firstHighPrice = secondHighPrice;
-        secondHighIndex = tempIndex;
-        secondHighPrice = tempPrice;
-    }
-    
-    // Fix RSI calculations
-    int rsiHandle = iRSI(symbol, timeframe, rsiPeriod, PRICE_CLOSE);
-    if(rsiHandle == INVALID_HANDLE)
-    {
-        Print("Failed to create RSI handle for symbol ", symbol);
-        return false;
-    }
-    
-    double rsiBuffer[];
-    ArraySetAsSeries(rsiBuffer, true);
-    
-    if(CopyBuffer(rsiHandle, 0, firstHighIndex, 1, rsiBuffer) <= 0)
-    {
-        Print("Failed to copy first RSI value for symbol ", symbol);
-        IndicatorRelease(rsiHandle);
-        return false;
-    }
-    double rsiFirst = rsiBuffer[0];
-    
-    if(CopyBuffer(rsiHandle, 0, secondHighIndex, 1, rsiBuffer) <= 0)
-    {
-        Print("Failed to copy second RSI value for symbol ", symbol);
-        IndicatorRelease(rsiHandle);
-        return false;
-    }
-    double rsiSecond = rsiBuffer[0];
-    
-    IndicatorRelease(rsiHandle);
-    
-    bool bearish = (secondHighPrice > firstHighPrice) && (rsiSecond < rsiFirst);
-    return bearish;
-}
-
-// Combined function to detect both bullish and bearish
-bool CheckRSIDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, int lookback, bool &bullish, bool &bearish)
-{
-   bullish = DetectBullishDivergence(symbol, timeframe, rsiPeriod, lookback);
-   bearish = DetectBearishDivergence(symbol, timeframe, rsiPeriod, lookback);
-   return (bullish || bearish);
-}
-
-//==================================================================//
-// 4) Combined RSI + MACD Signal                                    //
-//==================================================================//
-
-/*
-  This function checks:
-    - RSI oversold/overbought or bullish/bearish divergence
-    - MACD main vs. signal lines, histogram sign
-    - RSI momentum (comparing current bar to previous bar)
-  and returns:
-    1  => Buy Signal
-    -1 => Sell Signal
-    0  => No Signal
-*/
-
-int CheckRSIMACDSignal(string symbol, 
-                       ENUM_TIMEFRAMES timeframe, 
-                       int rsiPeriod, 
-                       double rsiUpperThreshold, 
-                       double rsiLowerThreshold)
-{
-    // Initialize RSI handle
-    int rsiHandle = iRSI(symbol, timeframe, rsiPeriod, PRICE_CLOSE);
-    if(rsiHandle == INVALID_HANDLE)
-    {
-        Print("Invalid RSI handle. Check data availability for symbol ", symbol);
-        return 0;
-    }
-    
-    double rsiBuffer[];
-    ArraySetAsSeries(rsiBuffer, true);
-    
-    // Get current RSI value
-    if(CopyBuffer(rsiHandle, 0, 0, 1, rsiBuffer) <= 0)
-    {
-        Print("Failed to copy RSI data for symbol ", symbol);
-        IndicatorRelease(rsiHandle);
-        return 0;
-    }
-    double rsiCurrent = rsiBuffer[0];
-    
-    // Get previous RSI value
-    if(CopyBuffer(rsiHandle, 0, 1, 1, rsiBuffer) <= 0)
-    {
-        Print("Failed to copy previous RSI data for symbol ", symbol);
-        IndicatorRelease(rsiHandle);
-        return 0;
-    }
-    double rsiPrevious = rsiBuffer[0];
-    
-    IndicatorRelease(rsiHandle);
-    
-    // Get dynamic RSI thresholds
-    double dynamicUpper, dynamicLower;
-    GetDynamicRSIThresholds(symbol, timeframe, rsiUpperThreshold, rsiLowerThreshold, dynamicUpper, dynamicLower);
-    
-    // Calculate MACD
-    double macdMain, macdSignal, macdHistogram;
-    CalculateMACD(symbol, macdMain, macdSignal, macdHistogram, 0);
-    
-    // Check RSI Divergence
-    bool bullishDiv = false, bearishDiv = false;
-    CheckRSIDivergence(symbol, timeframe, rsiPeriod, 10, bullishDiv, bearishDiv);
-    
-    // Combine conditions for buy/sell signals
-    bool buySignal = 
-        ((rsiCurrent < dynamicLower) || bullishDiv) &&
-        (macdMain > macdSignal) &&
-        (macdHistogram > 0) &&
-        (rsiCurrent > rsiPrevious);
-    
-    bool sellSignal = 
-        ((rsiCurrent > dynamicUpper) || bearishDiv) &&
-        (macdMain < macdSignal) &&
-        (macdHistogram < 0) &&
-        (rsiCurrent < rsiPrevious);
-    
-    if(buySignal)
-    {
-        Print("Buy Signal | RSI=", rsiCurrent, ", Lower=", dynamicLower, 
-              ", Divergence=", bullishDiv);
-        return 1;
-    }
-    if(sellSignal)
-    {
-        Print("Sell Signal | RSI=", rsiCurrent, ", Upper=", dynamicUpper, 
-              ", Divergence=", bearishDiv);
-        return -1;
-    }
-    
-    return 0;
-}
-
-
 //+------------------------------------------------------------------+
-//| Detect Order Flow Imbalances                                     |
+//| Calculate MACD values                                            |
 //+------------------------------------------------------------------+
-int DetectOrderFlowImbalances(double buyVolume, double sellVolume, double imbalanceThreshold)
+bool CalculateMACD(string symbol, double &macdMain, double &macdSignal, double &macdHistogram, int shift=0)
 {
-    // Calculate imbalance ratio for logging
-    double imbalanceRatio = 0;
-    if (sellVolume > 0) imbalanceRatio = buyVolume / sellVolume;
-    
-    if (buyVolume > sellVolume * imbalanceThreshold)
+    // Create MACD handle within function scope
+    int macdHandle = iMACD(symbol, UtilitySettings.Timeframe, 
+                          UtilitySettings.MACD_Fast,
+                          UtilitySettings.MACD_Slow,
+                          UtilitySettings.MACD_Signal,
+                          PRICE_CLOSE);
+                          
+    if(macdHandle == INVALID_HANDLE)
     {
-        Print("Order Flow Imbalance Detected: More Buy Orders (Ratio: ", imbalanceRatio, ")");
-        return 1;  // Buy signal
-    }
-    else if (sellVolume > buyVolume * imbalanceThreshold)
-    {
-        Print("Order Flow Imbalance Detected: More Sell Orders (Ratio: ", imbalanceRatio, ")");
-        return -1; // Sell signal
+        Print("Failed to create MACD handle for ", symbol, ". Error: ", GetLastError());
+        return false;
     }
     
-    return 0;  // No significant imbalance
-}
-
-//+------------------------------------------------------------------+
-//| Monitor Order Flow                                               |
-//+------------------------------------------------------------------+
-int MonitorOrderFlow(string symbol, bool useDOMAnalysis, double liquidityThreshold, double imbalanceThreshold)
-{
-    if (!useDOMAnalysis)
-        return 1; // Return neutral signal if DOM analysis is disabled
-
-    MqlBookInfo book_info[];
-    int book_count = MarketBookGet(symbol, book_info);
+    double mainBuffer[], signalBuffer[], histBuffer[];
+    ArraySetAsSeries(mainBuffer, true);
+    ArraySetAsSeries(signalBuffer, true);
+    ArraySetAsSeries(histBuffer, true);
     
-    if (book_count <= 0)
-    {
-        static datetime lastWarningTime = 0;
-        datetime currentTime = TimeCurrent();
-        if (currentTime - lastWarningTime >= 300) // Log warning every 5 minutes
-        {
-            Print("Warning: No DOM data available. Returning neutral signal.");
-            lastWarningTime = currentTime;
-        }
-        return 1; // Return neutral instead of 0 to not block trades
-    }
-
-    double buyVolume = 0.0;
-    double sellVolume = 0.0;
-    double totalVolume = 0.0;
-    double maxBuyPrice = 0.0;
-    double minSellPrice = DBL_MAX;
-    double largestBuyOrder = 0.0;
-    double largestSellOrder = 0.0;
-    int buyLevels = 0;
-    int sellLevels = 0;
+    // Copy all buffers
+    bool success = true;
     
-    // Calculate average order size for normalization
-    double totalOrderSize = 0.0;
-    int orderCount = 0;
-
-    // First pass - calculate averages
-    for (int i = 0; i < book_count; i++)
+    if(CopyBuffer(macdHandle, 0, shift, 1, mainBuffer) <= 0)
     {
-        totalOrderSize += book_info[i].volume;
-        orderCount++;
+        Print("Failed to copy MACD main buffer for ", symbol, ". Error: ", GetLastError());
+        success = false;
     }
-    double avgOrderSize = (orderCount > 0) ? totalOrderSize / orderCount : 0;
-
-    // Second pass - analyze order flow with normalized volumes
-    for (int i = 0; i < book_count; i++)
+    
+    if(CopyBuffer(macdHandle, 1, shift, 1, signalBuffer) <= 0)
     {
-        double normalizedVolume = (avgOrderSize > 0) ? book_info[i].volume / avgOrderSize : book_info[i].volume;
+        Print("Failed to copy MACD signal buffer for ", symbol, ". Error: ", GetLastError());
+        success = false;
+    }
+    
+    if(CopyBuffer(macdHandle, 2, shift, 1, histBuffer) <= 0)
+    {
+        Print("Failed to copy MACD histogram buffer for ", symbol, ". Error: ", GetLastError());
+        success = false;
+    }
+    
+    // Release the handle
+    IndicatorRelease(macdHandle);
+    
+    if(!success)
+        return false;
         
-        if (book_info[i].type == BOOK_TYPE_BUY)
-        {
-            buyVolume += normalizedVolume;
-            buyLevels++;
-            maxBuyPrice = MathMax(maxBuyPrice, book_info[i].price);
-            largestBuyOrder = MathMax(largestBuyOrder, normalizedVolume);
-        }
-        else if (book_info[i].type == BOOK_TYPE_SELL)
-        {
-            sellVolume += normalizedVolume;
-            sellLevels++;
-            minSellPrice = MathMin(minSellPrice, book_info[i].price);
-            largestSellOrder = MathMax(largestSellOrder, normalizedVolume);
-        }
-    }
-
-    totalVolume = buyVolume + sellVolume;
-    double buyPercentage = (totalVolume > 0) ? (buyVolume / totalVolume) * 100 : 0;
-    double sellPercentage = (totalVolume > 0) ? (sellVolume / totalVolume) * 100 : 0;
-    double imbalanceRatio = (sellVolume > 0) ? buyVolume / sellVolume : 1.0;
-
-    // Reduced imbalance threshold for more frequent signals
-    double adjustedImbalanceThreshold = imbalanceThreshold * 0.8; // 20% more lenient
-
-    // More lenient liquidity check
-    bool sufficientLiquidity = (totalVolume >= liquidityThreshold * 0.7); // 30% more lenient
-
-    // Log order flow analysis
-    static datetime lastDetailedLog = 0;
-    datetime currentTime = TimeCurrent();
+    macdMain = mainBuffer[0];
+    macdSignal = signalBuffer[0];
+    macdHistogram = histBuffer[0];
     
-    if (currentTime - lastDetailedLog >= 300) // Log details every 5 minutes
-    {
-        string flowDirection = "NEUTRAL";
-        if (imbalanceRatio > adjustedImbalanceThreshold) flowDirection = "BUY";
-        else if (imbalanceRatio < 1/adjustedImbalanceThreshold) flowDirection = "SELL";
-
-        Print("=== Order Flow Analysis ===");
-        Print("Buy Volume: ", buyVolume, " (", buyPercentage, "%)");
-        Print("Sell Volume: ", sellVolume, " (", sellPercentage, "%)");
-        Print("Imbalance Ratio: ", imbalanceRatio);
-        Print("Adjusted Threshold: ", adjustedImbalanceThreshold);
-        Print("Flow Direction: ", flowDirection);
-        Print("Liquidity Status: ", (sufficientLiquidity ? "Sufficient" : "Insufficient"));
-        Print("========================");
-        
-        lastDetailedLog = currentTime;
-    }
-
-    // Return signals with more lenient conditions
-    if (sufficientLiquidity)
-    {
-        if (imbalanceRatio > adjustedImbalanceThreshold)
-            return 1;  // Buy signal
-        else if (imbalanceRatio < 1/adjustedImbalanceThreshold)
-            return -1; // Sell signal
-        else
-            return 1;  // Return neutral signal instead of 0 when no clear imbalance
-    }
-    
-    // Even with insufficient liquidity, return neutral instead of blocking
-    return 1;
+    return true;
 }
-
 
 //+------------------------------------------------------------------+
 //| Calculate RSI Trend Strength                                     |
@@ -2640,4 +2147,88 @@ string ErrorDescription(int error_code)
         case 4801: return "Wrong array size";
         default: return "Unknown error";
     }
+}
+
+//+------------------------------------------------------------------+
+//| Monitor Order Flow                                               |
+//+------------------------------------------------------------------+
+int MonitorOrderFlow(string symbol, bool useDOMAnalysis, double liquidityThreshold, double imbalanceThreshold)
+{
+    if (!useDOMAnalysis)
+        return 0;  // Return neutral if DOM analysis is disabled
+        
+    // Get DOM data
+    MqlBookInfo bookInfo[];
+    bool gotBook = MarketBookGet(symbol, bookInfo);
+    
+    if (!gotBook || ArraySize(bookInfo) == 0)
+    {
+        Print("Failed to get market depth data for ", symbol);
+        return 0;
+    }
+    
+    double buyVolume = 0;
+    double sellVolume = 0;
+    
+    // Calculate total buy and sell volumes
+    for (int i = 0; i < ArraySize(bookInfo); i++)
+    {
+        if (bookInfo[i].type == BOOK_TYPE_BUY)
+            buyVolume += bookInfo[i].volume;
+        else if (bookInfo[i].type == BOOK_TYPE_SELL)
+            sellVolume += bookInfo[i].volume;
+    }
+    
+    // Check for significant imbalances
+    if (buyVolume + sellVolume > liquidityThreshold)
+    {
+        double buyRatio = buyVolume / (buyVolume + sellVolume);
+        double sellRatio = sellVolume / (buyVolume + sellVolume);
+        
+        // Strong buy pressure
+        if (buyRatio / sellRatio > imbalanceThreshold)
+        {
+            Print("Strong buy pressure detected: Buy/Sell ratio = ", DoubleToString(buyRatio/sellRatio, 2));
+            return 1;
+        }
+        // Strong sell pressure
+        else if (sellRatio / buyRatio > imbalanceThreshold)
+        {
+            Print("Strong sell pressure detected: Sell/Buy ratio = ", DoubleToString(sellRatio/buyRatio, 2));
+            return -1;
+        }
+    }
+    
+    return 0;  // No significant imbalance detected
+}
+
+//+------------------------------------------------------------------+
+//| Check RSI/MACD Signal                                            |
+//+------------------------------------------------------------------+
+int CheckRSIMACDSignal(string symbol, ENUM_TIMEFRAMES timeframe, int rsiPeriod, 
+                       double rsiUpperThreshold, double rsiLowerThreshold)
+{
+    // Calculate RSI
+    double rsi = CalculateRSI(symbol, rsiPeriod, timeframe);
+    
+    // Calculate MACD
+    double macdMain, macdSignal, macdHistogram;
+    if(!CalculateMACD(symbol, macdMain, macdSignal, macdHistogram))
+        return 0;
+    
+    // Buy Signal
+    if(rsi < rsiLowerThreshold && macdHistogram > 0 && macdMain > macdSignal)
+    {
+        Print("RSI/MACD Buy Signal - RSI: ", rsi, " MACD Histogram: ", macdHistogram);
+        return 1;
+    }
+    
+    // Sell Signal
+    if(rsi > rsiUpperThreshold && macdHistogram < 0 && macdMain < macdSignal)
+    {
+        Print("RSI/MACD Sell Signal - RSI: ", rsi, " MACD Histogram: ", macdHistogram);
+        return -1;
+    }
+    
+    return 0;
 }
