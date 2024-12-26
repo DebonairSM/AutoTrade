@@ -56,9 +56,9 @@ CUtilitySettings UtilitySettings;
 
 // Add at the top with other global variables
 input group "Symbol Settings"  // These should only be in the EA file
-static string tradingSymbols[];           // Array to store trading symbols
-static int symbolCount = 0;               // Number of symbols being traded
-static datetime lastLotSizeCalcTimes[];   // Array to store last calculation time for each symbol
+extern string tradingSymbols[];           // Array to store trading symbols
+extern int symbolCount;                   // Number of symbols being traded (remove initialization)
+extern datetime lastLotSizeCalcTimes[];   // Array to store last calculation time for each symbol
 const int LOT_SIZE_CALC_INTERVAL = 60;    // Minimum seconds between lot size calculations
 
 // Declare US market open and close times
@@ -153,7 +153,7 @@ double CalculateSMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
     int handle;
 
     // Example usage
-    handle = iMA(symbol, timeframe, period, 0, MODE_SMA, PRICE_CLOSE);
+    handle = iMA(symbol, UtilitySettings.Timeframe, period, 0, MODE_SMA, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
         int error = GetLastError();
@@ -186,7 +186,7 @@ double CalculateEMA(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
         emaPeriod = period;  // Use provided period if it doesn't match any standard ones
     
     // Declare the handle variable
-    int handle = iMA(symbol, timeframe, emaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+    int handle = iMA(symbol, UtilitySettings.Timeframe, emaPeriod, 0, MODE_EMA, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
         int error = GetLastError();
@@ -233,7 +233,7 @@ double CalculateRSI(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
     double rsi[];
     ArraySetAsSeries(rsi, true);
     
-    int handle = iRSI(symbol, timeframe, UtilitySettings.RSI_Period, PRICE_CLOSE);
+    int handle = iRSI(symbol, UtilitySettings.Timeframe, UtilitySettings.RSI_Period, PRICE_CLOSE);
     if (handle == INVALID_HANDLE)
     {
         int error = GetLastError();
@@ -296,7 +296,7 @@ double CalculateATR(string symbol, int period, ENUM_TIMEFRAMES timeframe, int sh
         ArraySetAsSeries(atr, true);
         
         // Fix: Add PRICE_CLOSE parameter
-        int handle = iATR(symbol, timeframe, period);
+        int handle = iATR(symbol, UtilitySettings.Timeframe, period);
         if(handle == INVALID_HANDLE)
         {
             int error = GetLastError();
@@ -347,7 +347,7 @@ void CalculateADX(string symbol, int period, ENUM_TIMEFRAMES timeframe, double &
 {
     if (!IsValidTimeframe(timeframe)) return;
     
-    int handle = iADX(symbol, timeframe, period);
+    int handle = iADX(symbol, UtilitySettings.Timeframe, period);
     if (handle == INVALID_HANDLE)
     {
         Print("Failed to create ADX handle for symbol ", symbol);
@@ -697,7 +697,7 @@ double GetBestLimitOrderPrice(string symbol, ENUM_ORDER_TYPE orderType, double &
     double currentAsk = SymbolInfoDouble(symbol, SYMBOL_ASK);
     double currentBid = SymbolInfoDouble(symbol, SYMBOL_BID);
     double spread = currentAsk - currentBid;
-    double atr = CalculateATR(symbol, 14, PERIOD_CURRENT, 0);
+    double atr = CalculateATR(symbol, 14, UtilitySettings.Timeframe, 0);
     
     // Initialize variables for liquidity analysis
     double bestPrice = 0.0;
@@ -995,7 +995,7 @@ void LogMarketAnalysis(const string symbol, const MarketAnalysisData& data,
     
     analysis += "\nMarket Conditions:\n";
     analysis += "Trend Strength: " + (data.adx > params.trend_adx_threshold ? "Strong" : "Weak") + "\n";
-    analysis += "Volatility: " + (data.atr > CalculateATR(14, timeframe, 20) ? "High" : "Normal") + "\n";
+    analysis += "Volatility: " + (data.atr > CalculateATR(14, UtilitySettings.Timeframe, 20) ? "High" : "Normal") + "\n";
     analysis += "=====================\n";
     
     Print(analysis);
@@ -1117,9 +1117,9 @@ void LogTradeRejection(const string reason, string symbol, double currentPrice, 
     // 5. Pattern Recognition
     log_message += "\nPattern Recognition:\n";
     CandleData currentCandle;
-    currentCandle = GetCandleData(symbol, 0, PERIOD_CURRENT);
+    currentCandle = GetCandleData(symbol, 0, UtilitySettings.Timeframe);
     CandleData prevCandle;
-    prevCandle = GetCandleData(symbol, 1, PERIOD_CURRENT);
+    prevCandle = GetCandleData(symbol, 1, UtilitySettings.Timeframe);
     
     // Body/Wick Analysis
     double bodyToWickRatio = currentCandle.body / (currentCandle.upperWick + currentCandle.lowerWick + 0.000001);
@@ -1190,7 +1190,6 @@ bool IsValidTimeframe(ENUM_TIMEFRAMES timeframe)
         case PERIOD_M1:
         case PERIOD_M5:
         case PERIOD_M15:
-        case PERIOD_M20:
         case PERIOD_M30:
         case PERIOD_H1:
         case PERIOD_H4:
@@ -1741,7 +1740,12 @@ bool ManagePositions(string symbol, int checkType = -1)
 //+------------------------------------------------------------------+
 bool CalculateMACD(string symbol, double &macdMain, double &macdSignal, double &macdHistogram, int shift=0)
 {
-    // Create MACD handle within function scope
+    // Initialize output parameters
+    macdMain = 0.0;
+    macdSignal = 0.0;
+    macdHistogram = 0.0;
+
+    // Create MACD handle
     int macdHandle = iMACD(symbol, UtilitySettings.Timeframe, 
                           UtilitySettings.MACD_Fast,
                           UtilitySettings.MACD_Slow,
@@ -1754,38 +1758,79 @@ bool CalculateMACD(string symbol, double &macdMain, double &macdSignal, double &
         return false;
     }
     
+    // Arrays to store the MACD values
     double mainBuffer[], signalBuffer[], histBuffer[];
+    
+    // Set arrays as timeseries
     ArraySetAsSeries(mainBuffer, true);
     ArraySetAsSeries(signalBuffer, true);
     ArraySetAsSeries(histBuffer, true);
     
-    // Copy all buffers
-    bool success = true;
+    // Resize arrays to ensure enough space
+    ArrayResize(mainBuffer, shift + 1);
+    ArrayResize(signalBuffer, shift + 1);
+    ArrayResize(histBuffer, shift + 1);
     
-    if(CopyBuffer(macdHandle, 0, shift, 1, mainBuffer) <= 0)
-    {
-        Print("Failed to copy MACD main buffer for ", symbol, ". Error: ", GetLastError());
-        success = false;
-    }
+    // Add small delay to ensure data is ready
+    Sleep(10);
     
-    if(CopyBuffer(macdHandle, 1, shift, 1, signalBuffer) <= 0)
-    {
-        Print("Failed to copy MACD signal buffer for ", symbol, ". Error: ", GetLastError());
-        success = false;
-    }
+    // Copy buffers with retry mechanism
+    const int MAX_RETRIES = 3;
+    bool success = false;
     
-    if(CopyBuffer(macdHandle, 2, shift, 1, histBuffer) <= 0)
+    for(int attempt = 0; attempt < MAX_RETRIES; attempt++)
     {
-        Print("Failed to copy MACD histogram buffer for ", symbol, ". Error: ", GetLastError());
-        success = false;
+        // Copy all buffers
+        bool copySuccess = true;
+        
+        if(CopyBuffer(macdHandle, 0, shift, 1, mainBuffer) <= 0)
+        {
+            Print("Attempt ", attempt + 1, ": Failed to copy MACD main buffer for ", symbol, 
+                  ". Error: ", GetLastError(), " (", ErrorDescription(GetLastError()), ")");
+            copySuccess = false;
+        }
+        
+        if(CopyBuffer(macdHandle, 1, shift, 1, signalBuffer) <= 0)
+        {
+            Print("Attempt ", attempt + 1, ": Failed to copy MACD signal buffer for ", symbol,
+                  ". Error: ", GetLastError(), " (", ErrorDescription(GetLastError()), ")");
+            copySuccess = false;
+        }
+        
+        if(CopyBuffer(macdHandle, 2, shift, 1, histBuffer) <= 0)
+        {
+            Print("Attempt ", attempt + 1, ": Failed to copy MACD histogram buffer for ", symbol,
+                  ". Error: ", GetLastError(), " (", ErrorDescription(GetLastError()), ")");
+            copySuccess = false;
+        }
+        
+        if(copySuccess)
+        {
+            success = true;
+            break;
+        }
+        
+        // Wait before next attempt
+        Sleep(50 * (attempt + 1));
     }
     
     // Release the handle
     IndicatorRelease(macdHandle);
     
     if(!success)
+    {
+        Print("Failed to copy MACD buffers after ", MAX_RETRIES, " attempts for symbol ", symbol);
         return false;
-        
+    }
+    
+    // Check array sizes
+    if(ArraySize(mainBuffer) == 0 || ArraySize(signalBuffer) == 0 || ArraySize(histBuffer) == 0)
+    {
+        Print("Empty MACD buffers for symbol ", symbol);
+        return false;
+    }
+    
+    // Assign values
     macdMain = mainBuffer[0];
     macdSignal = signalBuffer[0];
     macdHistogram = histBuffer[0];
@@ -1821,7 +1866,7 @@ struct LogTimes {
     datetime analysisLogTime;
     datetime signalLogTime;
 };
-static LogTimes symbolLogTimes[];  // Array to store log times for each symbol
+LogTimes symbolLogTimes[];  // Array to store log times for each symbol
 
 void InitializeLogTimes(LogTimes &symbolLogTimes[], int symbolCount)
 {

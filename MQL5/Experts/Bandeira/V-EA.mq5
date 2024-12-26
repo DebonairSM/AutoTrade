@@ -29,6 +29,17 @@ int tradingEndHour;
 int tradingEndMinute;
 
 //+------------------------------------------------------------------+
+//| Global Variables and Objects                                     |
+//+------------------------------------------------------------------+
+CTrade trade;
+
+// Declare the lastCalculationTime variable
+datetime lastCalculationTime = 0;
+
+// Declare a static variable to track the last log time
+static datetime lastLogTime = 0;
+
+//+------------------------------------------------------------------+
 //| Input parameters                                                 |
 //+------------------------------------------------------------------+
 
@@ -111,26 +122,18 @@ input double ScalpingRiskPercent = 2.0;       // Scalping Risk Percentage
 input double ScalpingStopLoss = 15.0;         // Scalping Stop Loss (pips)
 input double ScalpingTakeProfit = 30.0;       // Scalping Take Profit (pips)
 
-//+------------------------------------------------------------------+
-//| Global Variables and Objects                                     |
-//+------------------------------------------------------------------+
-CTrade trade;
-
-double starting_balance;
-// Add a minimum price change threshold (in points)
-double LastModificationPrice = 0;
-
-// Declare a static variable to track the last log time
-static datetime lastLogTime = 0;
-
-// Declare the lastCalculationTime variable
-datetime lastCalculationTime = 0;
-
 // Declare and initialize these variables at the top of your file or within the relevant function
 double liquidityThreshold = 50.0; // Example value, adjust as needed
 double takeProfitPips = 50.0;     // Example value, adjust as needed
 double stopLossPips = 30.0;       // Example value, adjust as needed
 double riskPercent = 2.0;         // Example value, adjust as needed
+
+//+------------------------------------------------------------------+
+//| Global Variables for Symbol Management                             |
+//+------------------------------------------------------------------+
+string tradingSymbols[];      // Array to store trading symbols
+int symbolCount = 0;          // Counter for number of symbols
+datetime lastLotSizeCalcTimes[];  // Array to store last lot size calculation times
 
 //+------------------------------------------------------------------+
 //| Core EA Functions                                                 |
@@ -145,32 +148,40 @@ int OnInit()
     Print("=== Expert Advisor Initialized ===");
     Print("===================================");
 
-    // Log StrictOrderChecks status with a strict emoji
+    // Initialize arrays before using them
+    if(ArrayResize(tradingSymbols, MaxSymbolsToTrade) == -1 ||
+       ArrayResize(lastLotSizeCalcTimes, MaxSymbolsToTrade) == -1)
+    {
+        Print("Failed to allocate memory for arrays");
+        return INIT_FAILED;
+    }
+
+    // Log StrictOrderChecks status
     Print("Strict Order Checks Mode: ", StrictOrderChecks ? "🔒 Enabled" : "🔓 Disabled");
 
     // Initialize with current chart symbol if not using multiple symbols
     if(!UseMultipleSymbols)
     {
         string symbol = ChartSymbol(0);  // Get symbol from current chart
-        ArrayResize(tradingSymbols, 1);
-        AddTradingSymbol(symbol, 0);
-        SetSymbolCount(1);
-        ValidateInputs(RiskPercent, MaxDrawdownPercent, ATRMultiplier, ADXPeriod, TrendADXThreshold, TrailingStopPips, BreakevenActivationPips, BreakevenOffsetPips, LiquidityThreshold, ImbalanceThreshold, EMA_PERIODS_SHORT, EMA_PERIODS_MEDIUM, EMA_PERIODS_LONG, PATTERN_LOOKBACK, GOLDEN_CROSS_THRESHOLD);
+        tradingSymbols[0] = symbol;
+        symbolCount = 1;
         
-        // Cleanup pending orders for the current symbol
-        //CleanupPendingOrders(symbol);
+        ValidateInputs(RiskPercent, MaxDrawdownPercent, ATRMultiplier, ADXPeriod, 
+                      TrendADXThreshold, TrailingStopPips, BreakevenActivationPips, 
+                      BreakevenOffsetPips, LiquidityThreshold, ImbalanceThreshold, 
+                      EMA_PERIODS_SHORT, EMA_PERIODS_MEDIUM, EMA_PERIODS_LONG, 
+                      PATTERN_LOOKBACK, GOLDEN_CROSS_THRESHOLD);
     }
     else
     {
         // Get all symbols from Market Watch
         int totalSymbols = SymbolsTotal(true);  // true = only symbols in Market Watch
-        int count = 0;
+        symbolCount = 0;
         
         // Ensure we don't exceed array bounds
         int maxSymbols = MathMin(totalSymbols, MaxSymbolsToTrade);
-        ArrayResize(tradingSymbols, maxSymbols);
         
-        for(int i = 0; i < totalSymbols && count < maxSymbols; i++)
+        for(int i = 0; i < totalSymbols && symbolCount < maxSymbols; i++)
         {
             string symbol = SymbolName(i, true);  // Get symbol name from Market Watch
             
@@ -183,42 +194,53 @@ int OnInit()
                     continue;
                 }
             
-                AddTradingSymbol(symbol, count);
-                count++;
-                
+                tradingSymbols[symbolCount] = symbol;
+                symbolCount++;
             }
         }
         
-        SetSymbolCount(count);
-        
-        if(count == 0)
+        if(symbolCount == 0)
         {
             Print("Error: No valid symbols found for trading");
             return INIT_FAILED;
         }
         
-        Print("Total symbols added for trading: ", count);
+        Print("Total symbols added for trading: ", symbolCount);
     }
 
-    // Ensure arrays are properly sized for all symbols
+    // Initialize log times and lot size calculation times
+    datetime currentTime = TimeCurrent();
+    for(int i = 0; i < symbolCount; i++)
+    {
+        lastLotSizeCalcTimes[i] = currentTime;
+    }
+
+    // Initialize log times for all symbols
     ArrayResize(symbolLogTimes, symbolCount);
     InitializeLogTimes(symbolLogTimes, symbolCount);
-    InitializeLotSizeCalcTimes();
 
+    // Enable DOM analysis if required
     if(UseDOMAnalysis)
     {
         for(int i = 0; i < symbolCount; i++)
         {
-            string symbol = tradingSymbols[i];
-            if(!MarketBookAdd(symbol))
+            if(!MarketBookAdd(tradingSymbols[i]))
             {
-                Print("Failed to enable DOM for ", symbol);
+                Print("Failed to enable DOM for ", tradingSymbols[i]);
                 // Consider if you want to continue or return INIT_FAILED
             }
         }
     }
 
-    return true;
+    // Validate the input timeframe
+    if(!IsValidTimeframe(Timeframe))
+    {
+        Print("Error: Invalid Timeframe input. Please check the EA settings.");
+        // Handle the error, e.g. use a default timeframe or stop the EA
+        return(INIT_FAILED);
+    }
+
+    return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
@@ -460,10 +482,10 @@ void ExecuteTradingLogic(string symbol)
         params.rsi_lower_threshold = RSILowerThreshold;
 
         // Only log market analysis if enough time has passed for this symbol
-        if (currentTime - symbolLogTimes[symbolIdx].analysisLogTime >= LOG_INTERVAL_ANALYSIS)
+        if (currentTime - lastLogTime >= LOG_INTERVAL_ANALYSIS)
         {
             LogMarketAnalysis(symbol, analysisData, params, Timeframe, UseDOMAnalysis);
-            symbolLogTimes[symbolIdx].analysisLogTime = currentTime;
+            lastLogTime = currentTime;
         }
 
         // Calculate signals
