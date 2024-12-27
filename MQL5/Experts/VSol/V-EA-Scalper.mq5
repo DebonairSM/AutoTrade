@@ -42,8 +42,8 @@ const double MIN_RVOL      = 1.0; // Lower threshold for US500's high volume
 
 // Add input parameters for time filters
 input bool   UseTimeFilter       = true;  // Enable/disable time-based filtering
-input string TradingHourStart    = "08:00"; // Start of trading hours (EST)
-input string TradingHourEnd      = "12:00"; // End of trading hours (EST)
+input string TradingHourStart    = "16:00"; // Start of trading hours (EST)
+input string TradingHourEnd      = "23:00"; // End of trading hours (EST)
 
 //--------------------------------------------------------------------
 // Utility Logging Functions
