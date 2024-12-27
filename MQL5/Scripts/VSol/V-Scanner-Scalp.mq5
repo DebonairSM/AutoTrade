@@ -6,7 +6,7 @@
 #property copyright "Copyright 2023, Your Name/Company"
 #property link      "https://www.mql5.com"
 #property version   "1.00"
-#property indicator_separate_window
+#property indicator_chart_window
 
 #include <Trade\Trade.mqh>
 
@@ -51,6 +51,7 @@ bool           EngulfingBullish[];
 bool           EngulfingBearish[];
 bool           ConsecutiveBullish[];
 bool           ConsecutiveBearish[];
+int            validSymbols = 0; // Declare validSymbols as a global variable
 
 //+------------------------------------------------------------------+
 //| Custom indicator initialization function                         |
@@ -67,31 +68,43 @@ int OnInit()
    PlotIndexSetInteger(0, PLOT_LINE_COLOR, clrGreen);
    PlotIndexSetInteger(1, PLOT_LINE_COLOR, clrRed);
    
+   // Set the indicator to draw in the main chart window
+   PlotIndexSetInteger(0, PLOT_DRAW_BEGIN, 0);
+   PlotIndexSetInteger(1, PLOT_DRAW_BEGIN, 0);
+
 //--- Get all symbols from Market Watch
    int symbolsTotal = SymbolsTotal(true);
    ArrayResize(SymbolNames, symbolsTotal);
    
+   // Initialize a temporary array to store valid symbols
    for(int i = 0; i < symbolsTotal; i++)
    {
-      SymbolNames[i] = SymbolName(i, true);
+      string symbol = SymbolName(i, true);
+      if(IsForexSymbol(symbol) || IsIndexSymbol(symbol))
+      {
+         SymbolNames[validSymbols++] = symbol;
+      }
    }
    
-//--- Resize buffers and arrays
-   ArrayResize(BuyBuffer, symbolsTotal);
-   ArrayResize(SellBuffer, symbolsTotal);
-   ArrayResize(RSIHandles, symbolsTotal);
-   ArrayResize(MACDHandles, symbolsTotal);
-   ArrayResize(BandsHandles, symbolsTotal);
-   ArrayResize(RSIValues, symbolsTotal);
-   ArrayResize(MACDMainValues, symbolsTotal);
-   ArrayResize(MACDSignalValues, symbolsTotal);
-   ArrayResize(RVOLValues, symbolsTotal);
-   ArrayResize(BollingerSqueezeStatus, symbolsTotal);
-   ArrayResize(MiddleBandTrendConfirmation, symbolsTotal);
-   ArrayResize(EngulfingBullish, symbolsTotal);
-   ArrayResize(EngulfingBearish, symbolsTotal);
-   ArrayResize(ConsecutiveBullish, symbolsTotal);
-   ArrayResize(ConsecutiveBearish, symbolsTotal);
+   // Resize the SymbolNames array to the number of valid symbols
+   ArrayResize(SymbolNames, validSymbols);
+   
+//--- Resize buffers and arrays to validSymbols
+   ArrayResize(BuyBuffer, validSymbols);
+   ArrayResize(SellBuffer, validSymbols);
+   ArrayResize(RSIHandles, validSymbols);
+   ArrayResize(MACDHandles, validSymbols);
+   ArrayResize(BandsHandles, validSymbols);
+   ArrayResize(RSIValues, validSymbols);
+   ArrayResize(MACDMainValues, validSymbols);
+   ArrayResize(MACDSignalValues, validSymbols);
+   ArrayResize(RVOLValues, validSymbols);
+   ArrayResize(BollingerSqueezeStatus, validSymbols);
+   ArrayResize(MiddleBandTrendConfirmation, validSymbols);
+   ArrayResize(EngulfingBullish, validSymbols);
+   ArrayResize(EngulfingBearish, validSymbols);
+   ArrayResize(ConsecutiveBullish, validSymbols);
+   ArrayResize(ConsecutiveBearish, validSymbols);
 
 //--- Initialize buffers and arrays   
    ArrayInitialize(BuyBuffer, EMPTY_VALUE);
@@ -111,7 +124,7 @@ int OnInit()
    ArrayInitialize(ConsecutiveBearish, false);
    
 //--- Create indicator handles
-   for(int i = 0; i < symbolsTotal; i++)
+   for(int i = 0; i < validSymbols; i++)
    {
       string symbol = SymbolNames[i];
       RSIHandles[i] = iRSI(symbol, InpTimeFrame, InpRSIPeriod, PRICE_CLOSE);
@@ -125,10 +138,7 @@ int OnInit()
       }
    }
    
-   Print("Indicator handles created successfully for all symbols.");
-   
-//--- Log number of symbols   
-   Print("Scanning ", symbolsTotal, " symbols.");
+   Print("Indicator handles created successfully for ", validSymbols, " symbols.");
    
    return(INIT_SUCCEEDED);
   }
@@ -140,7 +150,7 @@ int OnInit()
 void OnDeinit(const int reason)
   {
     // Release indicator handles
-    for(int i = 0; i < ArraySize(SymbolNames); i++)
+    for(int i = 0; i < validSymbols; i++)
     {
         if(RSIHandles[i] != INVALID_HANDLE)
         {
@@ -192,7 +202,7 @@ int OnCalculate(const int rates_total,
    }
    
 //--- Iterate through symbols
-   for(int i = 0; i < ArraySize(SymbolNames); i++)
+   for(int i = 0; i < validSymbols; i++)
    {
       string symbol = SymbolNames[i];
       
@@ -296,7 +306,7 @@ int OnCalculate(const int rates_total,
    }
 
 //--- Set labels and plot signals
-   for(int i = 0; i < ArraySize(SymbolNames); i++)
+   for(int i = 0; i < validSymbols; i++)
    {
       string symbol = SymbolNames[i];
       
@@ -496,7 +506,7 @@ void DisplayScannerResults()
          signal = "None";
       
       output += StringFormat("%-10s %-10.2f %-10.2f %-10.2f %-10s %-10s %-10s\n",
-                             symbol, rsi, macd, rvol, bolSqz, midTrend, signal);
+                             symbol, (double)rsi, (double)macd, (double)rvol, bolSqz, midTrend, signal);
    }
    
    Comment(output);
@@ -576,4 +586,34 @@ bool IsConsecutiveBearish(string symbol, ENUM_TIMEFRAMES timeframe)
    CopyLow(symbol, timeframe, 0, 3, low);
    
    return (close[0] < open[0] && close[1] < open[1] && close[0] < close[1]);
+}
+
+//+------------------------------------------------------------------+
+//| Check if the symbol is a Forex pair                              |
+//+------------------------------------------------------------------+
+bool IsForexSymbol(string symbol)
+{
+    // List of common Forex symbols (extend this list as needed)
+    string forexSymbols[] = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCHF", "USDCAD", "NZDUSD"};
+    for(int i = 0; i < ArraySize(forexSymbols); i++)
+    {
+        if(symbol == forexSymbols[i])
+            return true;
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check if the symbol is an Index                                  |
+//+------------------------------------------------------------------+
+bool IsIndexSymbol(string symbol)
+{
+    // List of common Index symbols (extend this list as needed)
+    string indexSymbols[] = {"US500", "DXY_H5", "DE40", "SE30", "VIX_25", "JP225", "AUS200", "F40", "UK100", "US30", "USTEC"};
+    for(int i = 0; i < ArraySize(indexSymbols); i++)
+    {
+        if(StringFind(symbol, indexSymbols[i]) != -1)
+            return true;
+    }
+    return false;
 }

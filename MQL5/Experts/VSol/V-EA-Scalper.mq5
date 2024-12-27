@@ -17,6 +17,7 @@ input double InpRiskPercentage   = 1.0;   // % of account balance to risk per tr
 input double InpRiskRewardRatio  = 2.0;   // Risk-to-reward ratio
 input ENUM_TIMEFRAMES InpTimeFrame = PERIOD_M5; // Timeframe for signals
 input bool   InpDebugMode        = false; // Enable debug mode
+input bool   InpUseBollingerSqueeze = false; // Enable Bollinger Squeeze for entry (true/false)
 
 // RSI thresholds (for demonstration; you can refine these as needed)
 input int    InpRSIPeriod        = 9;     // Shorter period for faster reaction
@@ -109,7 +110,7 @@ double CalculateLotSize(double riskPercentage, double stopLossPips, string symbo
 //| Bollinger Bands Calculation                                      |
 //+------------------------------------------------------------------+
 void CalculateBollingerBands(string symbol, double &upper, double &middle, double &lower) {
-   int bb_handle = iBands(symbol, PERIOD_CURRENT, 18, 0, 1.9, PRICE_CLOSE);
+   int bb_handle = iBands(symbol, InpTimeFrame, 18, 0, 1.9, PRICE_CLOSE);
    if(bb_handle == INVALID_HANDLE) {
       LogMessage("Error creating Bollinger Bands indicator", symbol);
       return;
@@ -347,41 +348,24 @@ bool CheckBuyCondition(double rsi, double macdMain, double macdSignal, string sy
    double bbUpper, bbMiddle, bbLower;
    CalculateBollingerBands(symbol, bbUpper, bbMiddle, bbLower);
    
-   // Check for Bollinger Squeeze
-   bool bollingerSqueeze = IsBollingerSqueeze(symbol);
+   // Check for Bollinger Squeeze if enabled
+   bool bollingerSqueeze = false;
+   if (InpUseBollingerSqueeze) {
+      bollingerSqueeze = IsBollingerSqueeze(symbol);
+   }
    
    // Middle Band Trend Confirmation
-   double emaShort = iMA(symbol, PERIOD_CURRENT, 5, 0, MODE_EMA, PRICE_CLOSE);
+   double emaShort = iMA(symbol, InpTimeFrame, 5, 0, MODE_EMA, PRICE_CLOSE);
    bool middleBandTrendConfirmation = (emaShort > bbMiddle);
    
-   // Add engulfing pattern check to buy/sell conditions
-   bool engulfingBullish = (tick.last > iHigh(symbol, PERIOD_M5, 1)) && 
-                           (iClose(symbol, PERIOD_M5, 1) < iOpen(symbol, PERIOD_M5, 1));
-   bool engulfingBearish = (tick.last < iLow(symbol, PERIOD_M5, 1)) &&
-                           (iClose(symbol, PERIOD_M5, 1) > iOpen(symbol, PERIOD_M5, 1));
-
-   // Add consecutive candles check
-   int consecutiveCandles = 0;
-   for(int i = 1; i <= 3; i++) {
-      if(iClose(symbol, PERIOD_M5, i) > iOpen(symbol, PERIOD_M5, i)) 
-         consecutiveCandles++;
-      else 
-         break;
-   }
-   bool consecutiveBullish = (consecutiveCandles == 3);
-   bool consecutiveBearish = (consecutiveCandles == 0);
-
    bool momentumConfirmation = (rsi > InpRSIOversold && rsi < InpRSIOverbought && macdMain > macdSignal);
    bool volumeConfirmation   = (rvol >= MIN_RVOL);
    bool priceAction          = (SymbolInfoDouble(symbol, SYMBOL_ASK) < bbUpper * 1.005);
    
-   // Modify buy/sell conditions
-   bool buySignal  = momentumConfirmation && volumeConfirmation && priceAction && 
-                     bollingerSqueeze && middleBandTrendConfirmation && 
-                     engulfingBullish && consecutiveBullish;
-   bool sellSignal = momentumConfirmation && volumeConfirmation && priceAction && 
-                     bollingerSqueeze && middleBandTrendConfirmation && 
-                     engulfingBearish && consecutiveBearish;
+   // Modify buy condition
+   bool buySignal = (bollingerSqueeze && middleBandTrendConfirmation) ||
+                    (momentumConfirmation && volumeConfirmation && priceAction && 
+                     middleBandTrendConfirmation);
 
    if (buySignal) {
       LogMessage("Buy condition met with all confirmations.", symbol);
@@ -438,41 +422,24 @@ bool CheckSellCondition(double rsi, double macdMain, double macdSignal, string s
    double bbUpper, bbMiddle, bbLower;
    CalculateBollingerBands(symbol, bbUpper, bbMiddle, bbLower);
    
-   // Check for Bollinger Squeeze
-   bool bollingerSqueeze = IsBollingerSqueeze(symbol);
+   // Check for Bollinger Squeeze if enabled
+   bool bollingerSqueeze = false;
+   if (InpUseBollingerSqueeze) {
+      bollingerSqueeze = IsBollingerSqueeze(symbol);
+   }
    
    // Middle Band Trend Confirmation
-   double emaShort = iMA(symbol, PERIOD_CURRENT, 5, 0, MODE_EMA, PRICE_CLOSE);
+   double emaShort = iMA(symbol, InpTimeFrame, 5, 0, MODE_EMA, PRICE_CLOSE);
    bool middleBandTrendConfirmation = (emaShort < bbMiddle);
    
-   // Add engulfing pattern check to buy/sell conditions
-   bool engulfingBullish = (tick.last > iHigh(symbol, PERIOD_M5, 1)) && 
-                           (iClose(symbol, PERIOD_M5, 1) < iOpen(symbol, PERIOD_M5, 1));
-   bool engulfingBearish = (tick.last < iLow(symbol, PERIOD_M5, 1)) &&
-                           (iClose(symbol, PERIOD_M5, 1) > iOpen(symbol, PERIOD_M5, 1));
-
-   // Add consecutive candles check
-   int consecutiveCandles = 0;
-   for(int i = 1; i <= 3; i++) {
-      if(iClose(symbol, PERIOD_M5, i) < iOpen(symbol, PERIOD_M5, i)) 
-         consecutiveCandles++;
-      else 
-         break;
-   }
-   bool consecutiveBullish = (consecutiveCandles == 0);
-   bool consecutiveBearish = (consecutiveCandles == 3);
-
    bool momentumConfirmation = (rsi > InpRSIOversold && rsi < InpRSIOverbought && macdMain < macdSignal);
    bool volumeConfirmation   = (rvol >= MIN_RVOL);
    bool priceAction          = (SymbolInfoDouble(symbol, SYMBOL_BID) > bbLower * 0.995);
    
-   // Modify buy/sell conditions
-   bool buySignal  = momentumConfirmation && volumeConfirmation && priceAction && 
-                     bollingerSqueeze && middleBandTrendConfirmation && 
-                     engulfingBullish && consecutiveBullish;
-   bool sellSignal = momentumConfirmation && volumeConfirmation && priceAction && 
-                     bollingerSqueeze && middleBandTrendConfirmation && 
-                     engulfingBearish && consecutiveBearish;
+   // Modify sell condition  
+   bool sellSignal = (bollingerSqueeze && middleBandTrendConfirmation) ||
+                     (momentumConfirmation && volumeConfirmation && priceAction && 
+                      middleBandTrendConfirmation);
 
    if (sellSignal) {
       LogMessage("Sell condition met with all confirmations.", symbol);
