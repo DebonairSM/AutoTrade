@@ -119,6 +119,8 @@ int OnInit()
       BandsHandles[i] = iBands(symbol, InpTimeFrame, 20, 2, 0, PRICE_CLOSE);
    }
    
+   Print("Indicator handles created successfully for all symbols.");
+   
 //--- Log number of symbols   
    Print("Scanning ", symbolsTotal, " symbols.");
    
@@ -171,7 +173,7 @@ int OnCalculate(const int rates_total,
       double rsi[];
       if(CopyBuffer(RSIHandles[i], 0, 0, 3, rsi) < 0)
       {
-         LogMessage("Failed to calculate RSI for symbol: " + symbol);
+         LogError("Failed to copy RSI data for symbol: " + symbol);
          continue;
       }
       RSIValues[i] = rsi[0];
@@ -288,6 +290,14 @@ int OnCalculate(const int rates_total,
    }
 
    DisplayScannerResults();
+   
+   //--- Release indicator handles
+   for(int i = 0; i < ArraySize(SymbolNames); i++)
+   {
+      IndicatorRelease(RSIHandles[i]);
+      IndicatorRelease(MACDHandles[i]);  
+      IndicatorRelease(BandsHandles[i]);
+   }
    
    return(rates_total);
 }
