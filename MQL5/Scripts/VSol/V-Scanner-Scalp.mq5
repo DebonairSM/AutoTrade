@@ -117,6 +117,12 @@ int OnInit()
       RSIHandles[i] = iRSI(symbol, InpTimeFrame, InpRSIPeriod, PRICE_CLOSE);
       MACDHandles[i] = iMACD(symbol, InpTimeFrame, SCALP_MACD_FAST, SCALP_MACD_SLOW, SCALP_MACD_SIGNAL, PRICE_CLOSE);
       BandsHandles[i] = iBands(symbol, InpTimeFrame, 20, 2, 0, PRICE_CLOSE);
+
+      // Check for errors
+      if(RSIHandles[i] == INVALID_HANDLE || MACDHandles[i] == INVALID_HANDLE || BandsHandles[i] == INVALID_HANDLE)
+      {
+         Print("Error creating indicator handle for ", symbol, ". Error code: ", GetLastError());
+      }
    }
    
    Print("Indicator handles created successfully for all symbols.");
@@ -126,6 +132,35 @@ int OnInit()
    
    return(INIT_SUCCEEDED);
   }
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Custom indicator deinitialization function                       |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+  {
+    // Release indicator handles
+    for(int i = 0; i < ArraySize(SymbolNames); i++)
+    {
+        if(RSIHandles[i] != INVALID_HANDLE)
+        {
+            IndicatorRelease(RSIHandles[i]);
+            RSIHandles[i] = INVALID_HANDLE;
+        }
+        if(MACDHandles[i] != INVALID_HANDLE)
+        {
+            IndicatorRelease(MACDHandles[i]);
+            MACDHandles[i] = INVALID_HANDLE;
+        }
+        if(BandsHandles[i] != INVALID_HANDLE)
+        {
+            IndicatorRelease(BandsHandles[i]);
+            BandsHandles[i] = INVALID_HANDLE;
+        }
+    }
+  }
+//+------------------------------------------------------------------+
+
 //+------------------------------------------------------------------+
 //| Custom indicator iteration function                              |
 //+------------------------------------------------------------------+
@@ -170,20 +205,20 @@ int OnCalculate(const int rates_total,
       }
       
       //--- Calculate RSI
-      double rsi[];
+      double rsi[3];
       if(CopyBuffer(RSIHandles[i], 0, 0, 3, rsi) < 0)
       {
-         LogError("Failed to copy RSI data for symbol: " + symbol);
-         continue;
+         LogError("Failed to copy RSI data for symbol: " + symbol + " Error: " + IntegerToString(GetLastError()));
+         continue; // Skip to the next symbol if there is an error
       }
       RSIValues[i] = rsi[0];
       
       //--- Calculate MACD
-      double macdMain[], macdSignal[];
+      double macdMain[3], macdSignal[3];
       if(CopyBuffer(MACDHandles[i], 0, 0, 3, macdMain) < 0 ||
          CopyBuffer(MACDHandles[i], 1, 0, 3, macdSignal) < 0)
       {
-         LogMessage("Failed to calculate MACD for symbol: " + symbol);
+         LogError("Failed to copy MACD data for symbol: " + symbol + " Error: " + IntegerToString(GetLastError()));
          continue;
       }
       MACDMainValues[i] = macdMain[0];
@@ -208,7 +243,7 @@ int OnCalculate(const int rates_total,
          CopyBuffer(BandsHandles[i], 1, 0, 1, middle) < 0 ||
          CopyBuffer(BandsHandles[i], 2, 0, 1, lower) < 0)
       {
-         LogMessage("Failed to calculate Bollinger Bands for symbol: " + symbol);
+         LogError("Failed to copy Bollinger Bands data for symbol: " + symbol + " Error: " + IntegerToString(GetLastError()));
          continue;
       }
       BollingerSqueezeStatus[i] = IsBollingerSqueeze(i, upper[0], middle[0], lower[0]);
@@ -219,12 +254,13 @@ int OnCalculate(const int rates_total,
          CopyBuffer(BandsHandles[i], 1, 1, 1, middlePrev) < 0 ||
          CopyBuffer(BandsHandles[i], 2, 1, 1, lowerPrev) < 0)
       {
+         LogError("Failed to copy previous Bollinger Bands data for symbol: " + symbol + " Error: " + IntegerToString(GetLastError()));
          MiddleBandTrendConfirmation[i] = false;
       }
       else
       {
-         MiddleBandTrendConfirmation[i] = (close[0] > middle[0] && close[1] <= middlePrev[0]) || 
-                                             (close[0] < middle[0] && close[1] >= middlePrev[0]);
+         MiddleBandTrendConfirmation[i] = (rates[0].close > middle[0] && rates[1].close <= middlePrev[0]) || 
+                                             (rates[0].close < middle[0] && rates[1].close >= middlePrev[0]);
       }
       
       //--- Detect Engulfing and Consecutive patterns
@@ -291,6 +327,8 @@ int OnCalculate(const int rates_total,
 
    DisplayScannerResults();
    
+   //--- Remove the IndicatorRelease calls from OnCalculate()
+   /*
    //--- Release indicator handles
    for(int i = 0; i < ArraySize(SymbolNames); i++)
    {
@@ -298,7 +336,8 @@ int OnCalculate(const int rates_total,
       IndicatorRelease(MACDHandles[i]);  
       IndicatorRelease(BandsHandles[i]);
    }
-   
+   */
+
    return(rates_total);
 }
 //+------------------------------------------------------------------+
