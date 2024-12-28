@@ -8,19 +8,33 @@
 #property strict
 
 #include <Trade\Trade.mqh>
-
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
 //+------------------------------------------------------------------+
-input double InpRiskPercentage   = 2.0;   // % of account balance to risk per trade
-input double InpRiskRewardRatio  = 1.5;   // Risk-to-reward ratio
-input ENUM_TIMEFRAMES InpTimeFrame = PERIOD_M5; // Timeframe for signals
-input bool   InpDebugMode        = false; // Enable debug mode
+input double InpRiskPercentage   = 1.0;    // % of account balance to risk per trade (increased from 0.5)
+input double InpRiskRewardRatio  = 2.0;    // Risk-to-reward ratio (reduced from 3.0)
+input ENUM_TIMEFRAMES InpTimeFrame = PERIOD_M15; // Timeframe for signals (changed from PERIOD_H1)
+input bool   InpDebugMode        = false;  // Enable debug mode
 
 // RSI thresholds
-input int    InpRSIPeriod        = 14;    // RSI period 
-input double InpRSIOverbought    = 70.0;  // Overbought level 
-input double InpRSIOversold      = 30.0;  // Oversold level
+input int    InpRSIPeriod        = 14;     // RSI period (unchanged)
+input double InpRSIOverbought    = 70.0;   // Overbought level (increased from 60.0)
+input double InpRSIOversold      = 30.0;   // Oversold level (decreased from 40.0)
+
+// MACD parameters
+input int    InpMACDFast         = 8;      // MACD Fast EMA period (unchanged)
+input int    InpMACDSlow         = 21;     // MACD Slow EMA period (unchanged)
+input int    InpMACDSignal       = 3;      // MACD Signal period (reduced from 5)
+
+// Logging parameters
+input bool   InpLogRSI           = true;   // Log RSI values (unchanged)
+input bool   InpLogMACD          = true;   // Log MACD values (unchanged)
+input bool   InpLogTrend         = true;   // Log trend confirmation values (unchanged)
+input bool   InpLogEntryExit     = true;   // Log entry and exit conditions (unchanged)
+
+// Trend confirmation parameters
+input int    InpTrendPeriod      = 34;     // EMA period for trend confirmation (unchanged)
+input double InpTrendThreshold   = 0.25;   // Threshold for trend strength (reduced from 0.5)
 
 // Global trade object
 CTrade tradeScalp;
@@ -28,21 +42,22 @@ CTrade tradeScalp;
 //--------------------------------------------------------------------
 // These constants come from your original include code
 //--------------------------------------------------------------------
-const int SCALP_MACD_FAST  = 8;     // Faster MACD line for quicker momentum shifts
-const int SCALP_MACD_SLOW  = 21;    // Slower MACD line to filter out noise
-const int SCALP_MACD_SIGNAL= 5;     // Shorter signal period for responsiveness
+const int SCALP_MACD_FAST    = 8;      // Faster MACD line for quicker momentum shifts
+const int SCALP_MACD_SLOW    = 21;     // Slower MACD line to filter out noise
+const int SCALP_MACD_SIGNAL  = 5;      // Shorter signal period for responsiveness
 
-const int SCALP_EMA_SHORT  = 5;     
-const int SCALP_EMA_MEDIUM = 13;
-const int SCALP_EMA_LONG   = 34;
+const int SCALP_EMA_SHORT    = 5;     
+const int SCALP_EMA_MEDIUM   = 13;
+const int SCALP_EMA_LONG     = 34;     // Matches InpTrendPeriod for consistency
 
-const int VOLUME_LOOKBACK  = 15;  // Longer lookback for smoothing
-const double MIN_RVOL      = 1.0; // Lower threshold for US500's high volume
+const int VOLUME_LOOKBACK    = 15;     // Longer lookback for smoothing
+const double MIN_RVOL        = 1.0;    // Lower threshold for US500's high volume
 
 // Add input parameters for time filters
-input bool   UseTimeFilter       = false; // Disable time-based filtering for testing
-input string TradingHourStart    = "00:00"; // Start of trading hours (EST)
-input string TradingHourEnd      = "23:59"; // End of trading hours (EST)
+input bool   UseTimeFilter        = true;       // Enabled time-based filtering (changed from false)
+input string TradingHourStart     = "07:00";    // Start of trading hours (adjusted to 07:00 EST)
+input string TradingHourEnd       = "15:00";    // End of trading hours (adjusted to 15:00 EST)
+
 
 //--------------------------------------------------------------------
 // Utility Logging Functions
@@ -333,64 +348,27 @@ bool CheckBuyCondition(double rsi, double macdMain, double macdSignal, string sy
       return false;
    }
    
-   // Calculate RVOL
-   double currentVolume = iVolume(symbol, PERIOD_CURRENT, 0);
-   double avgVolume     = 0;
-   for(int i = 1; i <= VOLUME_LOOKBACK; i++) {
-      avgVolume += iVolume(symbol, PERIOD_CURRENT, i);
-   }
-   avgVolume /= VOLUME_LOOKBACK;
-   double rvol = currentVolume / avgVolume;
-   
    // Get Bollinger Bands
    double bbUpper, bbMiddle, bbLower;
    CalculateBollingerBands(symbol, bbUpper, bbMiddle, bbLower);
-   
-   // Check for Bollinger Squeeze if enabled
-   bool bollingerSqueeze = false;
-   if (InpUseBollingerSqueeze) {
-      bollingerSqueeze = IsBollingerSqueeze(symbol);
-   }
    
    // Middle Band Trend Confirmation
    double emaShort = iMA(symbol, InpTimeFrame, 5, 0, MODE_EMA, PRICE_CLOSE);
    bool middleBandTrendConfirmation = (emaShort > bbMiddle);
    
-   bool momentumConfirmation = (rsi > InpRSIOversold && rsi < InpRSIOverbought && macdMain > macdSignal);
-   bool volumeConfirmation   = (rvol >= MIN_RVOL);
-   bool priceAction          = (SymbolInfoDouble(symbol, SYMBOL_ASK) < bbUpper * 1.005);
+   bool bollingerSqueeze = IsBollingerSqueeze(symbol);
    
-   // Modify buy condition
-   bool buySignal = (bollingerSqueeze && middleBandTrendConfirmation) ||
-                    (momentumConfirmation && volumeConfirmation && priceAction && 
-                     middleBandTrendConfirmation);
+   bool buySignal = bollingerSqueeze && middleBandTrendConfirmation;
 
    if (buySignal) {
-      LogMessage("Buy condition met with all confirmations.", symbol);
+      LogMessage("Buy condition met with Bollinger Squeeze and Middle Band Trend confirmation.", symbol);
       return true;
    }
    
-   
    if(InpDebugMode) {
-   LogMessage("Checking Enhanced Buy Condition:" +
-              "\n  RSI=" + DoubleToString(rsi, 2) +
-              "\n  MACD Main=" + DoubleToString(macdMain, 2) +
-              "\n  MACD Signal=" + DoubleToString(macdSignal, 2) +
-              "\n  RVOL=" + DoubleToString(rvol, 2) +
-              "\n  Bollinger Squeeze=" + (bollingerSqueeze ? "Yes" : "No") +
-              "\n  Middle Band Trend Confirmation=" + (middleBandTrendConfirmation ? "Yes" : "No"),
-              symbol);
-   LogMessage("Buy condition not met. Failed confirmations:" +
-              (!momentumConfirmation ? " Momentum" : "") +
-              (!volumeConfirmation   ? " Volume" : "") +
-              (!priceAction         ? " Price" : "") +
-              (!bollingerSqueeze    ? " Bollinger Squeeze" : "") +
-              (!middleBandTrendConfirmation ? " Middle Band Trend" : ""),
-              symbol);
-      LogMessage("Buy Condition Debug:" +
-                 "\n  BB Upper=" + DoubleToString(bbUpper, 5) +
-                 "\n  BB Middle=" + DoubleToString(bbMiddle, 5) +
-                 "\n  BB Lower=" + DoubleToString(bbLower, 5),
+      LogMessage("Buy condition not met. Failed confirmations:" +
+                 (!bollingerSqueeze ? " Bollinger Squeeze" : "") +
+                 (!middleBandTrendConfirmation ? " Middle Band Trend" : ""),
                  symbol);
    }
    
@@ -407,65 +385,28 @@ bool CheckSellCondition(double rsi, double macdMain, double macdSignal, string s
       return false;
    }
    
-   // Calculate RVOL
-   double currentVolume = iVolume(symbol, PERIOD_CURRENT, 0);
-   double avgVolume     = 0;
-   for(int i = 1; i <= VOLUME_LOOKBACK; i++) {
-      avgVolume += iVolume(symbol, PERIOD_CURRENT, i);
-   }
-   avgVolume /= VOLUME_LOOKBACK;
-   double rvol = currentVolume / avgVolume;
-   
    // Get Bollinger Bands
    double bbUpper, bbMiddle, bbLower;
    CalculateBollingerBands(symbol, bbUpper, bbMiddle, bbLower);
-   
-   // Check for Bollinger Squeeze if enabled
-   bool bollingerSqueeze = false;
-   if (InpUseBollingerSqueeze) {
-      bollingerSqueeze = IsBollingerSqueeze(symbol);
-   }
    
    // Middle Band Trend Confirmation
    double emaShort = iMA(symbol, InpTimeFrame, 5, 0, MODE_EMA, PRICE_CLOSE);
    bool middleBandTrendConfirmation = (emaShort < bbMiddle);
    
-   bool momentumConfirmation = (rsi > InpRSIOversold && rsi < InpRSIOverbought && macdMain < macdSignal);
-   bool volumeConfirmation   = (rvol >= MIN_RVOL);
-   bool priceAction          = (SymbolInfoDouble(symbol, SYMBOL_BID) > bbLower * 0.995);
+   bool bollingerSqueeze = IsBollingerSqueeze(symbol);
    
-   // Modify sell condition  
-   bool sellSignal = (bollingerSqueeze && middleBandTrendConfirmation) ||
-                     (momentumConfirmation && volumeConfirmation && priceAction && 
-                      middleBandTrendConfirmation);
+   bool sellSignal = bollingerSqueeze && middleBandTrendConfirmation;
 
    if (sellSignal) {
-      LogMessage("Sell condition met with all confirmations.", symbol);
+      LogMessage("Sell condition met with Bollinger Squeeze and Middle Band Trend confirmation.", symbol);
       return true;
    }
    
-   
    if(InpDebugMode) {
-   LogMessage("Checking Enhanced Sell Condition:" +
-              "\n  RSI=" + DoubleToString(rsi, 2) +
-              "\n  MACD Main=" + DoubleToString(macdMain, 2) +
-              "\n  MACD Signal=" + DoubleToString(macdSignal, 2) +
-              "\n  RVOL=" + DoubleToString(rvol, 2) +
-              "\n  Bollinger Squeeze=" + (bollingerSqueeze ? "Yes" : "No") +
-              "\n  Middle Band Trend Confirmation=" + (middleBandTrendConfirmation ? "Yes" : "No"),
-              symbol);
-      LogMessage("Sell Condition Debug:" +
-                 "\n  BB Upper=" + DoubleToString(bbUpper, 5) +
-                 "\n  BB Middle=" + DoubleToString(bbMiddle, 5) +
-                 "\n  BB Lower=" + DoubleToString(bbLower, 5),
+      LogMessage("Sell condition not met. Failed confirmations:" +
+                 (!bollingerSqueeze ? " Bollinger Squeeze" : "") + 
+                 (!middleBandTrendConfirmation ? " Middle Band Trend" : ""),
                  symbol);
-   LogMessage("Sell condition not met. Failed confirmations:" +
-              (!momentumConfirmation ? " Momentum" : "") +
-              (!volumeConfirmation   ? " Volume" : "") +
-              (!priceAction         ? " Price" : "") +
-              (!bollingerSqueeze    ? " Bollinger Squeeze" : "") +
-              (!middleBandTrendConfirmation ? " Middle Band Trend" : ""),
-              symbol);
    }
    
    return false;
@@ -476,7 +417,8 @@ bool CheckSellCondition(double rsi, double macdMain, double macdSignal, string s
 //+------------------------------------------------------------------+
 bool CheckExitCondition(double rsi, string symbol) {
    double macdMain, macdSignal, macdHistogram = 0.0;
-   int macd_handle = iMACD(symbol, PERIOD_CURRENT, SCALP_MACD_FAST, SCALP_MACD_SLOW, 
+   int macd_handle = iMACD(symbol, PERIOD_CURRENT, 
+                           SCALP_MACD_FAST, SCALP_MACD_SLOW, 
                            SCALP_MACD_SIGNAL, PRICE_CLOSE);
    
    if(macd_handle != INVALID_HANDLE) {
@@ -542,7 +484,47 @@ void OnTick()
    string symbol = _Symbol;
    
    // Retrieve RSI
-   double rsiValue = iRSI(symbol, InpTimeFrame, InpRSIPeriod, PRICE_CLOSE);
+   int rsi_handle = iRSI(symbol, InpTimeFrame, InpRSIPeriod, PRICE_CLOSE);
+
+   if (rsi_handle == INVALID_HANDLE) {
+      LogMessage("Error creating RSI indicator handle.", symbol);
+      return;
+   }
+
+   double rsiValue[];
+   ArraySetAsSeries(rsiValue, true);
+
+   if (CopyBuffer(rsi_handle, 0, 0, 1, rsiValue) != 1) {
+      LogMessage("Error copying RSI value from indicator buffer.", symbol);
+      IndicatorRelease(rsi_handle);
+      return;
+   }
+
+   IndicatorRelease(rsi_handle);
+
+   if (rsiValue[0] == EMPTY_VALUE) {
+      LogMessage("Error retrieving RSI value. EMPTY_VALUE returned.", symbol);
+      return;
+   }
+   
+   LogMessage("iRSI Input - Symbol: " + symbol + 
+              ", TimeFrame: " + EnumToString(InpTimeFrame) + 
+              ", Period: " + IntegerToString(InpRSIPeriod) + 
+              ", Price Type: PRICE_CLOSE", symbol);
+              
+   if (rsiValue[0] == INVALID_HANDLE) {
+      LogMessage("Error calculating RSI. Handle is invalid.", symbol);
+   }
+   
+   LogMessage("RSI Value: " + DoubleToString(rsiValue[0], 2), symbol);
+   
+   // Log price data used for RSI calculation
+   double rsiClosePrice = iClose(symbol, InpTimeFrame, 0);
+   LogMessage("RSI Close Price: " + DoubleToString(rsiClosePrice, 5), symbol);
+   
+   if(InpLogRSI) {
+      LogMessage("RSI: " + DoubleToString(rsiValue[0], 2), symbol);
+   }
    
    // Check if we already have an open position
    bool haveOpenPosition = false;
@@ -558,27 +540,128 @@ void OnTick()
    // If we have an open position, check RSI for exit
    if(haveOpenPosition) {
       if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
-         if(rsiValue >= InpRSIOverbought) {
+         if(rsiValue[0] >= InpRSIOverbought) {
             tradeScalp.PositionClose(symbol);
-            LogMessage("Long position closed due to overbought RSI. Ticket=" + IntegerToString(ticket), symbol);
+            if(InpLogEntryExit) {
+               LogMessage("Long position closed due to overbought RSI. Ticket=" + IntegerToString(ticket), symbol);
+            }
          }
       }
       else if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL) {
-         if(rsiValue <= InpRSIOversold) {
+         if(rsiValue[0] <= InpRSIOversold) {
             tradeScalp.PositionClose(symbol);
-            LogMessage("Short position closed due to oversold RSI. Ticket=" + IntegerToString(ticket), symbol);
+            if(InpLogEntryExit) {
+               LogMessage("Short position closed due to oversold RSI. Ticket=" + IntegerToString(ticket), symbol);
+            }
          }  
       }
       return;
    }
 
-   // If no open position, check RSI for entry
-   if(rsiValue <= InpRSIOversold) {
+   // Retrieve MACD
+   double macdMain = 0, macdSignal = 0;
+   int macd_handle = iMACD(symbol, InpTimeFrame, InpMACDFast, InpMACDSlow, InpMACDSignal, PRICE_CLOSE);
+   if(macd_handle != INVALID_HANDLE) {
+      double macdMainBuffer[], macdSignalBuffer[];
+      ArraySetAsSeries(macdMainBuffer, true);
+      ArraySetAsSeries(macdSignalBuffer, true);
+      if(CopyBuffer(macd_handle, 0, 0, 1, macdMainBuffer) > 0)
+         macdMain = macdMainBuffer[0];
+      if(CopyBuffer(macd_handle, 1, 0, 1, macdSignalBuffer) > 0)
+         macdSignal = macdSignalBuffer[0];
+      IndicatorRelease(macd_handle);
+   }
+   if(InpLogMACD) {
+      LogMessage("MACD Main: " + DoubleToString(macdMain, 6) + 
+                 " Signal: " + DoubleToString(macdSignal, 6), symbol);
+   }
+
+   // Check trend confirmation
+   LogMessage("iMA Input - Symbol: " + symbol + 
+              ", TimeFrame: " + EnumToString(InpTimeFrame) + 
+              ", Period: " + IntegerToString(InpTrendPeriod) + 
+              ", Shift: 0" +
+              ", Mode: MODE_EMA" +
+              ", Price Type: PRICE_CLOSE", symbol);
+              
+   LogMessage("InpTrendPeriod Value: " + IntegerToString(InpTrendPeriod), symbol);
+              
+   double ema[];
+   ArraySetAsSeries(ema, true);
+   int ema_handle = iMA(symbol, InpTimeFrame, InpTrendPeriod, 0, MODE_EMA, PRICE_CLOSE);
+
+   if (ema_handle == INVALID_HANDLE) {
+      LogMessage("Error creating EMA indicator handle.", symbol);
+      return;
+   }
+
+   if (CopyBuffer(ema_handle, 0, 0, 1, ema) != 1) {
+      LogMessage("Error copying EMA value from indicator buffer.", symbol);
+      IndicatorRelease(ema_handle);
+      return;
+   }
+
+   IndicatorRelease(ema_handle);
+
+   if (ema[0] == EMPTY_VALUE) {
+      LogMessage("Error retrieving EMA value. EMPTY_VALUE returned.", symbol);
+      return;
+   }
+
+   LogMessage("EMA Value: " + DoubleToString(ema[0], 5), symbol);
+
+   // Log price data used for EMA calculation
+   double emaClosePrice = iClose(symbol, InpTimeFrame, 0);
+   LogMessage("EMA Close Price: " + DoubleToString(emaClosePrice, 5), symbol);
+
+   LogMessage("iClose Input - Symbol: " + symbol + 
+              ", TimeFrame: " + EnumToString(InpTimeFrame) + 
+              ", Shift: 0", symbol);
+              
+   double close = iClose(symbol, InpTimeFrame, 0);
+
+   if (close == INVALID_HANDLE) {
+      LogMessage("Error retrieving close price. Handle is invalid.", symbol);
+   }
+
+   LogMessage("Close Price: " + DoubleToString(close, 5), symbol);
+
+   bool trendConfirmation = (close > ema[0] * (1 + InpTrendThreshold/100)) || 
+                            (close < ema[0] * (1 - InpTrendThreshold/100));
+                            
+   LogMessage("Trend Confirmation Calculation:" +
+              "\n  Close: " + DoubleToString(close, 5) +
+              "\n  EMA: " + DoubleToString(ema[0], 5) +
+              "\n  Threshold: " + DoubleToString(InpTrendThreshold, 2) + "%" +
+              "\n  Upper Threshold: " + DoubleToString(ema[0] * (1 + InpTrendThreshold/100), 5) +
+              "\n  Lower Threshold: " + DoubleToString(ema[0] * (1 - InpTrendThreshold/100), 5),
+              symbol);
+              
+   if(InpLogTrend) {
+      LogMessage("Trend Confirmation: " + (trendConfirmation ? "Yes" : "No") +
+                 " EMA: " + DoubleToString(ema[0], 5) + 
+                 " Close: " + DoubleToString(close, 5), symbol);
+   }
+   
+   // If no open position, check RSI, MACD, and trend for entry
+   if(rsiValue[0] <= InpRSIOversold && macdMain > macdSignal && trendConfirmation) {
       double lotSize = CalculateLotSize(InpRiskPercentage, 100, symbol); // Placeholder 100 pips SL
       ExecuteBuyTrade(lotSize, symbol, InpRiskRewardRatio);
+      if(InpLogEntryExit) {
+         LogMessage("Buy trade executed. RSI: " + DoubleToString(rsiValue[0], 2) +
+                    " MACD Main: " + DoubleToString(macdMain, 6) + 
+                    " Signal: " + DoubleToString(macdSignal, 6) +
+                    " Trend: " + (trendConfirmation ? "Confirmed" : "Not Confirmed"), symbol);
+      }
    }
-   else if(rsiValue >= InpRSIOverbought) {
+   else if(rsiValue[0] >= InpRSIOverbought && macdMain < macdSignal && trendConfirmation) {
       double lotSize = CalculateLotSize(InpRiskPercentage, 100, symbol); // Placeholder 100 pips SL  
       ExecuteSellTrade(lotSize, symbol, InpRiskRewardRatio);
+      if(InpLogEntryExit) {
+         LogMessage("Sell trade executed. RSI: " + DoubleToString(rsiValue[0], 2) +
+                    " MACD Main: " + DoubleToString(macdMain, 6) + 
+                    " Signal: " + DoubleToString(macdSignal, 6) +
+                    " Trend: " + (trendConfirmation ? "Confirmed" : "Not Confirmed"), symbol);
+      }
    }
 }
