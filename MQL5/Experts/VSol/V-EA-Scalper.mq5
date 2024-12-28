@@ -1,11 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                                        ScalperEA |
-//|                RSI-MACD Scalping with Bollinger Bands            |
-//|                          Version: 1.00                           |
-//|              (c) 2024, ReplaceWithYourName or Company            |
+//|                          RSI Scalping                            |
+//|                          Version: 1.01                           |
 //+------------------------------------------------------------------+
 #property copyright "VSol Software"
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -13,16 +12,15 @@
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
 //+------------------------------------------------------------------+
-input double InpRiskPercentage   = 1.0;   // % of account balance to risk per trade
-input double InpRiskRewardRatio  = 2.0;   // Risk-to-reward ratio
+input double InpRiskPercentage   = 2.0;   // % of account balance to risk per trade
+input double InpRiskRewardRatio  = 1.5;   // Risk-to-reward ratio
 input ENUM_TIMEFRAMES InpTimeFrame = PERIOD_M5; // Timeframe for signals
 input bool   InpDebugMode        = false; // Enable debug mode
-input bool   InpUseBollingerSqueeze = false; // Enable Bollinger Squeeze for entry (true/false)
 
-// RSI thresholds (for demonstration; you can refine these as needed)
-input int    InpRSIPeriod        = 9;     // Shorter period for faster reaction
-input double InpRSIOverbought    = 75.0;  // Slightly lower overbought level 
-input double InpRSIOversold      = 25.0;  // Slightly higher oversold level
+// RSI thresholds
+input int    InpRSIPeriod        = 14;    // RSI period 
+input double InpRSIOverbought    = 70.0;  // Overbought level 
+input double InpRSIOversold      = 30.0;  // Oversold level
 
 // Global trade object
 CTrade tradeScalp;
@@ -42,9 +40,9 @@ const int VOLUME_LOOKBACK  = 15;  // Longer lookback for smoothing
 const double MIN_RVOL      = 1.0; // Lower threshold for US500's high volume
 
 // Add input parameters for time filters
-input bool   UseTimeFilter       = true;  // Enable/disable time-based filtering
-input string TradingHourStart    = "16:00"; // Start of trading hours (EST)
-input string TradingHourEnd      = "23:00"; // End of trading hours (EST)
+input bool   UseTimeFilter       = false; // Disable time-based filtering for testing
+input string TradingHourStart    = "00:00"; // Start of trading hours (EST)
+input string TradingHourEnd      = "23:59"; // End of trading hours (EST)
 
 //--------------------------------------------------------------------
 // Utility Logging Functions
@@ -541,98 +539,46 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // Example of a straightforward approach:
-   // 1) If there is no open position, check for Buy or Sell signals.
-   // 2) If there is an open position, check if exit condition is met.
-
    string symbol = _Symbol;
-   MqlTick tick;
-   if(!SymbolInfoTick(symbol, tick)) {
-      LogMessage("Error getting tick info for " + symbol, symbol);
-      return;
-   }
-
+   
    // Retrieve RSI
    double rsiValue = iRSI(symbol, InpTimeFrame, InpRSIPeriod, PRICE_CLOSE);
    
-   // Retrieve MACD
-   int macd_handle = iMACD(symbol, InpTimeFrame, SCALP_MACD_FAST, SCALP_MACD_SLOW, 
-                           SCALP_MACD_SIGNAL, PRICE_CLOSE);
-   double macdMain   = 0.0, 
-          macdSignal = 0.0;
-   if(macd_handle != INVALID_HANDLE) {
-      double macdMainBuffer[], macdSignalBuffer[];
-      ArraySetAsSeries(macdMainBuffer, true);
-      ArraySetAsSeries(macdSignalBuffer, true);
-      // Buffer 0 => MACD main, Buffer 1 => MACD signal
-      if(CopyBuffer(macd_handle, 0, 0, 1, macdMainBuffer) > 0)
-         macdMain = macdMainBuffer[0];
-      if(CopyBuffer(macd_handle, 1, 0, 1, macdSignalBuffer) > 0)
-         macdSignal = macdSignalBuffer[0];
-      IndicatorRelease(macd_handle);
-   }
-   
-   // Check if we already have an open position in this symbol.
-   // (In a more advanced EA, you might track multiple positions or MagicNumbers.)
+   // Check if we already have an open position
    bool haveOpenPosition = false;
-   double openPrice      = 0.0;
-   ulong  ticket         = 0;
-   for(int iPos = PositionsTotal() - 1; iPos >= 0; iPos--) {
-      ulong posTicket = PositionGetTicket(iPos);
-      if(posTicket > 0) {
-         string posSymbol = PositionGetString(POSITION_SYMBOL);
-         if(posSymbol == symbol) {
-            haveOpenPosition = true;
-            openPrice        = (double)PositionGetDouble(POSITION_PRICE_OPEN);
-            ticket           = posTicket;
-            break;
+   ulong ticket = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--) {
+      ticket = PositionGetTicket(i);
+      if(ticket > 0 && PositionGetString(POSITION_SYMBOL) == symbol) {
+         haveOpenPosition = true;
+         break;
+      }
+   }
+
+   // If we have an open position, check RSI for exit
+   if(haveOpenPosition) {
+      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+         if(rsiValue >= InpRSIOverbought) {
+            tradeScalp.PositionClose(symbol);
+            LogMessage("Long position closed due to overbought RSI. Ticket=" + IntegerToString(ticket), symbol);
          }
       }
-   }
-
-   // If we have an open position, check exit
-   if(haveOpenPosition) {
-      // If exit condition is met, close the position
-      if(CheckExitCondition(rsiValue, symbol)) {
-         tradeScalp.PositionClose(symbol);
-         LogMessage("Position closed due to exit condition. Ticket=" + IntegerToString(ticket), symbol);
+      else if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL) {
+         if(rsiValue <= InpRSIOversold) {
+            tradeScalp.PositionClose(symbol);
+            LogMessage("Short position closed due to oversold RSI. Ticket=" + IntegerToString(ticket), symbol);
+         }  
       }
-      return; // done for this tick
+      return;
    }
 
-   // If no open position, check Buy or Sell signals
-   bool buySignal  = CheckBuyCondition(rsiValue, macdMain, macdSignal, symbol);
-   bool sellSignal = CheckSellCondition(rsiValue, macdMain, macdSignal, symbol);
-   
-   if(buySignal) {
-      // We'll do a quick placeholder stopLossPips to compute a lot
-      // so that our lot size is based on the approximate dynamic SL
-      double tmpSL, tmpTP;
-      CalculateDynamicSLTP(tmpSL, tmpTP, symbol, InpRiskRewardRatio);
-      double lotSize = CalculateLotSize(InpRiskPercentage, tmpSL, symbol);
+   // If no open position, check RSI for entry
+   if(rsiValue <= InpRSIOversold) {
+      double lotSize = CalculateLotSize(InpRiskPercentage, 100, symbol); // Placeholder 100 pips SL
       ExecuteBuyTrade(lotSize, symbol, InpRiskRewardRatio);
    }
-   else if(sellSignal) {
-      double tmpSL, tmpTP;
-      CalculateDynamicSLTP(tmpSL, tmpTP, symbol, InpRiskRewardRatio);
-      double lotSize = CalculateLotSize(InpRiskPercentage, tmpSL, symbol);
+   else if(rsiValue >= InpRSIOverbought) {
+      double lotSize = CalculateLotSize(InpRiskPercentage, 100, symbol); // Placeholder 100 pips SL  
       ExecuteSellTrade(lotSize, symbol, InpRiskRewardRatio);
-   }
-
-   if(InpDebugMode) {
-      LogMessage("OnTick Debug:" +
-                 "\n  RSI=" + DoubleToString(rsiValue, 2) +
-                 "\n  MACD Main=" + DoubleToString(macdMain, 6) +
-                 "\n  MACD Signal=" + DoubleToString(macdSignal, 6),
-                 symbol);
-   }
-
-   // Modify OnTick() to check time filters
-   datetime startTime = StringToTime(TimeToString(TimeCurrent(), TIME_DATE) + " " + TradingHourStart);
-   datetime endTime   = StringToTime(TimeToString(TimeCurrent(), TIME_DATE) + " " + TradingHourEnd);
-
-   if(UseTimeFilter && (TimeCurrent() < startTime || TimeCurrent() > endTime)) {
-      // Outside trading hours, skip checking for signals
-      return;
    }
 }
