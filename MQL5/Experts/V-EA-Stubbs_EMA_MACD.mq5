@@ -1,595 +1,615 @@
 //+------------------------------------------------------------------+
-//|                 V-EA-Stubbs_EMA_MACD.mq5                         |
-//|             Forex Strategies Ebook MQL5 EA for EURUSD              |
+//|                                                      StubbsEA.mq5 |
+//|                        Your Name or Company                       |
 //|                                                                  |
-//|   Description:                                                   |
-//|   This Expert Advisor implements a trading strategy based on      |
-//|   three Exponential Moving Averages (EMAs) and the MACD indicator. |
-//|   It is specifically fine-tuned for the EURUSD currency pair,    |
-//|   taking into account its unique volatility and liquidity traits.  |
-//|                                                                  |
-//|   Features:                                                      |
-//|     - 3 EMA (Fast: 3, Mid: 25, Slow: 30) on a 2-hour chart        |
-//|     - MACD (12, 26, 9) for exit signals                          |
-//|     - Strict money management (1% risk per trade)                |
-//|     - Partial exits based on MACD crossovers                      |
-//|     - **Prevents simultaneous Buy and Sell positions**            |
-//|                                                                  |
-//|   Usage Instructions:                                            |
-//|     1. Compile and attach to a 2-hour EURUSD chart in MetaTrader 5. |
-//|     2. Adjust input parameters if necessary to better fit broker |
-//|        conditions and trading preferences.                       |
-//|     3. Perform backtesting using the Strategy Tester to verify    |
-//|        performance.                                              |
-//|     4. Forward test on a demo account before deploying live.     |
-//|                                                                  |
-//|   Author: [Your Name or Your Company]                            |
-//|   Version: 1.02                                                  |
-//|   Last Updated: [Date]                                           |
 //+------------------------------------------------------------------+
-#property copyright ""
-#property link      ""
-#property version   "1.02"
-#property script_show_inputs
+#property strict
+
 #include <Trade\Trade.mqh>
-#include <Trade\SymbolInfo.mqh>
 
-//--- Input parameters
-input double RiskPercentage     = 1.0;      // Risk per trade (total) as % of account
-input int    EMAPeriodFast      = 3;        // Fast EMA
-input int    EMAPeriodMid       = 25;       // Mid EMA (optional filter)
-input int    EMAPeriodSlow      = 30;       // Slow EMA
-input int    MACDFast           = 12;       // MACD fast EMA
-input int    MACDSlow           = 26;       // MACD slow EMA
-input int    MACDSignal         = 9;        // MACD signal line
-input int    MagicNumber        = 12345;    // Magic number to identify trades
-input double MaxLotSize = 1.0;  // Maximum lot size per position
+//--- Input Parameters
+input int    EMAPeriodFast   = 3;     // Fast EMA Period
+input int    EMAPeriodMid    = 25;    // Mid EMA Period
+input int    EMAPeriodSlow   = 30;    // Slow EMA Period
+input int    MACDFast        = 12;    // MACD Fast EMA Period
+input int    MACDSlow        = 26;    // MACD Slow EMA Period
+input int    MACDSignal      = 9;     // MACD Signal SMA Period
+input double RiskPercentage  = 1.0;   // Risk Percentage per Trade (1%)
+input double SLBufferPips    = 2.0;   // Stop-Loss Buffer in Pips
+input double TPPips          = 5000.0;  // Take Profit in Pips
 
-//--- Global variables / handles
-CTrade trade;
-CSymbolInfo symbolInfo;
-int    handleEmaFast; 
-int    handleEmaMid;
-int    handleEmaSlow;
-int    handleMacd;
-double lotPerPosition = 0.0; // Each of the 3 positions will be this size
-datetime lastBarTime = 0;   // To track new H2 bar updates
+//--- Global Variables
+int          MagicNumber       = 123456; // Unique identifier for EA's trades
+datetime     lastBarTime       = 0;       // Tracks the last processed bar time
+datetime     tradeEntryBar     = 0;       // Tracks the bar time when trades were opened
+int          partialClosures   = 0;       // Tracks the number of partial closures done
+int          entryPositions    = 0;       // Tracks how many positions we've entered
+bool         inEntrySequence   = false;   // Whether we're in the middle of entering positions
+
+// Indicator handles
+int          handleEmaFast;
+int          handleEmaMid;
+int          handleEmaSlow;
+int          handleMacd;
+
+// Trade object
+CTrade      trade;
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                  |
+//| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // Initialize symbolInfo
-   if(!symbolInfo.Name(_Symbol))
-   {
-      Print("Failed to initialize symbol info");
-      return INIT_FAILED;
-   }
-   
-   //--- Create indicator handles
-   handleEmaFast = iMA(_Symbol, PERIOD_H2, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE);
-   handleEmaMid  = iMA(_Symbol, PERIOD_H2, EMAPeriodMid,  0, MODE_EMA, PRICE_CLOSE);
-   handleEmaSlow = iMA(_Symbol, PERIOD_H2, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE);
-
-   // MACD is typically loaded as: iMACD(symbol,period,fastEMA,slowEMA,signalPrice,applied_price)
-   handleMacd    = iMACD(_Symbol, PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE);
-
-   if(handleEmaFast == INVALID_HANDLE || handleEmaMid == INVALID_HANDLE ||
-      handleEmaSlow == INVALID_HANDLE || handleMacd == INVALID_HANDLE)
-   {
-      Print("Failed to create one or more indicator handles.");
-      return INIT_FAILED;
-   }
-   
-   Print("Account Balance: ", AccountInfoDouble(ACCOUNT_BALANCE));
-   Print("Minimum Lot Size: ", SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
-
-   return INIT_SUCCEEDED;
+    // Initialize EMA indicators
+    handleEmaFast = iMA(_Symbol, PERIOD_H2, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE);
+    handleEmaMid  = iMA(_Symbol, PERIOD_H2, EMAPeriodMid,  0, MODE_EMA, PRICE_CLOSE);
+    handleEmaSlow = iMA(_Symbol, PERIOD_H2, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE);
+    
+    // Initialize MACD indicator
+    handleMacd = iMACD(_Symbol, PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE);
+    
+    // Check if indicators are initialized successfully
+    if(handleEmaFast == INVALID_HANDLE || handleEmaMid == INVALID_HANDLE || handleEmaSlow == INVALID_HANDLE || handleMacd == INVALID_HANDLE)
+    {
+        Print("Error initializing indicators.");
+        return(INIT_FAILED);
+    }
+    
+    Print("EA Initialized Successfully.");
+    return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
-//| Expert deinitialization function                                |
+//| Expert deinitialization function                                 |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   //--- Release indicator handles
-   IndicatorRelease(handleEmaFast);
-   IndicatorRelease(handleEmaMid);
-   IndicatorRelease(handleEmaSlow);
-   IndicatorRelease(handleMacd);
+    // Release indicator handles
+    IndicatorRelease(handleEmaFast);
+    IndicatorRelease(handleEmaMid);
+    IndicatorRelease(handleEmaSlow);
+    IndicatorRelease(handleMacd);
+    
+    Print("EA Deinitialized.");
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                            |
+//| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   //--- Check for new 2-hour bar
-   datetime currentBar = iTime(_Symbol, PERIOD_H2, 0);
-   if(currentBar <= lastBarTime)
-      return; // No new bar yet
-
-   // Once we detect a new bar, update lastBarTime
-   lastBarTime = currentBar;
-
-   //--- Retrieve indicator values for the *previous* completed bar (index = 1)
-   double emaFastPrev = GetIndicatorValue(handleEmaFast, 1);
-   double emaMidPrev  = GetIndicatorValue(handleEmaMid,  1);
-   double emaSlowPrev = GetIndicatorValue(handleEmaSlow, 1);
-
-   double emaFastCurr = GetIndicatorValue(handleEmaFast, 2);
-   double emaMidCurr  = GetIndicatorValue(handleEmaMid,  2);
-   double emaSlowCurr = GetIndicatorValue(handleEmaSlow, 2);
-
-   // MACD values: main line and signal line
-   double macdMainPrev   = GetIndicatorValue(handleMacd, 1, 0); // Main line
-   double macdSignalPrev = GetIndicatorValue(handleMacd, 1, 1); // Signal line
-   double macdMainCurr   = GetIndicatorValue(handleMacd, 2, 0);
-   double macdSignalCurr = GetIndicatorValue(handleMacd, 2, 1);
-
-   //--- Check for new trade signals (3 EMA crossing 30 EMA)
-   // We'll compare previous bar's EMAs to see if a bullish or bearish cross just happened.
-   bool wasBullish = (emaFastCurr > emaSlowCurr);
-   bool wasBearish = (emaFastCurr < emaSlowCurr);
-   bool isBullishCross = false;
-   bool isBearishCross = false;
-
-   // Confirm a cross from one bar to the next
-   if(emaFastCurr > emaSlowCurr && emaFastPrev <= emaSlowPrev)
-   {
-      // Potential bullish cross
-      // Optional: confirm with the mid EMA (emaFast > emaMid)
-      if(emaFastCurr > emaMidCurr) 
-         isBullishCross = true;
-   }
-   else if(emaFastCurr < emaSlowCurr && emaFastPrev >= emaSlowPrev)
-   {
-      // Potential bearish cross
-      // Optional: confirm with the mid EMA (emaFast < emaMid)
-      if(emaFastCurr < emaMidCurr)
-         isBearishCross = true;
-   }
-
-   //--- Handle Bullish Cross
-   if(isBullishCross)
-   {
-      Print("Bullish EMA crossover detected.");
-
-      // **Close any existing SELL positions before opening BUYs**
-      if(CloseAllPositions(ORDER_TYPE_SELL))
-      {
-         Print("Existing SELL positions closed successfully.");
-      }
-      else
-      {
-         Print("No SELL positions to close or failed to close them.");
-      }
-
-      // Proceed with opening BUY trades only if no SELL positions remain
-      if(!HasOpenPositions(ORDER_TYPE_SELL))
-      {
-         // Calculate position size for total 1% risk across 3 trades
-         double stopLossPrice = GetStopLossPrice(true);
-         double entryPrice   = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-         double riskPerTrade = AccountInfoDouble(ACCOUNT_BALANCE) * (RiskPercentage / 100.0);
-         double pipsDistance = MathAbs(entryPrice - stopLossPrice) / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-
-         // Calculate total lots (will be divisible by 3 and step size)
-         double totalLots = CalculateLotSize(riskPerTrade, pipsDistance);
-         
-         // Only proceed if we got a valid lot size
-         if(totalLots > 0)
-         {
-            // Calculate per-position lot size
-            lotPerPosition = NormalizeDouble(totalLots / 3.0, 2);
-            
-            Print("Opening 3 BUY positions with lot size: ", DoubleToString(lotPerPosition, 2));
-
-            bool allTradesSuccessful = true;
-            // Open 3 buy positions
-            for(int i=0; i<3; i++)
+    // Check for take profit on existing positions first
+    CheckTakeProfit();
+    
+    //--- Check for new 2-hour bar
+    datetime currentBar = iTime(_Symbol, PERIOD_H2, 0);
+    if(currentBar <= lastBarTime)
+        return; // No new bar yet
+    
+    // Once we detect a new bar, update lastBarTime
+    lastBarTime = currentBar;
+    
+    //--- Retrieve EMA values for the previous and current closed bars
+    double emaFastPrev = GetIndicatorValue(handleEmaFast, 1);
+    double emaMidPrev  = GetIndicatorValue(handleEmaMid,  1);
+    double emaSlowPrev = GetIndicatorValue(handleEmaSlow, 1);
+    
+    double emaFastCurr = GetIndicatorValue(handleEmaFast, 0);
+    double emaMidCurr  = GetIndicatorValue(handleEmaMid,  0);
+    double emaSlowCurr = GetIndicatorValue(handleEmaSlow, 0);
+    
+    //--- Retrieve MACD values for the previous and current closed bars
+    double macdMainPrev   = GetIndicatorValue(handleMacd, 1, 0); // MACD Main Line
+    double macdSignalPrev = GetIndicatorValue(handleMacd, 1, 1); // MACD Signal Line
+    double macdMainCurr   = GetIndicatorValue(handleMacd, 0, 0);
+    double macdSignalCurr = GetIndicatorValue(handleMacd, 0, 1);
+    
+    //--- Check for EMA Crossovers
+    bool isBullishCross = false;
+    bool isBearishCross = false;
+    
+    // Detect Bullish EMA Crossover
+    if(emaFastCurr > emaSlowCurr && emaFastPrev <= emaSlowPrev)
+    {
+        // Optional Confirmation with Mid EMA
+        if(emaFastCurr > emaMidCurr)
+            isBullishCross = true;
+    }
+    
+    // Detect Bearish EMA Crossover
+    if(emaFastCurr < emaSlowCurr && emaFastPrev >= emaSlowPrev)
+    {
+        // Optional Confirmation with Mid EMA
+        if(emaFastCurr < emaMidCurr)
+            isBearishCross = true;
+    }
+    
+    //--- Handle Bullish Crossover Entry
+    if(isBullishCross)
+    {
+        Print("=== BULLISH SIGNAL DETECTED ===");
+        Print("Trigger: Fast EMA crossed above Slow EMA with Mid EMA confirmation");
+        Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
+        Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
+        Print("MACD Values  - Main:", macdMainCurr, " Signal:", macdSignalCurr);
+        
+        // Reset entry sequence
+        entryPositions = 0;
+        inEntrySequence = true;
+        tradeEntryBar = currentBar;
+    }
+    
+    //--- Handle Bearish Crossover Entry
+    if(isBearishCross)
+    {
+        Print("=== BEARISH SIGNAL DETECTED ===");
+        Print("Trigger: Fast EMA crossed below Slow EMA with Mid EMA confirmation");
+        Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
+        Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
+        Print("MACD Values  - Main:", macdMainCurr, " Signal:", macdSignalCurr);
+        
+        // Reset entry sequence
+        entryPositions = 0;
+        inEntrySequence = true;
+        tradeEntryBar = currentBar;
+    }
+    
+    //--- Check for Additional Entry Confirmations
+    if(inEntrySequence && entryPositions < 3)
+    {
+        bool shouldEnter = false;
+        string entryReason = "";
+        ENUM_ORDER_TYPE orderType = (emaFastCurr > emaSlowCurr) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+        
+        // First position: Initial crossover with multiple confirmations
+        if(entryPositions == 0)
+        {
+            if(orderType == ORDER_TYPE_BUY)
             {
-               if(!OpenTrade(ORDER_TYPE_BUY, lotPerPosition, stopLossPrice, 0, "3->30 EMA Bullish Cross"))
-               {
-                  allTradesSuccessful = false;
-                  break;
-               }
+                if(emaFastCurr > emaMidCurr && // Fast above Mid
+                   (emaFastCurr > emaSlowCurr) && // Fast above Slow (changed)
+                   macdMainCurr > macdSignalCurr) // MACD above Signal
+                {
+                    shouldEnter = true;
+                    entryReason = "Initial Entry - Bullish Setup (Fast EMA leading, MACD momentum positive)";
+                }
+            }
+            else // SELL
+            {
+                if(emaFastCurr < emaMidCurr && // Fast below Mid
+                   (emaFastCurr < emaSlowCurr) && // Fast below Slow (changed)
+                   macdMainCurr < macdSignalCurr) // MACD below Signal
+                {
+                    shouldEnter = true;
+                    entryReason = "Initial Entry - Bearish Setup (Fast EMA leading, MACD momentum negative)";
+                }
+            }
+        }
+        // Second position: Price action and MACD confirmation
+        else if(entryPositions == 1)
+        {
+            double currentClose = iClose(_Symbol, PERIOD_H2, 0);
+            double previousClose = iClose(_Symbol, PERIOD_H2, 1);
+            
+            if(orderType == ORDER_TYPE_BUY)
+            {
+                if(currentClose > previousClose && // Current bar is up
+                   macdMainCurr > macdMainPrev && // MACD increasing
+                   emaFastCurr > emaMidCurr) // EMAs still aligned
+                {
+                    shouldEnter = true;
+                    entryReason = "Second Entry - Bullish Continuation (Price up, MACD strengthening)";
+                }
+            }
+            else // SELL
+            {
+                if(currentClose < previousClose && // Current bar is down
+                   macdMainCurr < macdMainPrev && // MACD decreasing
+                   emaFastCurr < emaMidCurr) // EMAs still aligned
+                {
+                    shouldEnter = true;
+                    entryReason = "Second Entry - Bearish Continuation (Price down, MACD strengthening)";
+                }
+            }
+        }
+        // Third position: Strong trend confirmation
+        else if(entryPositions == 2)
+        {
+            double currentClose = iClose(_Symbol, PERIOD_H2, 0);
+            double previousClose = iClose(_Symbol, PERIOD_H2, 1);
+            
+            if(orderType == ORDER_TYPE_BUY)
+            {
+                if(currentClose > previousClose && // Price still moving up
+                   emaFastCurr > emaMidCurr && // EMAs still aligned
+                   macdMainCurr > macdSignalCurr) // MACD confirming trend
+                {
+                    shouldEnter = true;
+                    entryReason = "Third Entry - Bullish Trend Confirmation (Price up, EMAs and MACD aligned)";
+                }
+            }
+            else // SELL
+            {
+                if(currentClose < previousClose && // Price still moving down
+                   emaFastCurr < emaMidCurr && // EMAs still aligned
+                   macdMainCurr < macdSignalCurr) // MACD confirming trend
+                {
+                    shouldEnter = true;
+                    entryReason = "Third Entry - Bearish Trend Confirmation (Price down, EMAs and MACD aligned)";
+                }
+            }
+        }
+        
+        if(shouldEnter)
+        {
+            Print("=== ENTRY CONFIRMATION #", (entryPositions + 1), " ===");
+            Print("Reason:", entryReason);
+            Print("EMA Values - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
+            Print("MACD Values - Main:", macdMainCurr, " Signal:", macdSignalCurr);
+            if(entryPositions > 0)
+            {
+                Print("Price Action - Current Close:", iClose(_Symbol, PERIOD_H2, 0),
+                      " Previous Close:", iClose(_Symbol, PERIOD_H2, 1),
+                      " Previous High:", iHigh(_Symbol, PERIOD_H2, 1),
+                      " Previous Low:", iLow(_Symbol, PERIOD_H2, 1));
             }
             
-            if(!allTradesSuccessful)
-            {
-               Print("Failed to open all BUY positions. Closing any that were opened.");
-               CloseAllPositions(ORDER_TYPE_BUY);
-            }
-         }
-         else
-         {
-            Print("Invalid lot size calculated. Skipping trade entry.");
-         }
-      }
-      else
-      {
-         Print("Failed to close all SELL positions. Aborting BUY orders.");
-      }
-   }
-
-   //--- Handle Bearish Cross
-   if(isBearishCross)
-   {
-      Print("Bearish EMA crossover detected.");
-
-      // **Close any existing BUY positions before opening SELLs**
-      if(CloseAllPositions(ORDER_TYPE_BUY))
-      {
-         Print("Existing BUY positions closed successfully.");
-      }
-      else
-      {
-         Print("No BUY positions to close or failed to close them.");
-      }
-
-      // Proceed with opening SELL trades only if no BUY positions remain
-      if(!HasOpenPositions(ORDER_TYPE_BUY))
-      {
-         double stopLossPrice = GetStopLossPrice(false);
-         double entryPrice   = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-         double riskPerTrade = AccountInfoDouble(ACCOUNT_BALANCE) * (RiskPercentage / 100.0);
-         double pipsDistance = MathAbs(stopLossPrice - entryPrice) / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-
-         double totalLots = CalculateLotSize(riskPerTrade, pipsDistance);
-         
-         // Only proceed if we got a valid lot size
-         if(totalLots > 0)
-         {
-            lotPerPosition = NormalizeDouble(totalLots / 3.0, 2);
+            double stopLossPrice = GetStopLossPrice(orderType == ORDER_TYPE_BUY);
+            double riskPerTrade = AccountInfoDouble(ACCOUNT_BALANCE) * (RiskPercentage / 100.0);
+            double pipsDistance;
             
-            Print("Opening 3 SELL positions with lot size: ", DoubleToString(lotPerPosition, 2));
-
-            bool allTradesSuccessful = true;
-            // Open 3 sell positions
-            for(int i=0; i<3; i++)
-            {
-               if(!OpenTrade(ORDER_TYPE_SELL, lotPerPosition, stopLossPrice, 0, "3->30 EMA Bearish Cross"))
-               {
-                  allTradesSuccessful = false;
-                  break;
-               }
-            }
+            if(orderType == ORDER_TYPE_BUY)
+                pipsDistance = fabs(SymbolInfoDouble(_Symbol, SYMBOL_ASK) - stopLossPrice) / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+            else
+                pipsDistance = fabs(stopLossPrice - SymbolInfoDouble(_Symbol, SYMBOL_BID)) / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
             
-            if(!allTradesSuccessful)
+            double lotSize = CalculateLotSize(riskPerTrade, pipsDistance);
+            if(lotSize > 0.0)
             {
-               Print("Failed to open all SELL positions. Closing any that were opened.");
-               CloseAllPositions(ORDER_TYPE_SELL);
+                if(OpenTrade(orderType, lotSize, stopLossPrice, 0, 
+                            StringFormat("%s Entry #%d", orderType == ORDER_TYPE_BUY ? "Bullish" : "Bearish", entryPositions + 1)))
+                {
+                    entryPositions++;
+                }
             }
-         }
-         else
-         {
-            Print("Invalid lot size calculated. Skipping trade entry.");
-         }
-      }
-      else
-      {
-         Print("Failed to close all BUY positions. Aborting SELL orders.");
-      }
-   }
-
-   //--- Check for MACD exit signal: if MACD main crosses signal line => partial or final exit
-   // We'll do a simple check if it changes direction from prev bar to current bar
-   if( (macdMainCurr > macdSignalCurr && macdMainPrev <= macdSignalPrev) ||
-       (macdMainCurr < macdSignalCurr && macdMainPrev >= macdSignalPrev) )
-   {
-      Print("MACD crossover detected. Initiating partial exits.");
-      // Cross occurred: close 2 out of 3 open positions
-      ClosePartialPositions();
-   }
+        }
+        
+        // If we couldn't get all positions within 6 bars, reset the sequence
+        if(iTime(_Symbol, PERIOD_H2, 0) > tradeEntryBar + (6 * PeriodSeconds(PERIOD_H2)))
+        {
+            inEntrySequence = false;
+            Print("=== ENTRY SEQUENCE TIMEOUT ===");
+            Print("Could not find confirmation for all entries within 6 bars");
+        }
+    }
+    
+    //--- Check for MACD Exit Signals (Partial Exit)
+    if(IsMACDCrossOver(macdMainPrev, macdSignalPrev, macdMainCurr, macdSignalCurr) && (currentBar > tradeEntryBar))
+    {
+        Print("=== MACD EXIT SIGNAL DETECTED ===");
+        Print("Trigger: MACD line crossed Signal line");
+        Print("Previous Bar - MACD:", macdMainPrev, " Signal:", macdSignalPrev);
+        Print("Current Bar  - MACD:", macdMainCurr, " Signal:", macdSignalCurr);
+        
+        ENUM_ORDER_TYPE orderTypeToClose;
+        int buyCount = 0, sellCount = 0;
+        
+        for(int i = 0; i < PositionsTotal(); i++)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket <= 0) continue;
+            
+            if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+            {
+                ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+                if(posType == POSITION_TYPE_BUY) buyCount++;
+                if(posType == POSITION_TYPE_SELL) sellCount++;
+            }
+        }
+        
+        orderTypeToClose = (buyCount > sellCount) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+        
+        if(CloseOnePosition(orderTypeToClose))
+            partialClosures++;
+    }
 }
 
 //+------------------------------------------------------------------+
-//| GetIndicatorValue - Overload for 2D arrays (e.g. MACD)          |
+//| Calculate Lot Size based on risk and pip distance                |
 //+------------------------------------------------------------------+
-double GetIndicatorValue(int handle, int shift, int buffer=0)
-{
-   double value[]; 
-   if(CopyBuffer(handle, buffer, shift, 1, value) <= 0)
-      return 0;
-   return value[0];
-}
-
 double CalculateLotSize(double riskAmount, double pipsDistance)
 {
-   // Logging for clarity
-   Print("Initial Risk Amount: ", riskAmount);
-   Print("Pips Distance: ", pipsDistance);
-
-   // Retrieve tick data for pip value calculation
-   double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-
-   Print("Tick Size: ", DoubleToString(tickSize, 5));
-   Print("Tick Value: ", DoubleToString(tickValue, 2));
-
-   if(tickSize == 0.0)
-   {
-      Print("Error: Tick Size is zero for symbol ", _Symbol);
-      return 0.0;
-   }
-
-   // 1 pip = (0.0001 / tickSize) * tickValue
-   double pipValue = (0.0001 / tickSize) * tickValue;
-   Print("Calculated Pip Value: ", DoubleToString(pipValue, 2));
-
-   // Convert riskAmount to base currency (if needed)
-   double riskAmountBase = riskAmount / SymbolInfoDouble(_Symbol, SYMBOL_BID);
-
-   // Basic lot size calculation: risk / (pipDistance * pipValue)
-   double lotSize = 0.0;
-   if(pipsDistance > 0.0)
-      lotSize = riskAmountBase / (pipsDistance * pipValue);
-
-   Print("Initial calculated lot size: ", DoubleToString(lotSize, 3));
-
-   // Broker constraints
-   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double stepLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-
-   Print("Broker constraints - Min Lot: ", DoubleToString(minLot, 2), 
-         " Max Lot: ", DoubleToString(maxLot, 2), 
-         " Step: ", DoubleToString(stepLot, 2));
-
-   // Round down to nearest step to avoid overstepping risk or broker rules
-   double steps = MathFloor(lotSize / stepLot);
-   lotSize = steps * stepLot;
-
-   // Enforce min/max
-   if(lotSize < minLot) lotSize = minLot;
-   if(lotSize > maxLot) lotSize = maxLot;
-
-   // (Optional) margin check can be done here, or in OpenTrade:
-   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-   // Example check for buy side margin:
-   double requiredMargin = trade.CalculateMargin(ORDER_TYPE_BUY, _Symbol, lotSize, SymbolInfoDouble(_Symbol, SYMBOL_ASK));
-
-   Print("Required margin for total position: ", DoubleToString(requiredMargin, 2));
-   Print("Available free margin: ", DoubleToString(freeMargin, 2));
-
-   Print("Final total lot size: ", DoubleToString(lotSize, 2));
-   return lotSize;
-}
-
-
-//+------------------------------------------------------------------+
-//| GetStopLossPrice - Basic method to place SL near previous candle |
-//+------------------------------------------------------------------+
-double GetStopLossPrice(bool isBuy)
-{
-   // For EURUSD on H2, a buffer of 2 pips is generally sufficient
-   double highPrev = iHigh(_Symbol, PERIOD_H2, 1);
-   double lowPrev  = iLow(_Symbol, PERIOD_H2, 1);
-
-   // Add a buffer to prevent stop-loss from being hit by minor fluctuations
-   double bufferPips = 2.0;
-   double pip = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-
-   if(isBuy)
-      return NormalizeDouble((lowPrev - bufferPips * pip), (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));
-   else
-      return NormalizeDouble((highPrev + bufferPips * pip), (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));
-}
-
-
-
-//+------------------------------------------------------------------+
-//| ClosePartialPositions - closes 2 of 3 positions in direction    |
-//+------------------------------------------------------------------+
-void ClosePartialPositions()
-{
-   // The logic: For each direction (BUY or SELL), check how many open positions 
-   // with our magic number exist. If >= 3, close 2 of them, keep 1 running.
-
-   // We'll do a simple approach: if we find 2 or more trades in the same direction, close exactly 2.
-
-   // Gather tickets
-   int totalPositions = PositionsTotal();
-   if(totalPositions <= 0) return;
-
-   // Count how many buy/sell positions we have with our magic
-   int buyCount=0, sellCount=0;
-   ulong buyTicketArray[], sellTicketArray[];
-   ArrayResize(buyTicketArray, totalPositions);
-   ArrayResize(sellTicketArray, totalPositions);
-
-   for(int i=0; i<totalPositions; i++)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(PositionSelectByTicket(ticket))
-      {
-         if(PositionGetInteger(POSITION_MAGIC)==MagicNumber)
-         {
-            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
-            {
-               buyTicketArray[buyCount] = ticket; 
-               buyCount++;
-            }
-            else if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
-            {
-               sellTicketArray[sellCount] = ticket;
-               sellCount++;
-            }
-         }
-      }
-   }
-
-   // If at least 2 buy positions -> close 2
-   if(buyCount >= 2)
-   {
-      Print("MACD exit signal: Closing 2 buy positions.");
-      for(int i=0; i<2 && i<buyCount; i++)
-      {
-         if(ClosePosition(buyTicketArray[i]))
-            Print("Buy position ", buyTicketArray[i], " closed successfully.");
-         else
-            Print("Failed to close buy position ", buyTicketArray[i], ".");
-      }
-   }
-   // If at least 2 sell positions -> close 2
-   if(sellCount >= 2)
-   {
-      Print("MACD exit signal: Closing 2 sell positions.");
-      for(int i=0; i<2 && i<sellCount; i++)
-      {
-         if(ClosePosition(sellTicketArray[i]))
-            Print("Sell position ", sellTicketArray[i], " closed successfully.");
-         else
-            Print("Failed to close sell position ", sellTicketArray[i], ".");
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| ClosePosition - close a specific open position by ticket        |
-//+------------------------------------------------------------------+
-bool ClosePosition(ulong ticket)
-{
-   if(!PositionSelectByTicket(ticket))
-      return false;
-
-   trade.SetExpertMagicNumber(MagicNumber);
-   trade.SetDeviationInPoints(10);
-   trade.SetTypeFilling(ORDER_FILLING_FOK);
-   trade.SetTypeFillingBySymbol(Symbol());
-   
-   if(trade.PositionClose(ticket))
-   {
-      Print("Position ", ticket, " closed successfully.");
-      return true;
-   }
-   else
-   {
-      Print("Failed to close position ", ticket, ". Error: ", trade.ResultRetcode(), ": ", trade.CheckResultRetcodeDescription());
-      return false;  
-   }
-}
-
-//+------------------------------------------------------------------+
-//| CloseAllPositions - closes all positions of a specific type      |
-//+------------------------------------------------------------------+
-bool CloseAllPositions(ENUM_ORDER_TYPE typeToClose)
-{
-   bool allClosed = true;
-   int totalPositions = PositionsTotal();
-
-   for(int i = totalPositions - 1; i >= 0; i--)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(PositionSelectByTicket(ticket))
-      {
-         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-         long posMagic = PositionGetInteger(POSITION_MAGIC);
-
-         // Check if position matches the type to close and has the correct magic number
-         if(posMagic == MagicNumber)
-         {
-            bool isBuy = (posType == POSITION_TYPE_BUY);
-            bool isSell = (posType == POSITION_TYPE_SELL);
-
-            if( (typeToClose == ORDER_TYPE_BUY && isBuy) ||
-                (typeToClose == ORDER_TYPE_SELL && isSell) )
-            {
-               if(!ClosePosition(ticket))
-               {
-                  Print("Failed to close position ", ticket, ".");
-                  allClosed = false;
-               }
-            }
-         }
-      }
-   }
-
-   return allClosed;
-}
-
-//+------------------------------------------------------------------+
-//| HasOpenPositions - checks if there are open positions of a type |
-//+------------------------------------------------------------------+
-bool HasOpenPositions(ENUM_ORDER_TYPE typeToCheck)
-{
-   int totalPositions = PositionsTotal();
-
-   for(int i = 0; i < totalPositions; i++)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(PositionSelectByTicket(ticket))
-      {
-         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-         long posMagic = PositionGetInteger(POSITION_MAGIC);
-
-         // Check if position matches the type to check and has the correct magic number
-         if(posMagic == MagicNumber)
-         {
-            if( (typeToCheck == ORDER_TYPE_BUY && posType == POSITION_TYPE_BUY) ||
-                (typeToCheck == ORDER_TYPE_SELL && posType == POSITION_TYPE_SELL) )
-            {
-               return true;
-            }
-         }
-      }
-   }
-
-   return false;
-}
-
-bool OpenTrade(ENUM_ORDER_TYPE orderType, double lots, double sl, double tp, string comment="")
-{
-    // Get broker's lot constraints
-    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+    double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+    
+    if(tickSize == 0.0)
+        return 0.0;
+    
+    double pipValue = (0.0001 / tickSize) * tickValue;
+    double bidPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    
+    if(bidPrice == 0.0)
+        return 0.0;
+    
+    double riskAmountBase = riskAmount / bidPrice;
+    double lotSize = 0.0;
+    
+    if(pipsDistance > 0.0)
+        lotSize = riskAmountBase / (pipsDistance * pipValue);
+    
+    double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+    double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
     double stepLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
     
-    // Simple rounding to nearest valid lot size
-    lots = NormalizeDouble(MathRound(lots / stepLot) * stepLot, 2);
+    double steps = MathFloor(lotSize / stepLot);
+    lotSize = steps * stepLot;
     
-    // Enforce min/max limits
-    lots = MathMax(minLot, MathMin(lots, maxLot));
+    if(lotSize < minLot)
+        lotSize = minLot;
+    if(lotSize > maxLot)
+        lotSize = maxLot;
     
-    Print("Final lot size: ", DoubleToString(lots, 2));
+    return NormalizeDouble(lotSize, 2);
+}
 
-    // Check margin requirements
-    double margin;
-    if(!symbolInfo.MarginCalcOrder(orderType, lots, (orderType == ORDER_TYPE_BUY) ? symbolInfo.Ask() : symbolInfo.Bid(), margin))
-    {
-        Print("Failed to calculate margin requirements");
+//+------------------------------------------------------------------+
+//| Open Trade with specified parameters                              |
+//+------------------------------------------------------------------+
+bool OpenTrade(ENUM_ORDER_TYPE orderType, double lots, double sl, double tp, string comment="")
+{
+    double stepLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    double steps = MathFloor(lots / stepLot);
+    lots = NormalizeDouble(steps * stepLot, 2);
+    
+    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+    if(lots < minLot)
         return false;
-    }
-
-    if(margin > AccountInfoDouble(ACCOUNT_MARGIN_FREE))
-    {
-        Print("Insufficient margin. Required: ", margin, ", Available: ", AccountInfoDouble(ACCOUNT_MARGIN_FREE));
-        return false;
-    }
-
-    // Place the order
+    
     trade.SetExpertMagicNumber(MagicNumber);
     trade.SetDeviationInPoints(10);
     trade.SetTypeFilling(ORDER_FILLING_FOK);
-    trade.SetTypeFillingBySymbol(Symbol());
-
-    bool tradeResult = false;
+    trade.SetTypeFillingBySymbol(_Symbol);
+    
+    bool result = false;
+    
     if(orderType == ORDER_TYPE_BUY)
-        tradeResult = trade.Buy(lots, _Symbol, symbolInfo.Ask(), sl, tp, comment);
-    else if(orderType == ORDER_TYPE_SELL)
-        tradeResult = trade.Sell(lots, _Symbol, symbolInfo.Bid(), sl, tp, comment);
-
-    if(tradeResult)
     {
-        Print(EnumToString(orderType), " order opened successfully. Ticket: ", trade.ResultOrder());
-        return true;
+        double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+        Print("Opening BUY Order - Price:", price, " Lots:", lots);
+        result = trade.Buy(lots, _Symbol, 0, 0, 0, comment);
+    }
+    else if(orderType == ORDER_TYPE_SELL)
+    {
+        double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        Print("Opening SELL Order - Price:", price, " Lots:", lots);
+        result = trade.Sell(lots, _Symbol, 0, 0, 0, comment);
     }
     
-    Print("Failed to open ", EnumToString(orderType), " order. Error: ", 
-          trade.ResultRetcode(), ": ", trade.CheckResultRetcodeDescription());
+    if(!result)
+        Print("Trade Error:", trade.ResultRetcode(), ":", trade.CheckResultRetcodeDescription());
+    
+    return result;
+}
+
+//+------------------------------------------------------------------+
+//| Close one open position of the specified type                    |
+//+------------------------------------------------------------------+
+bool CloseOnePosition(ENUM_ORDER_TYPE orderType)
+{
+    int totalPositions = PositionsTotal();
+    bool closed = false;
+    
+    for(int i = totalPositions - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        // Check if the position belongs to this EA
+        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        {
+            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            bool matchingType = (orderType == ORDER_TYPE_BUY && posType == POSITION_TYPE_BUY) ||
+                                (orderType == ORDER_TYPE_SELL && posType == POSITION_TYPE_SELL);
+            
+            if(matchingType)
+            {
+                bool result = trade.PositionClose(ticket);
+                
+                if(result)
+                {
+                    Print("Closed position #", ticket, " successfully.");
+                    closed = true;
+                    break; // Close only one position
+                }
+                else
+                {
+                    Print("Failed to close position #", ticket, ". Error: ", GetLastError());
+                }
+            }
+        }
+    }
+    return closed;
+}
+
+//+------------------------------------------------------------------+
+//| Close all open positions of a specific type                      |
+//+------------------------------------------------------------------+
+bool CloseAllPositions(ENUM_ORDER_TYPE orderType)
+{
+    bool allClosed = true;
+    int totalPositions = PositionsTotal();
+    
+    for(int i = totalPositions - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        {
+            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            bool matchingType = (orderType == ORDER_TYPE_BUY && posType == POSITION_TYPE_BUY) ||
+                                (orderType == ORDER_TYPE_SELL && posType == POSITION_TYPE_SELL);
+            
+            if(matchingType)
+            {
+                bool result = trade.PositionClose(ticket);
+                
+                if(result)
+                {
+                    Print("Closed position #", ticket, " successfully.");
+                }
+                else
+                {
+                    Print("Failed to close position #", ticket, ". Error: ", GetLastError());
+                    allClosed = false;
+                }
+            }
+        }
+    }
+    return allClosed;
+}
+
+//+------------------------------------------------------------------+
+//| Check if there are any open positions of a specific type         |
+//+------------------------------------------------------------------+
+bool HasOpenPositions(ENUM_ORDER_TYPE orderType)
+{
+    int totalPositions = PositionsTotal();
+    
+    for(int i = 0; i < totalPositions; i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        {
+            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            bool matchingType = (orderType == ORDER_TYPE_BUY && posType == POSITION_TYPE_BUY) ||
+                                (orderType == ORDER_TYPE_SELL && posType == POSITION_TYPE_SELL);
+            
+            if(matchingType)
+                return true;
+        }
+    }
     return false;
+}
+
+//+------------------------------------------------------------------+
+//| Retrieve Indicator Buffer Value                                 |
+//+------------------------------------------------------------------+
+double GetIndicatorValue(int handle, int shift, int buffer = 0)
+{
+    double value[];
+    if(CopyBuffer(handle, buffer, shift, 1, value) > 0)
+        return value[0];
+    else
+    {
+        Print("Failed to copy buffer for handle ", handle, ". Error: ", GetLastError());
+        return 0.0;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Detect MACD Crossover                                           |
+//+------------------------------------------------------------------+
+bool IsMACDCrossOver(double macdMainPrev, double macdSignalPrev, double macdMainCurr, double macdSignalCurr)
+{
+    // Check for bullish crossover
+    if(macdMainPrev <= macdSignalPrev && macdMainCurr > macdSignalCurr)
+        return true;
+    
+    // Check for bearish crossover
+    if(macdMainPrev >= macdSignalPrev && macdMainCurr < macdSignalCurr)
+        return true;
+    
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Get Stop Loss Price with buffer                                  |
+//+------------------------------------------------------------------+
+double GetStopLossPrice(bool isBuy)
+{
+    // Fetch the previous bar's high and low
+    double previousHigh = iHigh(_Symbol, PERIOD_H2, 1);
+    double previousLow  = iLow(_Symbol, PERIOD_H2, 1);
+    
+    // Define a buffer in pips to account for spread and volatility
+    double bufferPips = SLBufferPips; // Adjustable buffer
+    double pointSize   = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    
+    if(isBuy)
+    {
+        // Stop-loss just below the previous bar's low minus buffer
+        return previousLow - (bufferPips * pointSize);
+    }
+    else
+    {
+        // Stop-loss just above the previous bar's high plus buffer
+        return previousHigh + (bufferPips * pointSize);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check positions for take profit                                  |
+//+------------------------------------------------------------------+
+void CheckTakeProfit()
+{
+    int totalPositions = PositionsTotal();
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    double maxProfitPips = 0;
+    ulong bestTicket = 0;
+    ENUM_POSITION_TYPE bestPosType = POSITION_TYPE_BUY; // Default value
+    double bestOpenPrice = 0;
+    double bestCurrentPrice = 0;
+    
+    // First find the position with the highest profit
+    for(int i = totalPositions - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        {
+            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            
+            double profitPips = 0;
+            
+            if(posType == POSITION_TYPE_BUY)
+                profitPips = (currentPrice - openPrice) / point;
+            else if(posType == POSITION_TYPE_SELL)
+                profitPips = (openPrice - currentPrice) / point;
+            
+            // Track the position with highest profit
+            if(profitPips > maxProfitPips)
+            {
+                maxProfitPips = profitPips;
+                bestTicket = ticket;
+                bestPosType = posType;
+                bestOpenPrice = openPrice;
+                bestCurrentPrice = currentPrice;
+            }
+        }
+    }
+    
+    // If we found a position exceeding take profit, close it
+    if(maxProfitPips >= TPPips && bestTicket > 0)
+    {
+        Print("=== TAKE PROFIT EXIT TRIGGERED ===");
+        Print("Trigger: Profit exceeded ", TPPips, " pips target");
+        Print("Position Type: ", EnumToString(bestPosType));
+        Print("Entry Price: ", bestOpenPrice);
+        Print("Current Price: ", bestCurrentPrice);
+        Print("Profit in Pips: ", maxProfitPips);
+        
+        if(trade.PositionClose(bestTicket))
+        {
+            Print("Successfully closed position #", bestTicket);
+            partialClosures++; // Track this as a partial closure
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
