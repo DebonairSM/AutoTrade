@@ -332,9 +332,14 @@ void OnTick()
         // Check for entry sequence timeout using EntryTimeoutBars parameter
         if(iTime(_Symbol, PERIOD_H2, 0) > tradeEntryBar + (EntryTimeoutBars * PeriodSeconds(PERIOD_H2)))
         {
-            inEntrySequence = false;
-            Print("=== ENTRY SEQUENCE TIMEOUT ===");
-            Print("Could not find confirmation for all entries within ", EntryTimeoutBars, " bars");
+            // Only timeout if we have at least one position open
+            if(entryPositions > 0)
+            {
+                inEntrySequence = false;
+                Print("=== ENTRY SEQUENCE TIMEOUT ===");
+                Print("Could not find confirmation for all entries within ", EntryTimeoutBars, " bars");
+                Print("Reason: Have ", entryPositions, " active position(s), stopping sequence for additional entries");
+            }
         }
     }
     
