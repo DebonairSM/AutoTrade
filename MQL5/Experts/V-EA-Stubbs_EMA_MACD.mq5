@@ -8,7 +8,7 @@
 #include <Trade\Trade.mqh>
 
 //--- Input Parameters
-input int    EMAPeriodFast   = 3;     // Fast EMA Period
+input int    EMAPeriodFast   = 5;     // Fast EMA Period
 input int    EMAPeriodMid    = 25;    // Mid EMA Period
 input int    EMAPeriodSlow   = 30;    // Slow EMA Period
 input int    MACDFast        = 12;    // MACD Fast EMA Period
@@ -16,7 +16,9 @@ input int    MACDSlow        = 26;    // MACD Slow EMA Period
 input int    MACDSignal      = 9;     // MACD Signal SMA Period
 input double RiskPercentage  = 1.5;   // Risk Percentage per Trade (1%)
 input double SLBufferPips    = 2.0;   // Stop-Loss Buffer in Pips
-input double TPPips          = 5000.0;  // Take Profit in Pips
+input double TPPips          = 500.0;  // Take Profit in Pips
+input double MACDThreshold   = 0.0002; // Minimum MACD difference for signal
+input int    EntryTimeoutBars = 8;    // Bars to wait for entry sequence
 
 //--- Global Variables
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
@@ -89,6 +91,14 @@ void OnTick()
     
     // Once we detect a new bar, update lastBarTime
     lastBarTime = currentBar;
+    
+    // Check for entry sequence timeout
+    if(inEntrySequence && currentBar > tradeEntryBar + (EntryTimeoutBars * PeriodSeconds(PERIOD_H2)))
+    {
+        inEntrySequence = false;
+        Print("=== ENTRY SEQUENCE TIMEOUT ===");
+        Print("Could not find confirmation for all entries within ", EntryTimeoutBars, " bars");
+    }
     
     //--- Retrieve EMA values for the previous and current closed bars
     double emaFastPrev = GetIndicatorValue(handleEmaFast, 1);
@@ -589,6 +599,10 @@ double GetIndicatorValue(int handle, int shift, int buffer = 0)
 //+------------------------------------------------------------------+
 bool IsMACDCrossOver(double macdMainPrev, double macdSignalPrev, double macdMainCurr, double macdSignalCurr)
 {
+    // Check if the difference between MACD and Signal is significant enough
+    if(MathAbs(macdMainCurr - macdSignalCurr) < MACDThreshold)
+        return false;
+        
     // Check for bullish crossover
     if(macdMainPrev <= macdSignalPrev && macdMainCurr > macdSignalCurr)
         return true;
