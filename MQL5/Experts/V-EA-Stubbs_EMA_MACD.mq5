@@ -25,6 +25,7 @@ input double MinDrawdownPips = 250.0;  // Minimum drawdown in pips before checki
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
 datetime     lastBarTime       = 0;       // Tracks the last processed bar time
 datetime     tradeEntryBar     = 0;       // Tracks the bar time when trades were opened
+datetime     lastEntryBar      = 0;       // Tracks the bar time of the last successful entry
 int          partialClosures   = 0;       // Tracks the number of partial closures done
 int          entryPositions    = 0;       // Tracks how many positions we've entered
 bool         inEntrySequence   = false;   // Whether we're in the middle of entering positions
@@ -269,34 +270,68 @@ void OnTick()
                 }
             }
         }
-        // Third position: Strong trend continuation with volume
+        // Third position: Strong trend continuation with volume OR drawdown entry
         else if(entryPositions == 2)
         {
             double currentClose = iClose(_Symbol, PERIOD_H2, 0);
             double previousClose = iClose(_Symbol, PERIOD_H2, 1);
+            double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+            
+            // Calculate drawdown from the highest/lowest point since trade entry
+            double maxDrawdown = 0;
+            double highestPrice = currentClose;
+            double lowestPrice = currentClose;
+            
+            for(int i = 0; i < 100; i++) // Look back up to 100 bars
+            {
+                datetime barTime = iTime(_Symbol, PERIOD_H2, i);
+                if(barTime < tradeEntryBar) break;
+                
+                double high = iHigh(_Symbol, PERIOD_H2, i);
+                double low = iLow(_Symbol, PERIOD_H2, i);
+                
+                if(high > highestPrice) highestPrice = high;
+                if(low < lowestPrice) lowestPrice = low;
+            }
             
             if(orderType == ORDER_TYPE_BUY)
             {
-                if(currentClose > previousClose * 1.01 && // Allowing a slight increase from previous close
-                   emaFastCurr > emaMidCurr && // EMAs still aligned
-                   emaMidCurr > emaSlowCurr &&
-                   macdMainCurr > macdMainPrev && // MACD still increasing
-                   macdMainCurr > macdSignalCurr) // MACD above signal
+                maxDrawdown = (highestPrice - currentClose) / point;
+                
+                if((currentClose > previousClose * 1.01 && // Original condition: Strong continuation
+                    emaFastCurr > emaMidCurr && 
+                    emaMidCurr > emaSlowCurr &&
+                    macdMainCurr > macdMainPrev && 
+                    macdMainCurr > macdSignalCurr) ||
+                   (maxDrawdown >= 150.0 && // New condition: Drawdown entry
+                    emaFastCurr > emaMidCurr && // Still maintain EMA alignment
+                    emaMidCurr > emaSlowCurr &&
+                    macdMainCurr > macdSignalCurr)) // Maintain positive momentum
                 {
                     shouldEnter = true;
-                    entryReason = "Third Entry - Strong Bullish Continuation (Price up, EMAs aligned, MACD strength)";
+                    entryReason = maxDrawdown >= 150.0 ? 
+                        StringFormat("Third Entry - Bullish Drawdown Entry (%.1f pips drawdown, EMAs aligned, positive momentum)", maxDrawdown) :
+                        "Third Entry - Strong Bullish Continuation (Price up, EMAs aligned, MACD strength)";
                 }
             }
             else // SELL
             {
-                if(currentClose < previousClose * 0.99 && // Allowing a slight decrease from previous close
-                   emaFastCurr < emaMidCurr && // EMAs still aligned
-                   emaMidCurr < emaSlowCurr &&
-                   macdMainCurr < macdMainPrev && // MACD still decreasing
-                   macdMainCurr < macdSignalCurr) // MACD below signal
+                maxDrawdown = (currentClose - lowestPrice) / point;
+                
+                if((currentClose < previousClose * 0.99 && // Original condition: Strong continuation
+                    emaFastCurr < emaMidCurr && 
+                    emaMidCurr < emaSlowCurr &&
+                    macdMainCurr < macdMainPrev && 
+                    macdMainCurr < macdSignalCurr) ||
+                   (maxDrawdown >= 150.0 && // New condition: Drawdown entry
+                    emaFastCurr < emaMidCurr && // Still maintain EMA alignment
+                    emaMidCurr < emaSlowCurr &&
+                    macdMainCurr < macdSignalCurr)) // Maintain negative momentum
                 {
                     shouldEnter = true;
-                    entryReason = "Third Entry - Strong Bearish Continuation (Price down, EMAs aligned, MACD strength)";
+                    entryReason = maxDrawdown >= 150.0 ? 
+                        StringFormat("Third Entry - Bearish Drawdown Entry (%.1f pips drawdown, EMAs aligned, negative momentum)", maxDrawdown) :
+                        "Third Entry - Strong Bearish Continuation (Price down, EMAs aligned, MACD strength)";
                 }
             }
         }
@@ -325,12 +360,14 @@ void OnTick()
                             StringFormat("%s Entry #%d", orderType == ORDER_TYPE_BUY ? "Bullish" : "Bearish", entryPositions + 1)))
                 {
                     entryPositions++;
+                    lastEntryBar = iTime(_Symbol, PERIOD_H2, 0); // Update last entry time after successful entry
                 }
             }
         }
         
         // Check for entry sequence timeout using EntryTimeoutBars parameter
-        if(iTime(_Symbol, PERIOD_H2, 0) > tradeEntryBar + (EntryTimeoutBars * PeriodSeconds(PERIOD_H2)))
+        datetime timeoutReference = (lastEntryBar > 0) ? lastEntryBar : tradeEntryBar;
+        if(iTime(_Symbol, PERIOD_H2, 0) > timeoutReference + (EntryTimeoutBars * PeriodSeconds(PERIOD_H2)))
         {
             // Only timeout if we have at least one position open
             if(entryPositions > 0)
@@ -339,6 +376,7 @@ void OnTick()
                 Print("=== ENTRY SEQUENCE TIMEOUT ===");
                 Print("Could not find confirmation for all entries within ", EntryTimeoutBars, " bars");
                 Print("Reason: Have ", entryPositions, " active position(s), stopping sequence for additional entries");
+                Print("Time since last entry: ", (iTime(_Symbol, PERIOD_H2, 0) - timeoutReference) / PeriodSeconds(PERIOD_H2), " bars");
             }
         }
     }
