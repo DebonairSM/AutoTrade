@@ -14,7 +14,7 @@ input int    EMAPeriodSlow   = 30;    // Slow EMA Period
 input int    MACDFast        = 12;    // MACD Fast EMA Period
 input int    MACDSlow        = 26;    // MACD Slow EMA Period
 input int    MACDSignal      = 9;     // MACD Signal SMA Period
-input double RiskPercentage  = 1.0;   // Risk Percentage per Trade (1%)
+input double RiskPercentage  = 1.5;   // Risk Percentage per Trade (1%)
 input double SLBufferPips    = 2.0;   // Stop-Loss Buffer in Pips
 input double TPPips          = 5000.0;  // Take Profit in Pips
 
@@ -31,6 +31,7 @@ int          handleEmaFast;
 int          handleEmaMid;
 int          handleEmaSlow;
 int          handleMacd;
+int          tradeDirection = 0;   // 0 = No position, 1 = Buy, -1 = Sell
 
 // Trade object
 CTrade      trade;
@@ -124,42 +125,79 @@ void OnTick()
             isBearishCross = true;
     }
     
-    //--- Handle Bullish Crossover Entry
-    if(isBullishCross)
+    //--- Handle Signal Detection and Trade Direction
+    if(isBullishCross && tradeDirection <= 0)  // Only take bullish signal if not already in a buy position
     {
-        Print("=== BULLISH SIGNAL DETECTED ===");
-        Print("Trigger: Fast EMA crossed above Slow EMA with Mid EMA confirmation");
-        Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
-        Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
-        Print("MACD Values  - Main:", macdMainCurr, " Signal:", macdSignalCurr);
-        
-        // Reset entry sequence
-        entryPositions = 0;
-        inEntrySequence = true;
-        tradeEntryBar = currentBar;
+        // Check for existing sell positions first
+        if(!HasOpenPositions(ORDER_TYPE_SELL))
+        {
+            Print("=== BULLISH SIGNAL DETECTED ===");
+            Print("Trigger: Fast EMA crossed above Slow EMA with Mid EMA confirmation");
+            Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
+            Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
+            Print("MACD Values  - Main:", macdMainCurr, " Signal:", macdSignalCurr);
+            Print("Trade Direction changed from ", tradeDirection, " to 1 (Buy)");
+            
+            // Reset entry sequence and set direction
+            entryPositions = 0;
+            inEntrySequence = true;
+            tradeEntryBar = currentBar;
+            tradeDirection = 1; // Set direction to Buy
+            
+            // Since we took a bullish signal, ignore any bearish signal on this bar
+            isBearishCross = false;
+        }
+        else
+        {
+            Print("=== BULLISH SIGNAL IGNORED ===");
+            Print("Reason: Existing SELL positions are still open");
+        }
     }
     
-    //--- Handle Bearish Crossover Entry
-    if(isBearishCross)
+    if(isBearishCross && tradeDirection >= 0)  // Only take bearish signal if not already in a sell position
     {
-        Print("=== BEARISH SIGNAL DETECTED ===");
-        Print("Trigger: Fast EMA crossed below Slow EMA with Mid EMA confirmation");
-        Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
-        Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
-        Print("MACD Values  - Main:", macdMainCurr, " Signal:", macdSignalCurr);
-        
-        // Reset entry sequence
-        entryPositions = 0;
-        inEntrySequence = true;
-        tradeEntryBar = currentBar;
+        // Check for existing buy positions first
+        if(!HasOpenPositions(ORDER_TYPE_BUY))
+        {
+            Print("=== BEARISH SIGNAL DETECTED ===");
+            Print("Trigger: Fast EMA crossed below Slow EMA with Mid EMA confirmation");
+            Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
+            Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
+            Print("MACD Values  - Main:", macdMainCurr, " Signal:", macdSignalCurr);
+            Print("Trade Direction changed from ", tradeDirection, " to -1 (Sell)");
+            
+            // Reset entry sequence and set direction
+            entryPositions = 0;
+            inEntrySequence = true;
+            tradeEntryBar = currentBar;
+            tradeDirection = -1; // Set direction to Sell
+        }
+        else
+        {
+            Print("=== BEARISH SIGNAL IGNORED ===");
+            Print("Reason: Existing BUY positions are still open");
+        }
     }
     
     //--- Check for Additional Entry Confirmations
     if(inEntrySequence && entryPositions < 3)
     {
+        // Determine order type based on trade direction
+        ENUM_ORDER_TYPE orderType;
+        if(tradeDirection == 1)
+            orderType = ORDER_TYPE_BUY;
+        else if(tradeDirection == -1)
+            orderType = ORDER_TYPE_SELL;
+        else
+        {
+            Print("=== ENTRY SEQUENCE CANCELLED ===");
+            Print("Reason: No valid trade direction set");
+            inEntrySequence = false;
+            return;
+        }
+        
         bool shouldEnter = false;
         string entryReason = "";
-        ENUM_ORDER_TYPE orderType = (emaFastCurr > emaSlowCurr) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
         
         // First position: Initial crossover with multiple confirmations
         if(entryPositions == 0)
@@ -167,21 +205,23 @@ void OnTick()
             if(orderType == ORDER_TYPE_BUY)
             {
                 if(emaFastCurr > emaMidCurr && // Fast above Mid
-                   (emaFastCurr > emaSlowCurr) && // Fast above Slow (changed)
-                   macdMainCurr > macdSignalCurr) // MACD above Signal
+                   emaMidCurr > emaSlowCurr && // Mid above Slow
+                   macdMainCurr > macdSignalCurr && // MACD above Signal
+                   macdMainCurr > macdMainPrev) // MACD increasing
                 {
                     shouldEnter = true;
-                    entryReason = "Initial Entry - Bullish Setup (Fast EMA leading, MACD momentum positive)";
+                    entryReason = "Initial Entry - Strong Bullish Setup (EMAs aligned, MACD momentum positive)";
                 }
             }
             else // SELL
             {
                 if(emaFastCurr < emaMidCurr && // Fast below Mid
-                   (emaFastCurr < emaSlowCurr) && // Fast below Slow (changed)
-                   macdMainCurr < macdSignalCurr) // MACD below Signal
+                   emaMidCurr < emaSlowCurr && // Mid below Slow
+                   macdMainCurr < macdSignalCurr && // MACD below Signal
+                   macdMainCurr < macdMainPrev) // MACD decreasing
                 {
                     shouldEnter = true;
-                    entryReason = "Initial Entry - Bearish Setup (Fast EMA leading, MACD momentum negative)";
+                    entryReason = "Initial Entry - Strong Bearish Setup (EMAs aligned, MACD momentum negative)";
                 }
             }
         }
@@ -190,29 +230,35 @@ void OnTick()
         {
             double currentClose = iClose(_Symbol, PERIOD_H2, 0);
             double previousClose = iClose(_Symbol, PERIOD_H2, 1);
+            double previousHigh = iHigh(_Symbol, PERIOD_H2, 1);
+            double previousLow = iLow(_Symbol, PERIOD_H2, 1);
             
             if(orderType == ORDER_TYPE_BUY)
             {
-                if(currentClose > previousClose && // Current bar is up
-                   macdMainCurr > macdMainPrev && // MACD increasing
-                   emaFastCurr > emaMidCurr) // EMAs still aligned
+                if(currentClose > previousHigh && // Breaking previous high
+                   macdMainCurr > 0 && // MACD in positive territory
+                   macdMainCurr > macdMainPrev && // MACD still increasing
+                   emaFastCurr > emaMidCurr && // EMAs still aligned
+                   emaMidCurr > emaSlowCurr)
                 {
                     shouldEnter = true;
-                    entryReason = "Second Entry - Bullish Continuation (Price up, MACD strengthening)";
+                    entryReason = "Second Entry - Bullish Breakout (Price above prev high, Strong MACD)";
                 }
             }
             else // SELL
             {
-                if(currentClose < previousClose && // Current bar is down
-                   macdMainCurr < macdMainPrev && // MACD decreasing
-                   emaFastCurr < emaMidCurr) // EMAs still aligned
+                if(currentClose < previousLow && // Breaking previous low
+                   macdMainCurr < 0 && // MACD in negative territory
+                   macdMainCurr < macdMainPrev && // MACD still decreasing
+                   emaFastCurr < emaMidCurr && // EMAs still aligned
+                   emaMidCurr < emaSlowCurr)
                 {
                     shouldEnter = true;
-                    entryReason = "Second Entry - Bearish Continuation (Price down, MACD strengthening)";
+                    entryReason = "Second Entry - Bearish Breakout (Price below prev low, Strong MACD)";
                 }
             }
         }
-        // Third position: Strong trend confirmation
+        // Third position: Strong trend continuation with volume
         else if(entryPositions == 2)
         {
             double currentClose = iClose(_Symbol, PERIOD_H2, 0);
@@ -222,20 +268,26 @@ void OnTick()
             {
                 if(currentClose > previousClose && // Price still moving up
                    emaFastCurr > emaMidCurr && // EMAs still aligned
-                   macdMainCurr > macdSignalCurr) // MACD confirming trend
+                   emaMidCurr > emaSlowCurr &&
+                   macdMainCurr > macdMainPrev && // MACD still increasing
+                   macdMainCurr > macdSignalCurr && // MACD above signal
+                   fabs(macdMainCurr) > fabs(macdMainPrev)) // MACD momentum increasing
                 {
                     shouldEnter = true;
-                    entryReason = "Third Entry - Bullish Trend Confirmation (Price up, EMAs and MACD aligned)";
+                    entryReason = "Third Entry - Strong Bullish Continuation (Price up, EMAs aligned, MACD strength)";
                 }
             }
             else // SELL
             {
                 if(currentClose < previousClose && // Price still moving down
                    emaFastCurr < emaMidCurr && // EMAs still aligned
-                   macdMainCurr < macdSignalCurr) // MACD confirming trend
+                   emaMidCurr < emaSlowCurr &&
+                   macdMainCurr < macdMainPrev && // MACD still decreasing
+                   macdMainCurr < macdSignalCurr && // MACD below signal
+                   fabs(macdMainCurr) > fabs(macdMainPrev)) // MACD momentum increasing
                 {
                     shouldEnter = true;
-                    entryReason = "Third Entry - Bearish Trend Confirmation (Price down, EMAs and MACD aligned)";
+                    entryReason = "Third Entry - Strong Bearish Continuation (Price down, EMAs aligned, MACD strength)";
                 }
             }
         }
@@ -243,16 +295,10 @@ void OnTick()
         if(shouldEnter)
         {
             Print("=== ENTRY CONFIRMATION #", (entryPositions + 1), " ===");
+            Print("Direction:", (orderType == ORDER_TYPE_BUY ? "BUY" : "SELL"));
             Print("Reason:", entryReason);
             Print("EMA Values - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
             Print("MACD Values - Main:", macdMainCurr, " Signal:", macdSignalCurr);
-            if(entryPositions > 0)
-            {
-                Print("Price Action - Current Close:", iClose(_Symbol, PERIOD_H2, 0),
-                      " Previous Close:", iClose(_Symbol, PERIOD_H2, 1),
-                      " Previous High:", iHigh(_Symbol, PERIOD_H2, 1),
-                      " Previous Low:", iLow(_Symbol, PERIOD_H2, 1));
-            }
             
             double stopLossPrice = GetStopLossPrice(orderType == ORDER_TYPE_BUY);
             double riskPerTrade = AccountInfoDouble(ACCOUNT_BALANCE) * (RiskPercentage / 100.0);
@@ -310,7 +356,15 @@ void OnTick()
         orderTypeToClose = (buyCount > sellCount) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
         
         if(CloseOnePosition(orderTypeToClose))
+        {
             partialClosures++;
+            // Update trade direction if all positions are closed
+            if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+            {
+                tradeDirection = 0; // Reset direction when no positions are open
+                Print("All positions closed - Trade direction reset to 0");
+            }
+        }
     }
 }
 
@@ -419,6 +473,16 @@ bool CloseOnePosition(ENUM_ORDER_TYPE orderType)
                 {
                     Print("Closed position #", ticket, " successfully.");
                     closed = true;
+                    
+                    // Check if this was the last position
+                    if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+                    {
+                        tradeDirection = 0;
+                        inEntrySequence = false;
+                        entryPositions = 0;
+                        Print("=== TRADE DIRECTION RESET ===");
+                        Print("Reason: All positions have been closed");
+                    }
                     break; // Close only one position
                 }
                 else
@@ -466,6 +530,17 @@ bool CloseAllPositions(ENUM_ORDER_TYPE orderType)
             }
         }
     }
+    
+    // After closing all positions of the specified type, check if any positions remain
+    if(allClosed && !HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+    {
+        tradeDirection = 0;
+        inEntrySequence = false;
+        entryPositions = 0;
+        Print("=== TRADE DIRECTION RESET ===");
+        Print("Reason: All positions have been closed");
+    }
+    
     return allClosed;
 }
 
@@ -607,7 +682,17 @@ void CheckTakeProfit()
         if(trade.PositionClose(bestTicket))
         {
             Print("Successfully closed position #", bestTicket);
-            partialClosures++; // Track this as a partial closure
+            partialClosures++;
+            
+            // Check if this was the last position
+            if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+            {
+                tradeDirection = 0;
+                inEntrySequence = false;
+                entryPositions = 0;
+                Print("=== TRADE DIRECTION RESET ===");
+                Print("Reason: All positions have been closed after take profit");
+            }
         }
     }
 }
