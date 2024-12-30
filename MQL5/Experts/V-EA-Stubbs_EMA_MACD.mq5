@@ -18,7 +18,7 @@ input double RiskPercentage  = 1.5;   // Risk Percentage per Trade (1%)
 input double SLBufferPips    = 2.0;   // Stop-Loss Buffer in Pips
 input double TPPips          = 500.0;  // Take Profit in Pips
 input double MACDThreshold   = 0.0002; // Minimum MACD difference for signal
-input int    EntryTimeoutBars = 8;    // Bars to wait for entry sequence
+input int    EntryTimeoutBars = 12;    // Bars to wait for entry sequence
 
 //--- Global Variables
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
@@ -330,12 +330,12 @@ void OnTick()
             }
         }
         
-        // If we couldn't get all positions within 6 bars, reset the sequence
-        if(iTime(_Symbol, PERIOD_H2, 0) > tradeEntryBar + (6 * PeriodSeconds(PERIOD_H2)))
+        // Check for entry sequence timeout using EntryTimeoutBars parameter
+        if(iTime(_Symbol, PERIOD_H2, 0) > tradeEntryBar + (EntryTimeoutBars * PeriodSeconds(PERIOD_H2)))
         {
             inEntrySequence = false;
             Print("=== ENTRY SEQUENCE TIMEOUT ===");
-            Print("Could not find confirmation for all entries within 6 bars");
+            Print("Could not find confirmation for all entries within ", EntryTimeoutBars, " bars");
         }
     }
     
