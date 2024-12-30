@@ -14,11 +14,12 @@ input int    EMAPeriodSlow   = 30;    // Slow EMA Period
 input int    MACDFast        = 12;    // MACD Fast EMA Period
 input int    MACDSlow        = 26;    // MACD Slow EMA Period
 input int    MACDSignal      = 9;     // MACD Signal SMA Period
-input double RiskPercentage  = 1.5;   // Risk Percentage per Trade (1%)
+input double RiskPercentage  = 5;   // Risk Percentage per Trade (1%)
 input double SLBufferPips    = 2.0;   // Stop-Loss Buffer in Pips
 input double TPPips          = 500.0;  // Take Profit in Pips
 input double MACDThreshold   = 0.0002; // Minimum MACD difference for signal
 input int    EntryTimeoutBars = 12;    // Bars to wait for entry sequence
+input double MinDrawdownPips = 250.0;  // Minimum drawdown in pips before checking exit conditions
 
 //--- Global Variables
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
@@ -245,7 +246,7 @@ void OnTick()
             
             if(orderType == ORDER_TYPE_BUY)
             {
-                if(currentClose > previousHigh && // Breaking previous high
+                if(currentClose > previousHigh * 0.99 && // Allowing a slight buffer below previous high
                    macdMainCurr > 0 && // MACD in positive territory
                    macdMainCurr > macdMainPrev && // MACD still increasing
                    emaFastCurr > emaMidCurr && // EMAs still aligned
@@ -257,7 +258,7 @@ void OnTick()
             }
             else // SELL
             {
-                if(currentClose < previousLow && // Breaking previous low
+                if(currentClose < previousLow * 1.01 && // Allowing a slight buffer above previous low
                    macdMainCurr < 0 && // MACD in negative territory
                    macdMainCurr < macdMainPrev && // MACD still decreasing
                    emaFastCurr < emaMidCurr && // EMAs still aligned
@@ -276,12 +277,11 @@ void OnTick()
             
             if(orderType == ORDER_TYPE_BUY)
             {
-                if(currentClose > previousClose && // Price still moving up
+                if(currentClose > previousClose * 1.01 && // Allowing a slight increase from previous close
                    emaFastCurr > emaMidCurr && // EMAs still aligned
                    emaMidCurr > emaSlowCurr &&
                    macdMainCurr > macdMainPrev && // MACD still increasing
-                   macdMainCurr > macdSignalCurr && // MACD above signal
-                   fabs(macdMainCurr) > fabs(macdMainPrev)) // MACD momentum increasing
+                   macdMainCurr > macdSignalCurr) // MACD above signal
                 {
                     shouldEnter = true;
                     entryReason = "Third Entry - Strong Bullish Continuation (Price up, EMAs aligned, MACD strength)";
@@ -289,12 +289,11 @@ void OnTick()
             }
             else // SELL
             {
-                if(currentClose < previousClose && // Price still moving down
+                if(currentClose < previousClose * 0.99 && // Allowing a slight decrease from previous close
                    emaFastCurr < emaMidCurr && // EMAs still aligned
                    emaMidCurr < emaSlowCurr &&
                    macdMainCurr < macdMainPrev && // MACD still decreasing
-                   macdMainCurr < macdSignalCurr && // MACD below signal
-                   fabs(macdMainCurr) > fabs(macdMainPrev)) // MACD momentum increasing
+                   macdMainCurr < macdSignalCurr) // MACD below signal
                 {
                     shouldEnter = true;
                     entryReason = "Third Entry - Strong Bearish Continuation (Price down, EMAs aligned, MACD strength)";
@@ -640,19 +639,42 @@ double GetStopLossPrice(bool isBuy)
 }
 
 //+------------------------------------------------------------------+
-//| Check positions for take profit                                  |
+//| Check for strong momentum change exit                             |
+//+------------------------------------------------------------------+
+bool IsStrongMomentumChange(double macdMainPrev, double macdSignalPrev, double macdMainCurr, double macdSignalCurr)
+{
+    // Check if the difference between MACD and Signal is significant enough
+    if(MathAbs(macdMainCurr - macdSignalCurr) < MACDThreshold * 2) // Using 2x threshold for stronger signal
+        return false;
+        
+    // Check for strong bullish momentum change (for exiting shorts)
+    if(macdMainPrev <= macdSignalPrev && macdMainCurr > macdSignalCurr &&
+       macdMainCurr > macdMainPrev * 1.5) // Requiring 50% increase in MACD
+        return true;
+    
+    // Check for strong bearish momentum change (for exiting longs)
+    if(macdMainPrev >= macdSignalPrev && macdMainCurr < macdSignalCurr &&
+       macdMainCurr < macdMainPrev * 1.5) // Requiring 50% decrease in MACD
+        return true;
+    
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check positions for take profit or momentum exit                  |
 //+------------------------------------------------------------------+
 void CheckTakeProfit()
 {
     int totalPositions = PositionsTotal();
     double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
     double maxProfitPips = 0;
+    double maxLossPips = 0;
     ulong bestTicket = 0;
     ENUM_POSITION_TYPE bestPosType = POSITION_TYPE_BUY; // Default value
     double bestOpenPrice = 0;
     double bestCurrentPrice = 0;
     
-    // First find the position with the highest profit
+    // First find the position with the highest profit or significant loss
     for(int i = totalPositions - 1; i >= 0; i--)
     {
         ulong ticket = PositionGetTicket(i);
@@ -671,7 +693,7 @@ void CheckTakeProfit()
             else if(posType == POSITION_TYPE_SELL)
                 profitPips = (openPrice - currentPrice) / point;
             
-            // Track the position with highest profit
+            // Track position with highest profit
             if(profitPips > maxProfitPips)
             {
                 maxProfitPips = profitPips;
@@ -680,10 +702,37 @@ void CheckTakeProfit()
                 bestOpenPrice = openPrice;
                 bestCurrentPrice = currentPrice;
             }
+            
+            // Track maximum loss
+            if(profitPips < maxLossPips)
+                maxLossPips = profitPips;
         }
     }
     
-    // If we found a position exceeding take profit, close it
+    // If we have significant drawdown, check for momentum-based exit
+    if(maxLossPips <= -MinDrawdownPips)
+    {
+        double macdMainPrev = GetIndicatorValue(handleMacd, 1, 0);
+        double macdSignalPrev = GetIndicatorValue(handleMacd, 1, 1);
+        double macdMainCurr = GetIndicatorValue(handleMacd, 0, 0);
+        double macdSignalCurr = GetIndicatorValue(handleMacd, 0, 1);
+        
+        if(IsStrongMomentumChange(macdMainPrev, macdSignalPrev, macdMainCurr, macdSignalCurr))
+        {
+            Print("=== MOMENTUM EXIT SIGNAL DETECTED ===");
+            Print("Trigger: Strong momentum change after significant drawdown");
+            Print("Maximum Loss in Pips: ", maxLossPips);
+            Print("Previous Bar - MACD:", macdMainPrev, " Signal:", macdSignalPrev);
+            Print("Current Bar  - MACD:", macdMainCurr, " Signal:", macdSignalCurr);
+            
+            // Close all positions when momentum changes significantly
+            CloseAllPositions(ORDER_TYPE_BUY);
+            CloseAllPositions(ORDER_TYPE_SELL);
+            return;
+        }
+    }
+    
+    // Check for take profit exit
     if(maxProfitPips >= TPPips && bestTicket > 0)
     {
         Print("=== TAKE PROFIT EXIT TRIGGERED ===");
