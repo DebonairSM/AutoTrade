@@ -1,29 +1,34 @@
 //+------------------------------------------------------------------+
-//|                                                      StubbsEA.mq5 |
+//|                                                      StubbsEA.mq4 |
 //|                        Your Name or Company                       |
 //|                                                                  |
 //+------------------------------------------------------------------+
 #property strict
 
-#include <Trade\Trade.mqh>
+// Define H2 timeframe as 120 minutes (if available)
+// If not available, consider using PERIOD_H1 and managing two bars as one
+#define PERIOD_H2 120
+
+//--- Helper function to convert timeframe to seconds
+int PERIOD_SECONDS(int period)
+{
+    return period * 60;  // Convert minutes to seconds
+}
 
 //--- Input Parameters
-input int    EMAPeriodFast   = 5;     // Fast EMA Period
-input int    EMAPeriodMid    = 25;    // Mid EMA Period
-input int    EMAPeriodSlow   = 30;    // Slow EMA Period
-input int    MACDFast        = 12;    // MACD Fast EMA Period
-input int    MACDSlow        = 26;    // MACD Slow EMA Period
-input int    MACDSignal      = 9;     // MACD Signal SMA Period
-input double RiskPercentage  = 5;     // Risk Percentage per Trade
-input int    ATRPeriod       = 14;    // ATR Period
-input double ATRMultiplierSL = 2.0;   // ATR Multiplier for Stop Loss
-input double ATRMultiplierTP = 6.0;   // ATR Multiplier for Take Profit
-input double MACDThreshold   = 0.0002; // Minimum MACD difference for signal
-input int    EntryTimeoutBars = 12;    // Bars to wait for entry sequence
-input double SLBufferPips    = 2.0;   // Stop-Loss Buffer in Pips
-//--- Trading Time Parameters
-input int    NoTradeStartHour = 1;     // No Trading Start Hour 
-input int    NoTradeEndHour   = 9;     // No Trading End Hour
+extern int    EMAPeriodFast     = 5;     // Fast EMA Period
+extern int    EMAPeriodMid      = 25;    // Mid EMA Period
+extern int    EMAPeriodSlow     = 30;    // Slow EMA Period
+extern int    MACDFast          = 12;    // MACD Fast EMA Period
+extern int    MACDSlow          = 26;    // MACD Slow EMA Period
+extern int    MACDSignal        = 9;     // MACD Signal SMA Period
+extern double RiskPercentage    = 45;     // Risk Percentage per Trade (5%)
+extern int    ATRPeriod         = 17;    // ATR Period
+extern double ATRMultiplierSL   = 4.4;   // ATR Multiplier for Stop Loss
+extern double ATRMultiplierTP   = 7.2;   // ATR Multiplier for Take Profit (3:1 ratio)
+extern double MACDThreshold     = 0.0002; // Minimum MACD difference for signal
+extern int    EntryTimeoutBars  = 8;    // Bars to wait for entry sequence
+extern double SLBufferPips      = 2.0;   // Stop-Loss Buffer in Pips
 
 //--- Global Variables
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
@@ -33,40 +38,17 @@ datetime     lastEntryBar      = 0;       // Tracks the bar time of the last suc
 int          partialClosures   = 0;       // Tracks the number of partial closures done
 int          entryPositions    = 0;       // Tracks how many positions we've entered
 bool         inEntrySequence   = false;   // Whether we're in the middle of entering positions
-
-// Indicator handles
-int          handleEmaFast;
-int          handleEmaMid;
-int          handleEmaSlow;
-int          handleMacd;
-int          handleATR;      // ATR indicator handle
-int          tradeDirection = 0;   // 0 = No position, 1 = Buy, -1 = Sell
-
-// Trade object
-CTrade      trade;
+int          tradeDirection    = 0;       // 0 = No position, 1 = Buy, -1 = Sell
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
-int OnInit()
+int init()
 {
-    // Initialize EMA indicators
-    handleEmaFast = iMA(_Symbol, PERIOD_H2, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE);
-    handleEmaMid  = iMA(_Symbol, PERIOD_H2, EMAPeriodMid,  0, MODE_EMA, PRICE_CLOSE);
-    handleEmaSlow = iMA(_Symbol, PERIOD_H2, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE);
-    
-    // Initialize MACD indicator
-    handleMacd = iMACD(_Symbol, PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE);
-    
-    // Initialize ATR indicator
-    handleATR = iATR(_Symbol, PERIOD_H2, ATRPeriod);
-    
-    // Check if indicators are initialized successfully
-    if(handleEmaFast == INVALID_HANDLE || handleEmaMid == INVALID_HANDLE || 
-       handleEmaSlow == INVALID_HANDLE || handleMacd == INVALID_HANDLE || 
-       handleATR == INVALID_HANDLE)
+    // Check if there are enough bars to initialize
+    if(Bars < EMAPeriodSlow + 1)
     {
-        Print("Error initializing indicators.");
+        Print("Not enough bars to initialize EA.");
         return(INIT_FAILED);
     }
     
@@ -77,52 +59,46 @@ int OnInit()
 //+------------------------------------------------------------------+
 //| Expert deinitialization function                                 |
 //+------------------------------------------------------------------+
-void OnDeinit(const int reason)
+int deinit()
 {
-    // Release indicator handles
-    IndicatorRelease(handleEmaFast);
-    IndicatorRelease(handleEmaMid);
-    IndicatorRelease(handleEmaSlow);
-    IndicatorRelease(handleMacd);
-    IndicatorRelease(handleATR);
-    
+    // No specific deinitialization required in MQL4
     Print("EA Deinitialized.");
+    return(0);
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                             |
+//| Custom function to compare two doubles with a tolerance          |
 //+------------------------------------------------------------------+
-void OnTick()
+int DoubleCompare(double a, double b, double tol = 1e-10)
 {
-    // Check if it's Sunday - never trade on Sundays
-    MqlDateTime dt_struct;
-    TimeToStruct(TimeCurrent(), dt_struct);
-    if(dt_struct.day_of_week == 0)  // Sunday
-        return;
-        
-    // Check if current time is within no-trade hours (1 AM - 9 AM)
-    int currentHour = dt_struct.hour;
-    if(currentHour >= NoTradeStartHour && currentHour < NoTradeEndHour)
-        return;
-        
-    // Adjust risk for December
-    double currentRisk = RiskPercentage;
-    if(dt_struct.mon == 12)  // December
-        currentRisk *= 2;  // Double the risk
+    if(MathAbs(a - b) < tol)
+        return 0;
+    else if(a > b)
+        return 1;
+    else
+        return -1;
+}
+
+//+------------------------------------------------------------------+
+//| Expert start function (replaces OnTick in MQL4)                  |
+//+------------------------------------------------------------------+
+int start()
+{
+    // The start function is called on every tick
     
-    // Check for take profit on existing positions first
+    // Check for take profit or stop loss on existing positions first
     CheckTakeProfit();
     
     //--- Check for new 2-hour bar
-    datetime currentBar = iTime(_Symbol, PERIOD_H2, 0);
+    datetime currentBar = iTime(Symbol(), PERIOD_H2, 0);
     if(currentBar <= lastBarTime)
-        return; // No new bar yet
+        return(0); // No new bar yet
     
-    // Once we detect a new bar, update lastBarTime
+    // Once a new bar is detected, update lastBarTime
     lastBarTime = currentBar;
     
     // Check for entry sequence timeout
-    if(inEntrySequence && currentBar > tradeEntryBar + (EntryTimeoutBars * PeriodSeconds(PERIOD_H2)))
+    if(inEntrySequence && currentBar > tradeEntryBar + (EntryTimeoutBars * PERIOD_SECONDS(PERIOD_H2)))
     {
         inEntrySequence = false;
         Print("=== ENTRY SEQUENCE TIMEOUT ===");
@@ -130,19 +106,27 @@ void OnTick()
     }
     
     //--- Retrieve EMA values for the previous and current closed bars
-    double emaFastPrev = GetIndicatorValue(handleEmaFast, 1);
-    double emaMidPrev  = GetIndicatorValue(handleEmaMid,  1);
-    double emaSlowPrev = GetIndicatorValue(handleEmaSlow, 1);
+    double emaFastPrev = iMA(Symbol(), PERIOD_H2, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE, 1);
+    double emaMidPrev  = iMA(Symbol(), PERIOD_H2, EMAPeriodMid,  0, MODE_EMA, PRICE_CLOSE, 1);
+    double emaSlowPrev = iMA(Symbol(), PERIOD_H2, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE, 1);
     
-    double emaFastCurr = GetIndicatorValue(handleEmaFast, 0);
-    double emaMidCurr  = GetIndicatorValue(handleEmaMid,  0);
-    double emaSlowCurr = GetIndicatorValue(handleEmaSlow, 0);
+    double emaFastCurr = iMA(Symbol(), PERIOD_H2, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE, 0);
+    double emaMidCurr  = iMA(Symbol(), PERIOD_H2, EMAPeriodMid,  0, MODE_EMA, PRICE_CLOSE, 0);
+    double emaSlowCurr = iMA(Symbol(), PERIOD_H2, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE, 0);
     
     //--- Retrieve MACD values for the previous and current closed bars
-    double macdMainPrev   = GetIndicatorValue(handleMacd, 1, 0); // MACD Main Line
-    double macdSignalPrev = GetIndicatorValue(handleMacd, 1, 1); // MACD Signal Line
-    double macdMainCurr   = GetIndicatorValue(handleMacd, 0, 0);
-    double macdSignalCurr = GetIndicatorValue(handleMacd, 0, 1);
+    double macdMainPrev   = iMACD(Symbol(), PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_MAIN, 1);
+    double macdSignalPrev = iMACD(Symbol(), PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_SIGNAL, 1);
+    double macdMainCurr   = iMACD(Symbol(), PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_MAIN, 0);
+    double macdSignalCurr = iMACD(Symbol(), PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_SIGNAL, 0);
+    
+    //--- Validate MACD values
+    if(DoubleCompare(macdMainPrev, 0.0) == 0 || DoubleCompare(macdSignalPrev, 0.0) == 0 ||
+       DoubleCompare(macdMainCurr, 0.0) == 0 || DoubleCompare(macdSignalCurr, 0.0) == 0)
+    {
+        Print("Invalid MACD values retrieved. Skipping this tick.");
+        return(0);
+    }
     
     //--- Check for EMA Crossovers
     bool isBullishCross = false;
@@ -168,7 +152,7 @@ void OnTick()
     if(isBullishCross && tradeDirection <= 0)  // Only take bullish signal if not already in a buy position
     {
         // Check for existing sell positions first
-        if(!HasOpenPositions(ORDER_TYPE_SELL))
+        if(!HasOpenPositions(OP_SELL))
         {
             Print("=== BULLISH SIGNAL DETECTED ===");
             Print("Trigger: Fast EMA crossed above Slow EMA with Mid EMA confirmation");
@@ -183,7 +167,7 @@ void OnTick()
             tradeEntryBar = currentBar;
             tradeDirection = 1; // Set direction to Buy
             
-            // Since we took a bullish signal, ignore any bearish signal on this bar
+            // Since a bullish signal was taken, ignore any bearish signal on this bar
             isBearishCross = false;
         }
         else
@@ -196,7 +180,7 @@ void OnTick()
     if(isBearishCross && tradeDirection >= 0)  // Only take bearish signal if not already in a sell position
     {
         // Check for existing buy positions first
-        if(!HasOpenPositions(ORDER_TYPE_BUY))
+        if(!HasOpenPositions(OP_BUY))
         {
             Print("=== BEARISH SIGNAL DETECTED ===");
             Print("Trigger: Fast EMA crossed below Slow EMA with Mid EMA confirmation");
@@ -222,17 +206,17 @@ void OnTick()
     if(inEntrySequence && entryPositions < 3)
     {
         // Determine order type based on trade direction
-        ENUM_ORDER_TYPE orderType;
+        int orderType;
         if(tradeDirection == 1)
-            orderType = ORDER_TYPE_BUY;
+            orderType = OP_BUY;
         else if(tradeDirection == -1)
-            orderType = ORDER_TYPE_SELL;
+            orderType = OP_SELL;
         else
         {
             Print("=== ENTRY SEQUENCE CANCELLED ===");
             Print("Reason: No valid trade direction set");
             inEntrySequence = false;
-            return;
+            return(0);
         }
         
         bool shouldEnter = false;
@@ -241,7 +225,7 @@ void OnTick()
         // First position: Initial crossover with multiple confirmations
         if(entryPositions == 0)
         {
-            if(orderType == ORDER_TYPE_BUY)
+            if(orderType == OP_BUY)
             {
                 if(emaFastCurr > emaMidCurr && // Fast above Mid
                    emaMidCurr > emaSlowCurr && // Mid above Slow
@@ -267,12 +251,12 @@ void OnTick()
         // Second position: Price action and MACD confirmation
         else if(entryPositions == 1)
         {
-            double currentClose = iClose(_Symbol, PERIOD_H2, 0);
-            double previousClose = iClose(_Symbol, PERIOD_H2, 1);
-            double previousHigh = iHigh(_Symbol, PERIOD_H2, 1);
-            double previousLow = iLow(_Symbol, PERIOD_H2, 1);
+            double currentClose = iClose(Symbol(), PERIOD_H2, 0);
+            double previousClose = iClose(Symbol(), PERIOD_H2, 1);
+            double previousHigh = iHigh(Symbol(), PERIOD_H2, 1);
+            double previousLow = iLow(Symbol(), PERIOD_H2, 1);
             
-            if(orderType == ORDER_TYPE_BUY)
+            if(orderType == OP_BUY)
             {
                 if(currentClose > previousHigh * 0.99 && // Allowing a slight buffer below previous high
                    macdMainCurr > 0 && // MACD in positive territory
@@ -300,28 +284,29 @@ void OnTick()
         // Third position: Strong trend continuation with volume OR drawdown entry
         else if(entryPositions == 2)
         {
-            double currentClose = iClose(_Symbol, PERIOD_H2, 0);
-            double previousClose = iClose(_Symbol, PERIOD_H2, 1);
-            double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+            double currentClose = iClose(Symbol(), PERIOD_H2, 0);
+            double previousClose = iClose(Symbol(), PERIOD_H2, 1);
+            double point = Point;
             
             // Calculate drawdown from the highest/lowest point since trade entry
             double maxDrawdown = 0;
             double highestPrice = currentClose;
             double lowestPrice = currentClose;
             
-            for(int i = 0; i < 100; i++) // Look back up to 100 bars
+            int lookBackBars = 100; // Look back up to 100 bars
+            for(int iBar = 0; iBar < lookBackBars; iBar++)
             {
-                datetime barTime = iTime(_Symbol, PERIOD_H2, i);
+                datetime barTime = iTime(Symbol(), PERIOD_H2, iBar);
                 if(barTime < tradeEntryBar) break;
                 
-                double high = iHigh(_Symbol, PERIOD_H2, i);
-                double low = iLow(_Symbol, PERIOD_H2, i);
+                double high = iHigh(Symbol(), PERIOD_H2, iBar);
+                double low = iLow(Symbol(), PERIOD_H2, iBar);
                 
                 if(high > highestPrice) highestPrice = high;
                 if(low < lowestPrice) lowestPrice = low;
             }
             
-            if(orderType == ORDER_TYPE_BUY)
+            if(orderType == OP_BUY)
             {
                 maxDrawdown = (highestPrice - currentClose) / point;
                 
@@ -336,9 +321,10 @@ void OnTick()
                     macdMainCurr > macdSignalCurr)) // Maintain positive momentum
                 {
                     shouldEnter = true;
-                    entryReason = maxDrawdown >= 150.0 ? 
-                        StringFormat("Third Entry - Bullish Drawdown Entry (%.1f pips drawdown, EMAs aligned, positive momentum)", maxDrawdown) :
-                        "Third Entry - Strong Bullish Continuation (Price up, EMAs aligned, MACD strength)";
+                    if(maxDrawdown >= 150.0)
+                        entryReason = StringFormat("Third Entry - Bullish Drawdown Entry (%.1f pips drawdown, EMAs aligned, positive momentum)", maxDrawdown);
+                    else
+                        entryReason = "Third Entry - Strong Bullish Continuation (Price up, EMAs aligned, MACD strength)";
                 }
             }
             else // SELL
@@ -356,9 +342,10 @@ void OnTick()
                     macdMainCurr < macdSignalCurr)) // Maintain negative momentum
                 {
                     shouldEnter = true;
-                    entryReason = maxDrawdown >= 150.0 ? 
-                        StringFormat("Third Entry - Bearish Drawdown Entry (%.1f pips drawdown, EMAs aligned, negative momentum)", maxDrawdown) :
-                        "Third Entry - Strong Bearish Continuation (Price down, EMAs aligned, MACD strength)";
+                    if(maxDrawdown >= 150.0)
+                        entryReason = StringFormat("Third Entry - Bearish Drawdown Entry (%.1f pips drawdown, EMAs aligned, negative momentum)", maxDrawdown);
+                    else
+                        entryReason = "Third Entry - Strong Bearish Continuation (Price down, EMAs aligned, MACD strength)";
                 }
             }
         }
@@ -366,35 +353,35 @@ void OnTick()
         if(shouldEnter)
         {
             Print("=== ENTRY CONFIRMATION #", (entryPositions + 1), " ===");
-            Print("Direction:", (orderType == ORDER_TYPE_BUY ? "BUY" : "SELL"));
+            Print("Direction:", (orderType == OP_BUY ? "BUY" : "SELL"));
             Print("Reason:", entryReason);
             Print("EMA Values - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
             Print("MACD Values - Main:", macdMainCurr, " Signal:", macdSignalCurr);
             
-            double stopLossPrice = GetStopLossPrice(orderType == ORDER_TYPE_BUY);
-            double riskPerTrade = AccountInfoDouble(ACCOUNT_BALANCE) * (RiskPercentage / 100.0);
+            double stopLossPrice = GetStopLossPrice(orderType == OP_BUY);
+            double riskPerTrade = AccountBalance() * (RiskPercentage / 100.0);
             double pipsDistance;
             
-            if(orderType == ORDER_TYPE_BUY)
-                pipsDistance = fabs(SymbolInfoDouble(_Symbol, SYMBOL_ASK) - stopLossPrice) / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+            if(orderType == OP_BUY)
+                pipsDistance = MathAbs(Ask - stopLossPrice) / Point;
             else
-                pipsDistance = fabs(stopLossPrice - SymbolInfoDouble(_Symbol, SYMBOL_BID)) / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+                pipsDistance = MathAbs(stopLossPrice - Bid) / Point;
             
             double lotSize = CalculateLotSize(riskPerTrade, pipsDistance);
             if(lotSize > 0.0)
             {
                 if(OpenTrade(orderType, lotSize, stopLossPrice, 0, 
-                            StringFormat("%s Entry #%d", orderType == ORDER_TYPE_BUY ? "Bullish" : "Bearish", entryPositions + 1)))
+                            StringFormat("%s Entry #%d", (orderType == OP_BUY ? "Bullish" : "Bearish"), entryPositions + 1)))
                 {
                     entryPositions++;
-                    lastEntryBar = iTime(_Symbol, PERIOD_H2, 0); // Update last entry time after successful entry
+                    lastEntryBar = iTime(Symbol(), PERIOD_H2, 0); // Update last entry time after successful entry
                 }
             }
         }
         
         // Check for entry sequence timeout using EntryTimeoutBars parameter
         datetime timeoutReference = (lastEntryBar > 0) ? lastEntryBar : tradeEntryBar;
-        if(iTime(_Symbol, PERIOD_H2, 0) > timeoutReference + (EntryTimeoutBars * PeriodSeconds(PERIOD_H2)))
+        if(iTime(Symbol(), PERIOD_H2, 0) > timeoutReference + (EntryTimeoutBars * PERIOD_SECONDS(PERIOD_H2)))
         {
             // Only timeout if we have at least one position open
             if(entryPositions > 0)
@@ -403,7 +390,7 @@ void OnTick()
                 Print("=== ENTRY SEQUENCE TIMEOUT ===");
                 Print("Could not find confirmation for all entries within ", EntryTimeoutBars, " bars");
                 Print("Reason: Have ", entryPositions, " active position(s), stopping sequence for additional entries");
-                Print("Time since last entry: ", (iTime(_Symbol, PERIOD_H2, 0) - timeoutReference) / PeriodSeconds(PERIOD_H2), " bars");
+                Print("Time since last entry: ", (iTime(Symbol(), PERIOD_H2, 0) - timeoutReference) / PERIOD_SECONDS(PERIOD_H2), " bars");
             }
             else if(tradeDirection != 0)  // If we have a direction but no positions yet
             {
@@ -411,7 +398,7 @@ void OnTick()
                 if(CheckEMAAlignment(tradeDirection))
                 {
                     // Reset the entry bar time to give more time for first entry
-                    tradeEntryBar = iTime(_Symbol, PERIOD_H2, 0);
+                    tradeEntryBar = iTime(Symbol(), PERIOD_H2, 0);
                     Print("=== ENTRY SEQUENCE EXTENDED ===");
                     Print("No positions yet, resetting entry timer to allow more time for first entry");
                 }
@@ -435,35 +422,39 @@ void OnTick()
         Print("Previous Bar - MACD:", macdMainPrev, " Signal:", macdSignalPrev);
         Print("Current Bar  - MACD:", macdMainCurr, " Signal:", macdSignalCurr);
         
-        ENUM_ORDER_TYPE orderTypeToClose;
         int buyCount = 0, sellCount = 0;
-        
-        for(int i = 0; i < PositionsTotal(); i++)
+        for(int iPos = 0; iPos < OrdersTotal(); iPos++)
         {
-            ulong ticket = PositionGetTicket(i);
-            if(ticket <= 0) continue;
-            
-            if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+            if(OrderSelect(iPos, SELECT_BY_POS, MODE_TRADES))
             {
-                ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-                if(posType == POSITION_TYPE_BUY) buyCount++;
-                if(posType == POSITION_TYPE_SELL) sellCount++;
+                if(OrderMagicNumber() == MagicNumber && OrderSymbol() == Symbol())
+                {
+                    if(OrderType() == OP_BUY) buyCount++;
+                    if(OrderType() == OP_SELL) sellCount++;
+                }
             }
         }
         
-        orderTypeToClose = (buyCount > sellCount) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+        // Determine which type to close based on higher count
+        int orderTypeToClose;
+        if(buyCount > sellCount)
+            orderTypeToClose = OP_BUY;
+        else
+            orderTypeToClose = OP_SELL;
         
         if(CloseOnePosition(orderTypeToClose))
         {
             partialClosures++;
             // Update trade direction if all positions are closed
-            if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+            if(!HasOpenPositions(OP_BUY) && !HasOpenPositions(OP_SELL))
             {
                 tradeDirection = 0; // Reset direction when no positions are open
                 Print("All positions closed - Trade direction reset to 0");
             }
         }
     }
+    
+    return(0);
 }
 
 //+------------------------------------------------------------------+
@@ -471,22 +462,14 @@ void OnTick()
 //+------------------------------------------------------------------+
 double CalculateLotSize(double riskAmount, double pipsDistance)
 {
-    MqlDateTime dt_struct;
-    TimeToStruct(TimeCurrent(), dt_struct);
-    double adjustedRisk = RiskPercentage;
-    if(dt_struct.mon == 12)  // December
-        adjustedRisk *= 2;  // Double the risk
-    
-    riskAmount = AccountInfoDouble(ACCOUNT_BALANCE) * (adjustedRisk / 100.0);
-    
-    double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+    double tickSize  = MarketInfo(Symbol(), MODE_TICKSIZE);
+    double tickValue = MarketInfo(Symbol(), MODE_TICKVALUE);
     
     if(tickSize == 0.0)
         return 0.0;
     
     double pipValue = (0.0001 / tickSize) * tickValue;
-    double bidPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double bidPrice = MarketInfo(Symbol(), MODE_BID);
     
     if(bidPrice == 0.0)
         return 0.0;
@@ -497,9 +480,9 @@ double CalculateLotSize(double riskAmount, double pipsDistance)
     if(pipsDistance > 0.0)
         lotSize = riskAmountBase / (pipsDistance * pipValue);
     
-    double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-    double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-    double stepLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    double minLot  = MarketInfo(Symbol(), MODE_MINLOT);
+    double maxLot  = MarketInfo(Symbol(), MODE_MAXLOT);
+    double stepLot = MarketInfo(Symbol(), MODE_LOTSTEP);
     
     double steps = MathFloor(lotSize / stepLot);
     lotSize = steps * stepLot;
@@ -509,79 +492,84 @@ double CalculateLotSize(double riskAmount, double pipsDistance)
     if(lotSize > maxLot)
         lotSize = maxLot;
     
-    return NormalizeDouble(lotSize, 2);
+    lotSize = NormalizeDouble(lotSize, 2);
+    return lotSize;
 }
 
 //+------------------------------------------------------------------+
 //| Open Trade with specified parameters                              |
 //+------------------------------------------------------------------+
-bool OpenTrade(ENUM_ORDER_TYPE orderType, double lots, double sl, double tp, string comment="")
+bool OpenTrade(int orderType, double lots, double sl, double tp, string comment="")
 {
-    double stepLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-    double steps = MathFloor(lots / stepLot);
-    lots = NormalizeDouble(steps * stepLot, 2);
+    double price, slPrice, tpPrice;
+    int ticket;
     
-    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-    if(lots < minLot)
+    if(orderType == OP_BUY)
+    {
+        price = Ask;
+        slPrice = sl;
+        tpPrice = tp; // 0 indicates no TP
+        ticket = OrderSend(Symbol(), OP_BUY, lots, price, 10, slPrice, tpPrice, comment, MagicNumber, 0, Green);
+    }
+    else if(orderType == OP_SELL)
+    {
+        price = Bid;
+        slPrice = sl;
+        tpPrice = tp; // 0 indicates no TP
+        ticket = OrderSend(Symbol(), OP_SELL, lots, price, 10, slPrice, tpPrice, comment, MagicNumber, 0, Red);
+    }
+    else
+    {
+        Print("Invalid order type.");
         return false;
-    
-    trade.SetExpertMagicNumber(MagicNumber);
-    trade.SetDeviationInPoints(10);
-    trade.SetTypeFilling(ORDER_FILLING_FOK);
-    trade.SetTypeFillingBySymbol(_Symbol);
-    
-    bool result = false;
-    
-    if(orderType == ORDER_TYPE_BUY)
-    {
-        double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-        Print("Opening BUY Order - Price:", price, " Lots:", lots);
-        result = trade.Buy(lots, _Symbol, 0, 0, 0, comment);
-    }
-    else if(orderType == ORDER_TYPE_SELL)
-    {
-        double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-        Print("Opening SELL Order - Price:", price, " Lots:", lots);
-        result = trade.Sell(lots, _Symbol, 0, 0, 0, comment);
     }
     
-    if(!result)
-        Print("Trade Error:", trade.ResultRetcode(), ":", trade.CheckResultRetcodeDescription());
-    
-    return result;
+    if(ticket < 0)
+    {
+        Print("Error opening ", (orderType == OP_BUY ? "BUY" : "SELL"), " order. Error: ", GetLastError());
+        return false;
+    }
+    else
+    {
+        Print("Opened ", (orderType == OP_BUY ? "BUY" : "SELL"), " order #", ticket, " at price ", price, " with lot size ", lots);
+        return true;
+    }
 }
 
 //+------------------------------------------------------------------+
 //| Close one open position of the specified type                    |
 //+------------------------------------------------------------------+
-bool CloseOnePosition(ENUM_ORDER_TYPE orderType)
+bool CloseOnePosition(int orderType)
 {
-    int totalPositions = PositionsTotal();
-    bool closed = false;
-    
-    for(int i = totalPositions - 1; i >= 0; i--)
+    for(int i = OrdersTotal()-1; i >=0; i--)
     {
-        ulong ticket = PositionGetTicket(i);
-        if(ticket <= 0) continue;
-        
-        // Check if the position belongs to this EA
-        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
         {
-            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-            bool matchingType = (orderType == ORDER_TYPE_BUY && posType == POSITION_TYPE_BUY) ||
-                                (orderType == ORDER_TYPE_SELL && posType == POSITION_TYPE_SELL);
-            
-            if(matchingType)
+            if(OrderMagicNumber() == MagicNumber && OrderSymbol() == Symbol() && OrderType() == orderType)
             {
-                bool result = trade.PositionClose(ticket);
+                bool result;
+                double closePrice;
+                if(orderType == OP_BUY)
+                {
+                    closePrice = Bid;
+                    result = OrderClose(OrderTicket(), OrderLots(), closePrice, 10, Red);
+                }
+                else if(orderType == OP_SELL)
+                {
+                    closePrice = Ask;
+                    result = OrderClose(OrderTicket(), OrderLots(), closePrice, 10, Green);
+                }
+                else
+                {
+                    Print("Invalid order type for closing.");
+                    return false;
+                }
                 
                 if(result)
                 {
-                    Print("Closed position #", ticket, " successfully.");
-                    closed = true;
-                    
+                    Print("Closed ", (orderType == OP_BUY ? "BUY" : "SELL"), " order #", OrderTicket(), " successfully.");
                     // Check if this was the last position
-                    if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+                    if(!HasOpenPositions(OP_BUY) && !HasOpenPositions(OP_SELL))
                     {
                         tradeDirection = 0;
                         inEntrySequence = false;
@@ -589,48 +577,56 @@ bool CloseOnePosition(ENUM_ORDER_TYPE orderType)
                         Print("=== TRADE DIRECTION RESET ===");
                         Print("Reason: All positions have been closed");
                     }
-                    break; // Close only one position
+                    return true;
                 }
                 else
                 {
-                    Print("Failed to close position #", ticket, ". Error: ", GetLastError());
+                    Print("Failed to close ", (orderType == OP_BUY ? "BUY" : "SELL"), " order #", OrderTicket(), ". Error: ", GetLastError());
                 }
             }
         }
     }
-    return closed;
+    return false;
 }
 
 //+------------------------------------------------------------------+
 //| Close all open positions of a specific type                      |
 //+------------------------------------------------------------------+
-bool CloseAllPositions(ENUM_ORDER_TYPE orderType)
+bool CloseAllPositions(int orderType)
 {
     bool allClosed = true;
-    int totalPositions = PositionsTotal();
-    
-    for(int i = totalPositions - 1; i >= 0; i--)
+    for(int i = OrdersTotal()-1; i >=0; i--)
     {
-        ulong ticket = PositionGetTicket(i);
-        if(ticket <= 0) continue;
-        
-        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
         {
-            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-            bool matchingType = (orderType == ORDER_TYPE_BUY && posType == POSITION_TYPE_BUY) ||
-                                (orderType == ORDER_TYPE_SELL && posType == POSITION_TYPE_SELL);
-            
-            if(matchingType)
+            if(OrderMagicNumber() == MagicNumber && OrderSymbol() == Symbol() && OrderType() == orderType)
             {
-                bool result = trade.PositionClose(ticket);
-                
-                if(result)
+                bool result;
+                double closePrice;
+                if(orderType == OP_BUY)
                 {
-                    Print("Closed position #", ticket, " successfully.");
+                    closePrice = Bid;
+                    result = OrderClose(OrderTicket(), OrderLots(), closePrice, 10, Red);
+                }
+                else if(orderType == OP_SELL)
+                {
+                    closePrice = Ask;
+                    result = OrderClose(OrderTicket(), OrderLots(), closePrice, 10, Green);
                 }
                 else
                 {
-                    Print("Failed to close position #", ticket, ". Error: ", GetLastError());
+                    Print("Invalid order type for closing.");
+                    allClosed = false;
+                    continue;
+                }
+                
+                if(result)
+                {
+                    Print("Closed ", (orderType == OP_BUY ? "BUY" : "SELL"), " order #", OrderTicket(), " successfully.");
+                }
+                else
+                {
+                    Print("Failed to close ", (orderType == OP_BUY ? "BUY" : "SELL"), " order #", OrderTicket(), ". Error: ", GetLastError());
                     allClosed = false;
                 }
             }
@@ -638,7 +634,7 @@ bool CloseAllPositions(ENUM_ORDER_TYPE orderType)
     }
     
     // After closing all positions of the specified type, check if any positions remain
-    if(allClosed && !HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+    if(allClosed && !HasOpenPositions(OP_BUY) && !HasOpenPositions(OP_SELL))
     {
         tradeDirection = 0;
         inEntrySequence = false;
@@ -653,41 +649,17 @@ bool CloseAllPositions(ENUM_ORDER_TYPE orderType)
 //+------------------------------------------------------------------+
 //| Check if there are any open positions of a specific type         |
 //+------------------------------------------------------------------+
-bool HasOpenPositions(ENUM_ORDER_TYPE orderType)
+bool HasOpenPositions(int orderType)
 {
-    int totalPositions = PositionsTotal();
-    
-    for(int i = 0; i < totalPositions; i++)
+    for(int i = 0; i < OrdersTotal(); i++)
     {
-        ulong ticket = PositionGetTicket(i);
-        if(ticket <= 0) continue;
-        
-        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
         {
-            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-            bool matchingType = (orderType == ORDER_TYPE_BUY && posType == POSITION_TYPE_BUY) ||
-                                (orderType == ORDER_TYPE_SELL && posType == POSITION_TYPE_SELL);
-            
-            if(matchingType)
+            if(OrderMagicNumber() == MagicNumber && OrderSymbol() == Symbol() && OrderType() == orderType)
                 return true;
         }
     }
     return false;
-}
-
-//+------------------------------------------------------------------+
-//| Retrieve Indicator Buffer Value                                 |
-//+------------------------------------------------------------------+
-double GetIndicatorValue(int handle, int shift, int buffer = 0)
-{
-    double value[];
-    if(CopyBuffer(handle, buffer, shift, 1, value) > 0)
-        return value[0];
-    else
-    {
-        Print("Failed to copy buffer for handle ", handle, ". Error: ", GetLastError());
-        return 0.0;
-    }
 }
 
 //+------------------------------------------------------------------+
@@ -716,12 +688,12 @@ bool IsMACDCrossOver(double macdMainPrev, double macdSignalPrev, double macdMain
 double GetStopLossPrice(bool isBuy)
 {
     // Fetch the previous bar's high and low
-    double previousHigh = iHigh(_Symbol, PERIOD_H2, 1);
-    double previousLow  = iLow(_Symbol, PERIOD_H2, 1);
+    double previousHigh = iHigh(Symbol(), PERIOD_H2, 1);
+    double previousLow  = iLow(Symbol(), PERIOD_H2, 1);
     
     // Define a buffer in pips to account for spread and volatility
     double bufferPips = SLBufferPips; // Adjustable buffer
-    double pointSize   = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    double pointSize   = Point;
     
     if(isBuy)
     {
@@ -736,160 +708,110 @@ double GetStopLossPrice(bool isBuy)
 }
 
 //+------------------------------------------------------------------+
-//| Check for momentum change                                          |
-//+------------------------------------------------------------------+
-bool IsStrongMomentumChange(double macdMainPrev, double macdSignalPrev, double macdMainCurr, double macdSignalCurr)
-{
-    // Get current EMA values
-    double emaFastCurr = GetIndicatorValue(handleEmaFast, 0);
-    double emaMidCurr = GetIndicatorValue(handleEmaMid, 0);
-    double currentPrice = iClose(_Symbol, PERIOD_H2, 0);
-    
-    // Check if the difference between MACD and Signal is significant enough
-    if(MathAbs(macdMainCurr - macdSignalCurr) < MACDThreshold)
-        return false;
-        
-    // For longs: Exit when MACD crosses below signal AND EMAs show weakness
-    if(tradeDirection == 1)
-    {
-        // MACD must cross below signal line
-        if(macdMainPrev >= macdSignalPrev && macdMainCurr < macdSignalCurr)
-        {
-            // Additional confirmations for long exit:
-            // 1. MACD must be decreasing
-            // 2. Fast EMA must be below Mid EMA OR price below Fast EMA
-            if(macdMainCurr < macdMainPrev &&
-               (emaFastCurr < emaMidCurr || currentPrice < emaFastCurr))
-            {
-                return true;
-            }
-        }
-    }
-    // For shorts: Exit when MACD crosses above signal AND EMAs show weakness
-    else if(tradeDirection == -1)
-    {
-        // MACD must cross above signal line
-        if(macdMainPrev <= macdSignalPrev && macdMainCurr > macdSignalCurr)
-        {
-            // Additional confirmations for short exit:
-            // 1. MACD must be increasing
-            // 2. Fast EMA must be above Mid EMA OR price above Fast EMA
-            if(macdMainCurr > macdMainPrev &&
-               (emaFastCurr > emaMidCurr || currentPrice > emaFastCurr))
-            {
-                return true;
-            }
-        }
-    }
-    
-    return false;
-}
-
-//+------------------------------------------------------------------+
 //| Check if EMAs are aligned with trade direction                    |
 //+------------------------------------------------------------------+
 bool CheckEMAAlignment(int direction)
 {
-    double emaFastCurr = GetIndicatorValue(handleEmaFast, 0);
-    double emaMidCurr = GetIndicatorValue(handleEmaMid, 0);
-    double emaSlowCurr = GetIndicatorValue(handleEmaSlow, 0);
+    double emaFastCurr = iMA(Symbol(), PERIOD_H2, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE, 0);
+    double emaMidCurr  = iMA(Symbol(), PERIOD_H2, EMAPeriodMid,  0, MODE_EMA, PRICE_CLOSE, 0);
+    double emaSlowCurr = iMA(Symbol(), PERIOD_H2, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE, 0);
     
     if(direction == 1) // Bullish alignment
     {
         // Allow some tolerance in the alignment (0.5 pip tolerance)
         double tolerance = 0.00005;
-        return (emaFastCurr > emaMidCurr - tolerance && emaMidCurr > emaSlowCurr - tolerance);
+        return (emaFastCurr > (emaMidCurr - tolerance) && emaMidCurr > (emaSlowCurr - tolerance));
     }
     else if(direction == -1) // Bearish alignment
     {
         double tolerance = 0.00005;
-        return (emaFastCurr < emaMidCurr + tolerance && emaMidCurr < emaSlowCurr + tolerance);
+        return (emaFastCurr < (emaMidCurr + tolerance) && emaMidCurr < (emaSlowCurr + tolerance));
     }
     
     return false;
 }
 
 //+------------------------------------------------------------------+
-//| Check positions for take profit or stop loss                       |
+//| Check positions for take profit or stop loss                      |
 //+------------------------------------------------------------------+
 void CheckTakeProfit()
 {
-    int totalPositions = PositionsTotal();
-    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-    double currentATR = GetIndicatorValue(handleATR, 0);
+    int totalOrders = OrdersTotal();
+    double point = Point;
+    double currentATR = iATR(Symbol(), PERIOD_H2, ATRPeriod, 0);
     
-    for(int i = totalPositions - 1; i >= 0; i--)
+    for(int i = totalOrders - 1; i >=0; i--)
     {
-        ulong ticket = PositionGetTicket(i);
-        if(ticket <= 0) continue;
-        
-        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
         {
-            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-            double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
-            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-            
-            double profitPips = 0;
-            
-            if(posType == POSITION_TYPE_BUY)
-                profitPips = (currentPrice - openPrice) / point;
-            else if(posType == POSITION_TYPE_SELL)
-                profitPips = (openPrice - currentPrice) / point;
-            
-            // Calculate ATR-based exit levels in pips
-            double atrPips = currentATR / point;
-            double tpLevel = atrPips * ATRMultiplierTP;
-            double slLevel = atrPips * ATRMultiplierSL;
-            
-            // Check for Take Profit
-            if(profitPips >= tpLevel)
+            if(OrderMagicNumber() == MagicNumber && OrderSymbol() == Symbol())
             {
-                Print("=== TAKE PROFIT EXIT TRIGGERED ===");
-                Print("Position Type: ", EnumToString(posType));
-                Print("Entry Price: ", openPrice);
-                Print("Current Price: ", currentPrice);
-                Print("Profit in Pips: ", profitPips);
-                Print("ATR in Pips: ", atrPips);
-                Print("TP Level: ", tpLevel);
+                double openPrice = OrderOpenPrice();
+                double currentPrice = (OrderType() == OP_BUY) ? Bid : Ask;
+                int posType = OrderType();
                 
-                if(trade.PositionClose(ticket))
+                double profitPips = 0;
+                
+                if(posType == OP_BUY)
+                    profitPips = (currentPrice - openPrice) / point;
+                else if(posType == OP_SELL)
+                    profitPips = (openPrice - currentPrice) / point;
+                
+                // Calculate ATR-based exit levels in pips
+                double atrPips = currentATR / point;
+                double tpLevel = atrPips * ATRMultiplierTP;
+                double slLevel = atrPips * ATRMultiplierSL;
+                
+                // Check for Take Profit
+                if(profitPips >= tpLevel)
                 {
-                    Print("Successfully closed position #", ticket, " at take profit");
+                    Print("=== TAKE PROFIT EXIT TRIGGERED ===");
+                    Print("Position Type: ", (posType == OP_BUY ? "BUY" : "SELL"));
+                    Print("Entry Price: ", openPrice);
+                    Print("Current Price: ", currentPrice);
+                    Print("Profit in Pips: ", profitPips);
+                    Print("ATR in Pips: ", atrPips);
+                    Print("TP Level: ", tpLevel);
                     
-                    // Check if this was the last position
-                    if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+                    if(OrderClose(OrderTicket(), OrderLots(), currentPrice, 10, (posType == OP_BUY ? Red : Green)))
                     {
-                        tradeDirection = 0;
-                        inEntrySequence = false;
-                        entryPositions = 0;
-                        Print("=== TRADE DIRECTION RESET ===");
-                        Print("Reason: All positions have been closed after take profit");
+                        Print("Successfully closed order #", OrderTicket(), " at take profit");
+                        
+                        // Check if this was the last position
+                        if(!HasOpenPositions(OP_BUY) && !HasOpenPositions(OP_SELL))
+                        {
+                            tradeDirection = 0;
+                            inEntrySequence = false;
+                            entryPositions = 0;
+                            Print("=== TRADE DIRECTION RESET ===");
+                            Print("Reason: All positions have been closed after take profit");
+                        }
                     }
                 }
-            }
-            // Check for Stop Loss
-            else if(profitPips <= -slLevel)
-            {
-                Print("=== STOP LOSS EXIT TRIGGERED ===");
-                Print("Position Type: ", EnumToString(posType));
-                Print("Entry Price: ", openPrice);
-                Print("Current Price: ", currentPrice);
-                Print("Loss in Pips: ", profitPips);
-                Print("ATR in Pips: ", atrPips);
-                Print("SL Level: ", slLevel);
-                
-                if(trade.PositionClose(ticket))
+                // Check for Stop Loss
+                else if(profitPips <= -slLevel)
                 {
-                    Print("Successfully closed position #", ticket, " at stop loss");
+                    Print("=== STOP LOSS EXIT TRIGGERED ===");
+                    Print("Position Type: ", (posType == OP_BUY ? "BUY" : "SELL"));
+                    Print("Entry Price: ", openPrice);
+                    Print("Current Price: ", currentPrice);
+                    Print("Loss in Pips: ", profitPips);
+                    Print("ATR in Pips: ", atrPips);
+                    Print("SL Level: ", slLevel);
                     
-                    // Check if this was the last position
-                    if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+                    if(OrderClose(OrderTicket(), OrderLots(), currentPrice, 10, (posType == OP_BUY ? Red : Green)))
                     {
-                        tradeDirection = 0;
-                        inEntrySequence = false;
-                        entryPositions = 0;
-                        Print("=== TRADE DIRECTION RESET ===");
-                        Print("Reason: All positions have been closed after stop loss");
+                        Print("Successfully closed order #", OrderTicket(), " at stop loss");
+                        
+                        // Check if this was the last position
+                        if(!HasOpenPositions(OP_BUY) && !HasOpenPositions(OP_SELL))
+                        {
+                            tradeDirection = 0;
+                            inEntrySequence = false;
+                            entryPositions = 0;
+                            Print("=== TRADE DIRECTION RESET ===");
+                            Print("Reason: All positions have been closed after stop loss");
+                        }
                     }
                 }
             }
@@ -898,3 +820,4 @@ void CheckTakeProfit()
 }
 
 //+------------------------------------------------------------------+
+
