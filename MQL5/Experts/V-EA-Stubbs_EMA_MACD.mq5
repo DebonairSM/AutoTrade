@@ -14,12 +14,13 @@ input int    EMAPeriodSlow   = 30;    // Slow EMA Period
 input int    MACDFast        = 12;    // MACD Fast EMA Period
 input int    MACDSlow        = 26;    // MACD Slow EMA Period
 input int    MACDSignal      = 9;     // MACD Signal SMA Period
-input double RiskPercentage  = 5;   // Risk Percentage per Trade (1%)
-input double SLBufferPips    = 2.0;   // Stop-Loss Buffer in Pips
-input double TPPips          = 500.0;  // Take Profit in Pips
+input double RiskPercentage  = 5;     // Risk Percentage per Trade (1%)
+input int    ATRPeriod       = 14;    // ATR Period
+input double ATRMultiplierSL = 2.0;   // ATR Multiplier for Stop Loss
+input double ATRMultiplierTP = 6.0;   // ATR Multiplier for Take Profit (3:1 ratio)
 input double MACDThreshold   = 0.0002; // Minimum MACD difference for signal
 input int    EntryTimeoutBars = 12;    // Bars to wait for entry sequence
-input double MinDrawdownPips = 250.0;  // Minimum drawdown in pips before checking exit conditions
+input double SLBufferPips    = 2.0;   // Stop-Loss Buffer in Pips
 
 //--- Global Variables
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
@@ -35,6 +36,7 @@ int          handleEmaFast;
 int          handleEmaMid;
 int          handleEmaSlow;
 int          handleMacd;
+int          handleATR;      // ATR indicator handle
 int          tradeDirection = 0;   // 0 = No position, 1 = Buy, -1 = Sell
 
 // Trade object
@@ -53,8 +55,13 @@ int OnInit()
     // Initialize MACD indicator
     handleMacd = iMACD(_Symbol, PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE);
     
+    // Initialize ATR indicator
+    handleATR = iATR(_Symbol, PERIOD_H2, ATRPeriod);
+    
     // Check if indicators are initialized successfully
-    if(handleEmaFast == INVALID_HANDLE || handleEmaMid == INVALID_HANDLE || handleEmaSlow == INVALID_HANDLE || handleMacd == INVALID_HANDLE)
+    if(handleEmaFast == INVALID_HANDLE || handleEmaMid == INVALID_HANDLE || 
+       handleEmaSlow == INVALID_HANDLE || handleMacd == INVALID_HANDLE || 
+       handleATR == INVALID_HANDLE)
     {
         Print("Error initializing indicators.");
         return(INIT_FAILED);
@@ -74,6 +81,7 @@ void OnDeinit(const int reason)
     IndicatorRelease(handleEmaMid);
     IndicatorRelease(handleEmaSlow);
     IndicatorRelease(handleMacd);
+    IndicatorRelease(handleATR);
     
     Print("EA Deinitialized.");
 }
@@ -372,11 +380,30 @@ void OnTick()
             // Only timeout if we have at least one position open
             if(entryPositions > 0)
             {
-                inEntrySequence = false;
+                inEntrySequence = false;  // Only set to false if we have positions
                 Print("=== ENTRY SEQUENCE TIMEOUT ===");
                 Print("Could not find confirmation for all entries within ", EntryTimeoutBars, " bars");
                 Print("Reason: Have ", entryPositions, " active position(s), stopping sequence for additional entries");
                 Print("Time since last entry: ", (iTime(_Symbol, PERIOD_H2, 0) - timeoutReference) / PeriodSeconds(PERIOD_H2), " bars");
+            }
+            else if(tradeDirection != 0)  // If we have a direction but no positions yet
+            {
+                // Check if EMAs are still aligned in the right direction with tolerance
+                if(CheckEMAAlignment(tradeDirection))
+                {
+                    // Reset the entry bar time to give more time for first entry
+                    tradeEntryBar = iTime(_Symbol, PERIOD_H2, 0);
+                    Print("=== ENTRY SEQUENCE EXTENDED ===");
+                    Print("No positions yet, resetting entry timer to allow more time for first entry");
+                }
+                else
+                {
+                    // EMAs no longer aligned, cancel the trade direction
+                    tradeDirection = 0;
+                    inEntrySequence = false;
+                    Print("=== ENTRY SEQUENCE CANCELLED ===");
+                    Print("Reason: EMAs no longer aligned with original trade direction");
+                }
             }
         }
     }
@@ -682,42 +709,88 @@ double GetStopLossPrice(bool isBuy)
 }
 
 //+------------------------------------------------------------------+
-//| Check for strong momentum change exit                             |
+//| Check for momentum change                                          |
 //+------------------------------------------------------------------+
 bool IsStrongMomentumChange(double macdMainPrev, double macdSignalPrev, double macdMainCurr, double macdSignalCurr)
 {
+    // Get current EMA values
+    double emaFastCurr = GetIndicatorValue(handleEmaFast, 0);
+    double emaMidCurr = GetIndicatorValue(handleEmaMid, 0);
+    double currentPrice = iClose(_Symbol, PERIOD_H2, 0);
+    
     // Check if the difference between MACD and Signal is significant enough
-    if(MathAbs(macdMainCurr - macdSignalCurr) < MACDThreshold * 2) // Using 2x threshold for stronger signal
+    if(MathAbs(macdMainCurr - macdSignalCurr) < MACDThreshold)
         return false;
         
-    // Check for strong bullish momentum change (for exiting shorts)
-    if(macdMainPrev <= macdSignalPrev && macdMainCurr > macdSignalCurr &&
-       macdMainCurr > macdMainPrev * 1.5) // Requiring 50% increase in MACD
-        return true;
-    
-    // Check for strong bearish momentum change (for exiting longs)
-    if(macdMainPrev >= macdSignalPrev && macdMainCurr < macdSignalCurr &&
-       macdMainCurr < macdMainPrev * 1.5) // Requiring 50% decrease in MACD
-        return true;
+    // For longs: Exit when MACD crosses below signal AND EMAs show weakness
+    if(tradeDirection == 1)
+    {
+        // MACD must cross below signal line
+        if(macdMainPrev >= macdSignalPrev && macdMainCurr < macdSignalCurr)
+        {
+            // Additional confirmations for long exit:
+            // 1. MACD must be decreasing
+            // 2. Fast EMA must be below Mid EMA OR price below Fast EMA
+            if(macdMainCurr < macdMainPrev &&
+               (emaFastCurr < emaMidCurr || currentPrice < emaFastCurr))
+            {
+                return true;
+            }
+        }
+    }
+    // For shorts: Exit when MACD crosses above signal AND EMAs show weakness
+    else if(tradeDirection == -1)
+    {
+        // MACD must cross above signal line
+        if(macdMainPrev <= macdSignalPrev && macdMainCurr > macdSignalCurr)
+        {
+            // Additional confirmations for short exit:
+            // 1. MACD must be increasing
+            // 2. Fast EMA must be above Mid EMA OR price above Fast EMA
+            if(macdMainCurr > macdMainPrev &&
+               (emaFastCurr > emaMidCurr || currentPrice > emaFastCurr))
+            {
+                return true;
+            }
+        }
+    }
     
     return false;
 }
 
 //+------------------------------------------------------------------+
-//| Check positions for take profit or momentum exit                  |
+//| Check if EMAs are aligned with trade direction                    |
+//+------------------------------------------------------------------+
+bool CheckEMAAlignment(int direction)
+{
+    double emaFastCurr = GetIndicatorValue(handleEmaFast, 0);
+    double emaMidCurr = GetIndicatorValue(handleEmaMid, 0);
+    double emaSlowCurr = GetIndicatorValue(handleEmaSlow, 0);
+    
+    if(direction == 1) // Bullish alignment
+    {
+        // Allow some tolerance in the alignment (0.5 pip tolerance)
+        double tolerance = 0.00005;
+        return (emaFastCurr > emaMidCurr - tolerance && emaMidCurr > emaSlowCurr - tolerance);
+    }
+    else if(direction == -1) // Bearish alignment
+    {
+        double tolerance = 0.00005;
+        return (emaFastCurr < emaMidCurr + tolerance && emaMidCurr < emaSlowCurr + tolerance);
+    }
+    
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check positions for take profit or stop loss                       |
 //+------------------------------------------------------------------+
 void CheckTakeProfit()
 {
     int totalPositions = PositionsTotal();
     double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-    double maxProfitPips = 0;
-    double maxLossPips = 0;
-    ulong bestTicket = 0;
-    ENUM_POSITION_TYPE bestPosType = POSITION_TYPE_BUY; // Default value
-    double bestOpenPrice = 0;
-    double bestCurrentPrice = 0;
+    double currentATR = GetIndicatorValue(handleATR, 0);
     
-    // First find the position with the highest profit or significant loss
     for(int i = totalPositions - 1; i >= 0; i--)
     {
         ulong ticket = PositionGetTicket(i);
@@ -736,68 +809,62 @@ void CheckTakeProfit()
             else if(posType == POSITION_TYPE_SELL)
                 profitPips = (openPrice - currentPrice) / point;
             
-            // Track position with highest profit
-            if(profitPips > maxProfitPips)
+            // Calculate ATR-based exit levels in pips
+            double atrPips = currentATR / point;
+            double tpLevel = atrPips * ATRMultiplierTP;
+            double slLevel = atrPips * ATRMultiplierSL;
+            
+            // Check for Take Profit
+            if(profitPips >= tpLevel)
             {
-                maxProfitPips = profitPips;
-                bestTicket = ticket;
-                bestPosType = posType;
-                bestOpenPrice = openPrice;
-                bestCurrentPrice = currentPrice;
+                Print("=== TAKE PROFIT EXIT TRIGGERED ===");
+                Print("Position Type: ", EnumToString(posType));
+                Print("Entry Price: ", openPrice);
+                Print("Current Price: ", currentPrice);
+                Print("Profit in Pips: ", profitPips);
+                Print("ATR in Pips: ", atrPips);
+                Print("TP Level: ", tpLevel);
+                
+                if(trade.PositionClose(ticket))
+                {
+                    Print("Successfully closed position #", ticket, " at take profit");
+                    
+                    // Check if this was the last position
+                    if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+                    {
+                        tradeDirection = 0;
+                        inEntrySequence = false;
+                        entryPositions = 0;
+                        Print("=== TRADE DIRECTION RESET ===");
+                        Print("Reason: All positions have been closed after take profit");
+                    }
+                }
             }
-            
-            // Track maximum loss
-            if(profitPips < maxLossPips)
-                maxLossPips = profitPips;
-        }
-    }
-    
-    // If we have significant drawdown, check for momentum-based exit
-    if(maxLossPips <= -MinDrawdownPips)
-    {
-        double macdMainPrev = GetIndicatorValue(handleMacd, 1, 0);
-        double macdSignalPrev = GetIndicatorValue(handleMacd, 1, 1);
-        double macdMainCurr = GetIndicatorValue(handleMacd, 0, 0);
-        double macdSignalCurr = GetIndicatorValue(handleMacd, 0, 1);
-        
-        if(IsStrongMomentumChange(macdMainPrev, macdSignalPrev, macdMainCurr, macdSignalCurr))
-        {
-            Print("=== MOMENTUM EXIT SIGNAL DETECTED ===");
-            Print("Trigger: Strong momentum change after significant drawdown");
-            Print("Maximum Loss in Pips: ", maxLossPips);
-            Print("Previous Bar - MACD:", macdMainPrev, " Signal:", macdSignalPrev);
-            Print("Current Bar  - MACD:", macdMainCurr, " Signal:", macdSignalCurr);
-            
-            // Close all positions when momentum changes significantly
-            CloseAllPositions(ORDER_TYPE_BUY);
-            CloseAllPositions(ORDER_TYPE_SELL);
-            return;
-        }
-    }
-    
-    // Check for take profit exit
-    if(maxProfitPips >= TPPips && bestTicket > 0)
-    {
-        Print("=== TAKE PROFIT EXIT TRIGGERED ===");
-        Print("Trigger: Profit exceeded ", TPPips, " pips target");
-        Print("Position Type: ", EnumToString(bestPosType));
-        Print("Entry Price: ", bestOpenPrice);
-        Print("Current Price: ", bestCurrentPrice);
-        Print("Profit in Pips: ", maxProfitPips);
-        
-        if(trade.PositionClose(bestTicket))
-        {
-            Print("Successfully closed position #", bestTicket);
-            partialClosures++;
-            
-            // Check if this was the last position
-            if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+            // Check for Stop Loss
+            else if(profitPips <= -slLevel)
             {
-                tradeDirection = 0;
-                inEntrySequence = false;
-                entryPositions = 0;
-                Print("=== TRADE DIRECTION RESET ===");
-                Print("Reason: All positions have been closed after take profit");
+                Print("=== STOP LOSS EXIT TRIGGERED ===");
+                Print("Position Type: ", EnumToString(posType));
+                Print("Entry Price: ", openPrice);
+                Print("Current Price: ", currentPrice);
+                Print("Loss in Pips: ", profitPips);
+                Print("ATR in Pips: ", atrPips);
+                Print("SL Level: ", slLevel);
+                
+                if(trade.PositionClose(ticket))
+                {
+                    Print("Successfully closed position #", ticket, " at stop loss");
+                    
+                    // Check if this was the last position
+                    if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+                    {
+                        tradeDirection = 0;
+                        inEntrySequence = false;
+                        entryPositions = 0;
+                        Print("=== TRADE DIRECTION RESET ===");
+                        Print("Reason: All positions have been closed after stop loss");
+                    }
+                }
             }
         }
     }
