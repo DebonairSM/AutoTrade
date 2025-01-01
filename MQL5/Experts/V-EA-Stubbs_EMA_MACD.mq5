@@ -748,56 +748,6 @@ double GetStopLossPrice(bool isBuy)
 }
 
 //+------------------------------------------------------------------+
-//| Check for momentum change                                          |
-//+------------------------------------------------------------------+
-bool IsStrongMomentumChange(double macdMainPrev, double macdSignalPrev, double macdMainCurr, double macdSignalCurr)
-{
-    // Get current EMA values
-    double emaFastCurr = GetIndicatorValue(handleEmaFast, 0);
-    double emaMidCurr = GetIndicatorValue(handleEmaMid, 0);
-    double currentPrice = iClose(_Symbol, PERIOD_H2, 0);
-    
-    // Check if the difference between MACD and Signal is significant enough
-    if(MathAbs(macdMainCurr - macdSignalCurr) < MACDThreshold)
-        return false;
-        
-    // For longs: Exit when MACD crosses below signal AND EMAs show weakness
-    if(tradeDirection == 1)
-    {
-        // MACD must cross below signal line
-        if(macdMainPrev >= macdSignalPrev && macdMainCurr < macdSignalCurr)
-        {
-            // Additional confirmations for long exit:
-            // 1. MACD must be decreasing
-            // 2. Fast EMA must be below Mid EMA OR price below Fast EMA
-            if(macdMainCurr < macdMainPrev &&
-               (emaFastCurr < emaMidCurr || currentPrice < emaFastCurr))
-            {
-                return true;
-            }
-        }
-    }
-    // For shorts: Exit when MACD crosses above signal AND EMAs show weakness
-    else if(tradeDirection == -1)
-    {
-        // MACD must cross above signal line
-        if(macdMainPrev <= macdSignalPrev && macdMainCurr > macdSignalCurr)
-        {
-            // Additional confirmations for short exit:
-            // 1. MACD must be increasing
-            // 2. Fast EMA must be above Mid EMA OR price above Fast EMA
-            if(macdMainCurr > macdMainPrev &&
-               (emaFastCurr > emaMidCurr || currentPrice > emaFastCurr))
-            {
-                return true;
-            }
-        }
-    }
-    
-    return false;
-}
-
-//+------------------------------------------------------------------+
 //| Check if EMAs are aligned with trade direction                    |
 //+------------------------------------------------------------------+
 bool CheckEMAAlignment(int direction)
