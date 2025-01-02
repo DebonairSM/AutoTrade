@@ -24,12 +24,12 @@ input double RiskMultiplier3 = 1.0;  // Risk multiplier for Month3
 input int    ATRPeriod       = 19;    // ATR Period
 input double ATRMultiplierSL = 8.4;   // ATR Multiplier for Stop Loss
 input double ATRMultiplierTP = 6.0;   // ATR Multiplier for Take Profit
-input double MACDThreshold   = 0.00088; // Minimum MACD difference for signal
+input double MACDThreshold   = 0.00010; // Minimum MACD difference for signal
 input int    EntryTimeoutBars = 8;    // Bars to wait for entry sequence
 input double SLBufferPips    = 5.0;   // Stop-Loss Buffer in Pips
 //--- Trading Time Parameters
-input int    NoTradeStartHour = 1;     // No Trading Start Hour 
-input int    NoTradeEndHour   = 2;     // No Trading End Hour
+input int    NoTradeStartHour = 6;     // No Trading Start Hour 
+input int    NoTradeEndHour   = 7;     // No Trading End Hour
 
 //--- Global Variables
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
