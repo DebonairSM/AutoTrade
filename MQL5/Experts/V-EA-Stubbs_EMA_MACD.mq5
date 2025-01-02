@@ -52,185 +52,10 @@ int          tradeDirection = 0;   // 0 = No position, 1 = Buy, -1 = Sell
 CTrade      trade;
 
 //+------------------------------------------------------------------+
-//| Error Checking Functions                                           |
-//+------------------------------------------------------------------+
-
-//--- Check if indicator handle is valid
-bool IsIndicatorValid(int handle, string indicatorName)
-{
-    if(handle == INVALID_HANDLE)
-    {
-        string errorMsg = StringFormat("Failed to create %s indicator handle. Error: %d", indicatorName, GetLastError());
-        Print(errorMsg);
-        return false;
-    }
-    return true;
-}
-
-//--- Check if position operations are allowed
-bool IsTradeAllowed()
-{
-    if(!MQLInfoInteger(MQL_TRADE_ALLOWED))
-    {
-        Print("Trading is not allowed. Please enable AutoTrading.");
-        return false;
-    }
-    
-    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
-    {
-        Print("Trading is not allowed in the terminal.");
-        return false;
-    }
-    
-    if(!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
-    {
-        Print("Trading is not allowed for this account.");
-        return false;
-    }
-    
-    if(!AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
-    {
-        Print("Automated trading is not allowed for this account.");
-        return false;
-    }
-    
-    return true;
-}
-
-//--- Check if symbol is valid and trading is allowed for it
-bool IsSymbolValid()
-{
-    // Check if symbol exists and is selected in Market Watch
-    if(!SymbolInfoInteger(_Symbol, SYMBOL_SELECT))
-    {
-        Print("Symbol ", _Symbol, " is not selected in Market Watch.");
-        return false;
-    }
-    
-    // Check if trading is allowed for this symbol
-    if(!SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE))
-    {
-        Print("Trading is not allowed for symbol ", _Symbol);
-        return false;
-    }
-    
-    // Check trading mode
-    long trade_mode;
-    if(!SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE, trade_mode))
-    {
-        Print("Failed to get trading mode for symbol ", _Symbol);
-        return false;
-    }
-    
-    if(trade_mode == SYMBOL_TRADE_MODE_DISABLED)
-    {
-        Print("Trading is disabled for symbol ", _Symbol);
-        return false;
-    }
-    
-    // Check filling modes
-    long filling_mode;
-    if(!SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE, filling_mode))
-    {
-        Print("Failed to get filling mode for symbol ", _Symbol);
-        return false;
-    }
-    
-    if((filling_mode & SYMBOL_FILLING_FOK) == 0 && (filling_mode & SYMBOL_FILLING_IOC) == 0)
-    {
-        Print("Symbol ", _Symbol, " does not support required filling modes (FOK or IOC)");
-        return false;
-    }
-    
-    // Check if we can get basic price information
-    MqlTick last_tick;
-    if(!SymbolInfoTick(_Symbol, last_tick))
-    {
-        Print("Cannot get price information for symbol ", _Symbol);
-        return false;
-    }
-    
-    return true;
-}
-
-//--- Check if current time is within allowed trading hours
-bool IsWithinTradingHours()
-{
-    MqlDateTime dt_struct;
-    TimeToStruct(TimeCurrent(), dt_struct);
-    
-    // Check if it's Sunday
-    if(dt_struct.day_of_week == 0)
-        return false;
-        
-    // Check if current time is within no-trade hours
-    int currentHour = dt_struct.hour;
-    if(currentHour >= NoTradeStartHour && currentHour < NoTradeEndHour)
-        return false;
-        
-    return true;
-}
-
-//--- Validate trade parameters
-bool ValidateTradeParameters(double lots, double sl, double tp)
-{
-    if(lots <= 0)
-    {
-        Print("Invalid lot size: ", lots);
-        return false;
-    }
-    
-    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-    
-    if(lots < minLot || lots > maxLot)
-    {
-        Print("Lot size ", lots, " is outside allowed range [", minLot, ", ", maxLot, "]");
-        return false;
-    }
-    
-    if(sl < 0 || tp < 0)
-    {
-        Print("Invalid SL or TP values: SL=", sl, " TP=", tp);
-        return false;
-    }
-    
-    return true;
-}
-
-//--- Check if there's enough free margin for the trade
-bool HasSufficientMargin(double lots, ENUM_ORDER_TYPE orderType)
-{
-    double price = (orderType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double margin;
-    if(!OrderCalcMargin(orderType, _Symbol, lots, price, margin))
-    {
-        Print("Failed to calculate margin. Error: ", GetLastError());
-        return false;
-    }
-    
-    if(AccountInfoDouble(ACCOUNT_MARGIN_FREE) < margin)
-    {
-        Print("Insufficient free margin. Required: ", margin, " Available: ", AccountInfoDouble(ACCOUNT_MARGIN_FREE));
-        return false;
-    }
-    
-    return true;
-}
-
-//+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-    // Check if trading is allowed
-    if(!IsTradeAllowed())
-        return(INIT_FAILED);
-        
-    // Check if symbol is valid
-    if(!IsSymbolValid())
-        return(INIT_FAILED);
-    
     // Initialize EMA indicators
     handleEmaFast = iMA(_Symbol, PERIOD_H2, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE);
     handleEmaMid  = iMA(_Symbol, PERIOD_H2, EMAPeriodMid,  0, MODE_EMA, PRICE_CLOSE);
@@ -243,12 +68,11 @@ int OnInit()
     handleATR = iATR(_Symbol, PERIOD_H2, ATRPeriod);
     
     // Check if indicators are initialized successfully
-    if(!IsIndicatorValid(handleEmaFast, "Fast EMA") ||
-       !IsIndicatorValid(handleEmaMid, "Mid EMA") ||
-       !IsIndicatorValid(handleEmaSlow, "Slow EMA") ||
-       !IsIndicatorValid(handleMacd, "MACD") ||
-       !IsIndicatorValid(handleATR, "ATR"))
+    if(handleEmaFast == INVALID_HANDLE || handleEmaMid == INVALID_HANDLE || 
+       handleEmaSlow == INVALID_HANDLE || handleMacd == INVALID_HANDLE || 
+       handleATR == INVALID_HANDLE)
     {
+        Print("Error initializing indicators.");
         return(INIT_FAILED);
     }
     
@@ -276,17 +100,13 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    // Check if trading is allowed
-    if(!IsTradeAllowed())
-        return;
-        
-    // Check if we're within trading hours
-    if(!IsWithinTradingHours())
+    // Check if it's Sunday - never trade on Sundays
+    MqlDateTime dt_struct;
+    TimeToStruct(TimeCurrent(), dt_struct);
+    if(dt_struct.day_of_week == 0)  // Sunday
         return;
         
     // Check if current time is within no-trade hours (1 AM - 9 AM)
-    MqlDateTime dt_struct;
-    TimeToStruct(TimeCurrent(), dt_struct);
     int currentHour = dt_struct.hour;
     if(currentHour >= NoTradeStartHour && currentHour < NoTradeEndHour)
         return;
@@ -709,25 +529,6 @@ double CalculateLotSize(double riskAmount, double pipsDistance)
 //+------------------------------------------------------------------+
 bool OpenTrade(ENUM_ORDER_TYPE orderType, double lots, double sl, double tp, string comment="")
 {
-    // Check if trading is allowed
-    if(!IsTradeAllowed())
-        return false;
-        
-    // Check if we're within trading hours
-    if(!IsWithinTradingHours())
-    {
-        Print("Cannot open trade outside trading hours");
-        return false;
-    }
-    
-    // Validate trade parameters
-    if(!ValidateTradeParameters(lots, sl, tp))
-        return false;
-        
-    // Check margin
-    if(!HasSufficientMargin(lots, orderType))
-        return false;
-    
     double stepLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
     double steps = MathFloor(lots / stepLot);
     lots = NormalizeDouble(steps * stepLot, 2);
@@ -735,18 +536,6 @@ bool OpenTrade(ENUM_ORDER_TYPE orderType, double lots, double sl, double tp, str
     double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
     if(lots < minLot)
         return false;
-    
-    // Calculate distance to stop-loss in pips for logging
-    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-    double currentPrice = (orderType == ORDER_TYPE_BUY) ? 
-                         SymbolInfoDouble(_Symbol, SYMBOL_ASK) : 
-                         SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double slDistance = MathAbs(currentPrice - sl) / point;
-    
-    // Add emergency stop-loss info to comment
-    string fullComment = StringFormat("%s [EmergSL=%.1f pips]", 
-                                    comment,
-                                    slDistance);
     
     trade.SetExpertMagicNumber(MagicNumber);
     trade.SetDeviationInPoints(10);
@@ -757,31 +546,21 @@ bool OpenTrade(ENUM_ORDER_TYPE orderType, double lots, double sl, double tp, str
     
     if(orderType == ORDER_TYPE_BUY)
     {
-        Print("=== OPENING BUY ORDER WITH EMERGENCY STOP-LOSS ===");
-        Print("Price:", currentPrice);
-        Print("Lots:", lots);
-        Print("Emergency Stop-Loss Distance:", slDistance, " pips");
-        Print("Emergency Stop-Loss Price:", sl);
-        result = trade.Buy(lots, _Symbol, 0, sl, tp, fullComment);
+        double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+        Print("Opening BUY Order - Price:", price, " Lots:", lots);
+        result = trade.Buy(lots, _Symbol, 0, 0, 0, comment);
     }
     else if(orderType == ORDER_TYPE_SELL)
     {
-        Print("=== OPENING SELL ORDER WITH EMERGENCY STOP-LOSS ===");
-        Print("Price:", currentPrice);
-        Print("Lots:", lots);
-        Print("Emergency Stop-Loss Distance:", slDistance, " pips");
-        Print("Emergency Stop-Loss Price:", sl);
-        result = trade.Sell(lots, _Symbol, 0, sl, tp, fullComment);
+        double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        Print("Opening SELL Order - Price:", price, " Lots:", lots);
+        result = trade.Sell(lots, _Symbol, 0, 0, 0, comment);
     }
     
     if(!result)
-    {
-        int error = trade.ResultRetcode();
-        Print("Trade Error:", error, ":", trade.CheckResultRetcodeDescription());
-        return false;
-    }
+        Print("Trade Error:", trade.ResultRetcode(), ":", trade.CheckResultRetcodeDescription());
     
-    return true;
+    return result;
 }
 
 //+------------------------------------------------------------------+
@@ -944,40 +723,27 @@ bool IsMACDCrossOver(double macdMainPrev, double macdSignalPrev, double macdMain
 }
 
 //+------------------------------------------------------------------+
-//| Get Stop Loss Price with buffer for emergency/catastrophic stops  |
+//| Get Stop Loss Price with buffer                                  |
 //+------------------------------------------------------------------+
 double GetStopLossPrice(bool isBuy)
 {
-    // Get current ATR value for volatility-based buffer
-    double currentATR = GetIndicatorValue(handleATR, 0);
-    if(currentATR == 0) currentATR = GetIndicatorValue(handleATR, 1); // Fallback to previous ATR
+    // Fetch the previous bar's high and low
+    double previousHigh = iHigh(_Symbol, PERIOD_H2, 1);
+    double previousLow  = iLow(_Symbol, PERIOD_H2, 1);
     
-    // Calculate a dynamic buffer based on ATR and fixed pips
-    // Using 2x ATR plus fixed buffer for catastrophic scenarios
-    double dynamicBuffer = (2 * currentATR) + (SLBufferPips * SymbolInfoDouble(_Symbol, SYMBOL_POINT));
-    
-    // Look back several bars to find swing high/low
-    int lookbackBars = 5; // Adjust based on your timeframe
-    double swingHigh = 0, swingLow = DBL_MAX;
-    
-    for(int i = 1; i <= lookbackBars; i++)
-    {
-        double high = iHigh(_Symbol, PERIOD_H2, i);
-        double low = iLow(_Symbol, PERIOD_H2, i);
-        
-        if(high > swingHigh) swingHigh = high;
-        if(low < swingLow) swingLow = low;
-    }
+    // Define a buffer in pips to account for spread and volatility
+    double bufferPips = SLBufferPips; // Adjustable buffer
+    double pointSize   = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
     
     if(isBuy)
     {
-        // For buy orders: Stop loss below the lowest low minus dynamic buffer
-        return swingLow - dynamicBuffer;
+        // Stop-loss just below the previous bar's low minus buffer
+        return previousLow - (bufferPips * pointSize);
     }
     else
     {
-        // For sell orders: Stop loss above the highest high plus dynamic buffer
-        return swingHigh + dynamicBuffer;
+        // Stop-loss just above the previous bar's high plus buffer
+        return previousHigh + (bufferPips * pointSize);
     }
 }
 
@@ -1023,7 +789,6 @@ void CheckTakeProfit()
         {
             double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
             double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
-            double stopLoss = PositionGetDouble(POSITION_SL);
             ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
             
             double profitPips = 0;
@@ -1037,43 +802,6 @@ void CheckTakeProfit()
             double atrPips = currentATR / point;
             double tpLevel = atrPips * ATRMultiplierTP;
             double slLevel = atrPips * ATRMultiplierSL;
-            
-            // Check if emergency stop-loss is hit or about to be hit
-            bool isEmergencyStopHit = false;
-            if(posType == POSITION_TYPE_BUY && currentPrice <= stopLoss)
-                isEmergencyStopHit = true;
-            else if(posType == POSITION_TYPE_SELL && currentPrice >= stopLoss)
-                isEmergencyStopHit = true;
-            
-            if(isEmergencyStopHit)
-            {
-                Print("!!! EMERGENCY STOP-LOSS HIT !!!");
-                Print("=================================");
-                Print("Position Type: ", EnumToString(posType));
-                Print("Entry Price: ", openPrice);
-                Print("Stop-Loss Price: ", stopLoss);
-                Print("Current Price: ", currentPrice);
-                Print("Loss in Pips: ", profitPips);
-                Print("ATR in Pips: ", atrPips);
-                Print("Position Comment: ", PositionGetString(POSITION_COMMENT));
-                Print("=================================");
-                
-                if(trade.PositionClose(ticket))
-                {
-                    Print("Successfully closed position #", ticket, " at EMERGENCY STOP-LOSS");
-                    
-                    // Check if this was the last position
-                    if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
-                    {
-                        tradeDirection = 0;
-                        inEntrySequence = false;
-                        entryPositions = 0;
-                        Print("=== TRADE DIRECTION RESET ===");
-                        Print("Reason: All positions closed after emergency stop-loss hit");
-                    }
-                }
-                continue; // Move to next position after emergency stop-loss
-            }
             
             // Check for Take Profit
             if(profitPips >= tpLevel)
@@ -1098,6 +826,32 @@ void CheckTakeProfit()
                         entryPositions = 0;
                         Print("=== TRADE DIRECTION RESET ===");
                         Print("Reason: All positions have been closed after take profit");
+                    }
+                }
+            }
+            // Check for Stop Loss
+            else if(profitPips <= -slLevel)
+            {
+                Print("=== STOP LOSS EXIT TRIGGERED ===");
+                Print("Position Type: ", EnumToString(posType));
+                Print("Entry Price: ", openPrice);
+                Print("Current Price: ", currentPrice);
+                Print("Loss in Pips: ", profitPips);
+                Print("ATR in Pips: ", atrPips);
+                Print("SL Level: ", slLevel);
+                
+                if(trade.PositionClose(ticket))
+                {
+                    Print("Successfully closed position #", ticket, " at stop loss");
+                    
+                    // Check if this was the last position
+                    if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
+                    {
+                        tradeDirection = 0;
+                        inEntrySequence = false;
+                        entryPositions = 0;
+                        Print("=== TRADE DIRECTION RESET ===");
+                        Print("Reason: All positions have been closed after stop loss");
                     }
                 }
             }
