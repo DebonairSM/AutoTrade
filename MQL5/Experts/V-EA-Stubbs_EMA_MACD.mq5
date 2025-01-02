@@ -15,16 +15,16 @@ input int    MACDFast        = 15;    // MACD Fast EMA Period
 input int    MACDSlow        = 17;    // MACD Slow EMA Period
 input int    MACDSignal      = 13;     // MACD Signal SMA Period
 input double RiskPercentage  = 23;     // Risk Percentage per Trade
-input int    RiskMonth1     = 12;    // Month to modify risk (1-12)
-input double RiskMultiplier1 = 2.0;  // Risk multiplier for Month1
-input int    RiskMonth2     = 0;     // Second month to modify risk (0=disabled)
-input double RiskMultiplier2 = 1.0;  // Risk multiplier for Month2
-input int    RiskMonth3     = 0;     // Third month to modify risk (0=disabled)
-input double RiskMultiplier3 = 1.0;  // Risk multiplier for Month3
+input int    RiskMonth1     = 4;    // Month to modify risk (1-12)
+input double RiskMultiplier1 = 2.3;  // Risk multiplier for Month1
+input int    RiskMonth2     = 5;     // Second month to modify risk (0=disabled)
+input double RiskMultiplier2 = 2.8;  // Risk multiplier for Month2
+input int    RiskMonth3     = 1;     // Third month to modify risk (0=disabled)
+input double RiskMultiplier3 = 4.8;  // Risk multiplier for Month3
 input int    ATRPeriod       = 19;    // ATR Period
 input double ATRMultiplierSL = 8.4;   // ATR Multiplier for Stop Loss
 input double ATRMultiplierTP = 6.0;   // ATR Multiplier for Take Profit
-input double MACDThreshold   = 0.00010; // Minimum MACD difference for signal
+input double MACDThreshold   = 0.00006; // Minimum MACD difference for signal
 input int    EntryTimeoutBars = 8;    // Bars to wait for entry sequence
 input double SLBufferPips    = 5.0;   // Stop-Loss Buffer in Pips
 //--- Trading Time Parameters
