@@ -78,8 +78,8 @@ int start()
    //--- 3) Check for open positions to see if we should exit at Take Profit or Stop Loss
    CheckTakeProfit();
 
-   //--- 4) Check for new 2-hour bar
-   datetime currentBar = iTime(Symbol(), PERIOD_H2, 0);
+   //--- 4) Check for new bar
+   datetime currentBar = iTime(Symbol(), PERIOD_H1, 0);
    if(currentBar <= lastBarTime)
       return(0); // No new bar yet
 
@@ -87,7 +87,7 @@ int start()
    lastBarTime = currentBar;
 
    //--- 5) Handle potential entry-sequence timeout
-   if(inEntrySequence && currentBar > (tradeEntryBar + (EntryTimeoutBars * PeriodSeconds(PERIOD_H2))))
+   if(inEntrySequence && currentBar > (tradeEntryBar + (EntryTimeoutBars * PeriodSeconds(PERIOD_H1))))
    {
       inEntrySequence = false;
       Print("=== ENTRY SEQUENCE TIMEOUT ===");
@@ -95,23 +95,22 @@ int start()
    }
 
    //--- 6) Gather indicator data
-   double emaFastPrev = iMA(Symbol(), PERIOD_H2, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE, 1);
-   double emaMidPrev  = iMA(Symbol(), PERIOD_H2, EMAPeriodMid , 0, MODE_EMA, PRICE_CLOSE, 1);
-   double emaSlowPrev = iMA(Symbol(), PERIOD_H2, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE, 1);
+   double emaFastPrev = iMA(Symbol(), PERIOD_H1, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE, 1);
+   double emaMidPrev  = iMA(Symbol(), PERIOD_H1, EMAPeriodMid , 0, MODE_EMA, PRICE_CLOSE, 1);
+   double emaSlowPrev = iMA(Symbol(), PERIOD_H1, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE, 1);
 
-   double emaFastCurr = iMA(Symbol(), PERIOD_H2, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE, 0);
-   double emaMidCurr  = iMA(Symbol(), PERIOD_H2, EMAPeriodMid , 0, MODE_EMA, PRICE_CLOSE, 0);
-   double emaSlowCurr = iMA(Symbol(), PERIOD_H2, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE, 0);
+   double emaFastCurr = iMA(Symbol(), PERIOD_H1, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE, 0);
+   double emaMidCurr  = iMA(Symbol(), PERIOD_H1, EMAPeriodMid , 0, MODE_EMA, PRICE_CLOSE, 0);
+   double emaSlowCurr = iMA(Symbol(), PERIOD_H1, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE, 0);
 
    // MACD in MQL4 returns 3 buffers:
    //   buffer 0 -> Main
    //   buffer 1 -> Signal
    //   buffer 2 -> Histogram
-   // iMACD(Symbol(), Timeframe, FastEMA, SlowEMA, SignalSMA, Price, Mode, Shift)
-   double macdMainPrev   = iMACD(Symbol(), PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_MAIN,   1);
-   double macdSignalPrev = iMACD(Symbol(), PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_SIGNAL, 1);
-   double macdMainCurr   = iMACD(Symbol(), PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_MAIN,   0);
-   double macdSignalCurr = iMACD(Symbol(), PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_SIGNAL, 0);
+   double macdMainPrev   = iMACD(Symbol(), PERIOD_H1, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_MAIN,   1);
+   double macdSignalPrev = iMACD(Symbol(), PERIOD_H1, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_SIGNAL, 1);
+   double macdMainCurr   = iMACD(Symbol(), PERIOD_H1, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_MAIN,   0);
+   double macdSignalCurr = iMACD(Symbol(), PERIOD_H1, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE, MODE_SIGNAL, 0);
 
    //--- 7) Detect EMA crossovers
    bool isBullishCross = false;
@@ -210,10 +209,10 @@ int start()
       // (b) Second position logic
       else if(entryPositions == 1)
       {
-         double currentClose  = iClose(Symbol(), PERIOD_H2, 0);
-         double previousClose = iClose(Symbol(), PERIOD_H2, 1);
-         double previousHigh  = iHigh(Symbol(), PERIOD_H2, 1);
-         double previousLow   = iLow(Symbol(), PERIOD_H2, 1);
+         double currentClose  = iClose(Symbol(), PERIOD_H1, 0);
+         double previousClose = iClose(Symbol(), PERIOD_H1, 1);
+         double previousHigh  = iHigh(Symbol(), PERIOD_H1, 1);
+         double previousLow   = iLow(Symbol(), PERIOD_H1, 1);
 
          if(orderType == OP_BUY)
          {
@@ -243,8 +242,8 @@ int start()
       // (c) Third position logic
       else if(entryPositions == 2)
       {
-         double currentClose  = iClose(Symbol(), PERIOD_H2, 0);
-         double previousClose = iClose(Symbol(), PERIOD_H2, 1);
+         double currentClose  = iClose(Symbol(), PERIOD_H1, 0);
+         double previousClose = iClose(Symbol(), PERIOD_H1, 1);
          double point         = MarketInfo(Symbol(), MODE_POINT);
 
          // Calculate drawdown since trade entry
@@ -254,11 +253,11 @@ int start()
 
          for(int i=0; i<100; i++)
          {
-            datetime barTime = iTime(Symbol(), PERIOD_H2, i);
+            datetime barTime = iTime(Symbol(), PERIOD_H1, i);
             if(barTime < tradeEntryBar) break;
 
-            double barHigh = iHigh(Symbol(), PERIOD_H2, i);
-            double barLow  = iLow(Symbol(), PERIOD_H2, i);
+            double barHigh = iHigh(Symbol(), PERIOD_H1, i);
+            double barLow  = iLow(Symbol(), PERIOD_H1, i);
             if(barHigh > highestPrice) highestPrice = barHigh;
             if(barLow < lowestPrice)   lowestPrice  = barLow;
          }
@@ -336,14 +335,14 @@ int start()
                          StringConcatenate((orderType == OP_BUY ? "Bullish" : "Bearish"), " Entry #",(entryPositions+1))))
             {
                entryPositions++;
-               lastEntryBar = iTime(Symbol(), PERIOD_H2, 0);
+               lastEntryBar = iTime(Symbol(), PERIOD_H1, 0);
             }
          }
       }
 
       //--- Check for entry timeout
       datetime timeoutReference = (lastEntryBar > 0 ? lastEntryBar : tradeEntryBar);
-      if(iTime(Symbol(), PERIOD_H2, 0) > (timeoutReference + (EntryTimeoutBars * PeriodSeconds(PERIOD_H2))))
+      if(iTime(Symbol(), PERIOD_H1, 0) > (timeoutReference + (EntryTimeoutBars * PeriodSeconds(PERIOD_H1))))
       {
          // Only stop if at least 1 position is open
          if(entryPositions > 0)
@@ -366,7 +365,7 @@ int start()
             else
             {
                // Extend time for the first entry
-               tradeEntryBar = iTime(Symbol(), PERIOD_H2, 0);
+               tradeEntryBar = iTime(Symbol(), PERIOD_H1, 0);
                Print("=== ENTRY SEQUENCE EXTENDED ===");
                Print("No positions yet. Resetting entry timer for more time.");
             }
@@ -479,9 +478,8 @@ bool OpenTrade(int orderType, double lots, double sl, double tp, string comment=
    if(orderType == OP_BUY)
    {
       double buyPrice = ask;
-      double stopLoss = (sl > 0 ? sl : 0);
-      // For demonstration, passing 0 for tp here, as actual ATR-based exit is done by the EA
-      ticket = OrderSend(Symbol(), OP_BUY, lots, buyPrice, slippage, stopLoss, 0, comment, MagicNumber, 0, clrBlue);
+      // Send order without SL/TP - using dynamic exit strategies instead
+      ticket = OrderSend(Symbol(), OP_BUY, lots, buyPrice, slippage, 0, 0, comment, MagicNumber, 0, clrBlue);
       if(ticket < 0)
       {
          Print("Buy OrderSend failed. Error:", GetLastError());
@@ -493,8 +491,8 @@ bool OpenTrade(int orderType, double lots, double sl, double tp, string comment=
    else if(orderType == OP_SELL)
    {
       double sellPrice = bid;
-      double stopLoss  = (sl > 0 ? sl : 0);
-      ticket = OrderSend(Symbol(), OP_SELL, lots, sellPrice, slippage, stopLoss, 0, comment, MagicNumber, 0, clrRed);
+      // Send order without SL/TP - using dynamic exit strategies instead
+      ticket = OrderSend(Symbol(), OP_SELL, lots, sellPrice, slippage, 0, 0, comment, MagicNumber, 0, clrRed);
       if(ticket < 0)
       {
          Print("Sell OrderSend failed. Error:", GetLastError());
@@ -637,8 +635,8 @@ bool IsMACDCrossOver(double macdMainPrev, double macdSignalPrev, double macdMain
 //+------------------------------------------------------------------+
 double GetStopLossPrice(bool isBuy)
 {
-   double prevHigh = iHigh(Symbol(), PERIOD_H2, 1);
-   double prevLow  = iLow(Symbol(), PERIOD_H2, 1);
+   double prevHigh = iHigh(Symbol(), PERIOD_H1, 1);
+   double prevLow  = iLow(Symbol(), PERIOD_H1, 1);
 
    double pointSize = MarketInfo(Symbol(), MODE_POINT);
    double buffer    = SLBufferPips * pointSize;
@@ -654,9 +652,9 @@ double GetStopLossPrice(bool isBuy)
 //+------------------------------------------------------------------+
 bool CheckEMAAlignment(int direction)
 {
-   double emaFast = iMA(Symbol(), PERIOD_H2, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE, 0);
-   double emaMid  = iMA(Symbol(), PERIOD_H2, EMAPeriodMid , 0, MODE_EMA, PRICE_CLOSE, 0);
-   double emaSlow = iMA(Symbol(), PERIOD_H2, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE, 0);
+   double emaFast = iMA(Symbol(), PERIOD_H1, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE, 0);
+   double emaMid  = iMA(Symbol(), PERIOD_H1, EMAPeriodMid , 0, MODE_EMA, PRICE_CLOSE, 0);
+   double emaSlow = iMA(Symbol(), PERIOD_H1, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE, 0);
 
    double tolerance = 0.00005;
 
@@ -678,7 +676,6 @@ bool CheckEMAAlignment(int direction)
    }
    return(false);
 }
-
 //+------------------------------------------------------------------+
 //| CheckTakeProfit: ATR-based exit logic                            |
 //+------------------------------------------------------------------+
@@ -689,7 +686,7 @@ void CheckTakeProfit()
    double point = MarketInfo(Symbol(), MODE_POINT);
 
    // Current ATR
-   double currentATR = iATR(Symbol(), PERIOD_H2, ATRPeriod, 0);
+   double currentATR = iATR(Symbol(), PERIOD_H1, ATRPeriod, 0);
    double atrPips    = currentATR / point;
    double tpLevel    = atrPips * ATRMultiplierTP; // in pips
    double slLevel    = atrPips * ATRMultiplierSL; // in pips
@@ -766,3 +763,4 @@ int PeriodSeconds(int timeframe)
       default:         return(0);
    }
 }
+
