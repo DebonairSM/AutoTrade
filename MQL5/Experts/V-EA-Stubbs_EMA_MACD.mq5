@@ -6,6 +6,18 @@
 #property strict
 
 #include <Trade\Trade.mqh>
+#include <Tools\DateTime.mqh>
+#include <Arrays\ArrayObj.mqh>
+
+// Economic Calendar structures
+struct CalendarEvent
+{
+    string name;
+    datetime time;
+    string currencyCode;
+    int importance;
+    ulong id;
+};
 
 //--- Input Parameters
 input int    EMAPeriodFast   = 8;     // Fast EMA Period
@@ -30,6 +42,14 @@ input double SLBufferPips    = 5.0;   // Stop-Loss Buffer in Pips
 //--- Trading Time Parameters
 input int    NoTradeStartHour = 6;     // No Trading Start Hour 
 input int    NoTradeEndHour   = 7;     // No Trading End Hour
+input int    HaltMinutesBefore = 30;   // Minutes before news event to halt trading
+input int    HaltMinutesAfter  = 30;   // Minutes after news event to halt trading
+input bool   HaltOnCPI        = true;  // Halt on CPI announcements
+input bool   HaltOnNFP        = true;  // Halt on Non-Farm Payrolls
+input bool   HaltOnFOMC       = true;  // Halt on FOMC meetings
+input bool   HaltOnGDP        = true;  // Halt on GDP reports
+input bool   HaltOnPPI        = true;  // Halt on PPI announcements
+input bool   HaltOnCentralBank = true; // Halt on Central Bank speeches
 
 //--- Global Variables
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
@@ -96,6 +116,128 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
+//| Check if event name matches major news events                     |
+//+------------------------------------------------------------------+
+bool IsHighImpactNews(string eventName)
+{
+    string eventUpper = StringToUpper(eventName);
+    
+    if(HaltOnCPI && (StringFind(eventUpper, "CPI") != -1 || 
+       StringFind(eventUpper, "CONSUMER PRICE") != -1))
+        return true;
+        
+    if(HaltOnNFP && (StringFind(eventUpper, "NON-FARM") != -1 || 
+       StringFind(eventUpper, "NONFARM") != -1 ||
+       StringFind(eventUpper, "NFP") != -1))
+        return true;
+        
+    if(HaltOnFOMC && (StringFind(eventUpper, "FOMC") != -1 || 
+       StringFind(eventUpper, "FED") != -1 ||
+       StringFind(eventUpper, "FEDERAL RESERVE") != -1))
+        return true;
+        
+    if(HaltOnGDP && StringFind(eventUpper, "GDP") != -1)
+        return true;
+        
+    if(HaltOnPPI && (StringFind(eventUpper, "PPI") != -1 ||
+       StringFind(eventUpper, "PRODUCER PRICE") != -1))
+        return true;
+        
+    if(HaltOnCentralBank && (
+       StringFind(eventUpper, "ECB") != -1 ||
+       StringFind(eventUpper, "BOE") != -1 ||
+       StringFind(eventUpper, "BOJ") != -1 ||
+       StringFind(eventUpper, "BANK OF JAPAN") != -1 ||
+       StringFind(eventUpper, "BANK OF ENGLAND") != -1 ||
+       StringFind(eventUpper, "EUROPEAN CENTRAL BANK") != -1))
+        return true;
+        
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Get upcoming calendar events                                      |
+//+------------------------------------------------------------------+
+int GetUpcomingEvents(CalendarEvent &events[])
+{
+    datetime currentTime = TimeCurrent();
+    datetime endTime = currentTime + 24*60*60; // Look 24 hours ahead
+    
+    int count = 0;
+    MqlCalendarValue values[];
+    MqlCalendarEvent calendarEvents[];
+    
+    // Get calendar events for the next 24 hours
+    if(CalendarValueHistory(values, currentTime, endTime, NULL, NULL))
+    {
+        for(int i = 0; i < ArraySize(values); i++)
+        {
+            MqlCalendarEvent event;
+            if(CalendarEventById(values[i].event_id, event))
+            {
+                if(IsHighImpactNews(event.name))
+                {
+                    ArrayResize(events, count + 1);
+                    events[count].name = event.name;
+                    events[count].time = values[i].time;
+                    
+                    // Get the event source country
+                    string countryCode = "";
+                    MqlCalendarCountry country;
+                    if(CalendarCountryById(event.country_id, country))
+                        countryCode = country.code;
+                        
+                    events[count].currencyCode = countryCode;
+                    events[count].importance = (int)event.importance;
+                    events[count].id = event.id;
+                    count++;
+                }
+            }
+        }
+    }
+    
+    return count;
+}
+
+//+------------------------------------------------------------------+
+//| Check if trading should be halted due to economic events          |
+//+------------------------------------------------------------------+
+bool ShouldHaltTrading()
+{
+    datetime currentTime = TimeCurrent();
+    CalendarEvent events[];
+    
+    int eventCount = GetUpcomingEvents(events);
+    
+    for(int i = 0; i < eventCount; i++)
+    {
+        if(currentTime >= (events[i].time - HaltMinutesBefore * 60) &&
+           currentTime <= (events[i].time + HaltMinutesAfter * 60))
+        {
+            Print("=== TRADING HALTED ===");
+            Print("Reason: High-impact news event active");
+            Print("Event: ", events[i].name);
+            Print("Event Time: ", TimeToString(events[i].time));
+            Print("Halt Period: ", TimeToString(events[i].time - HaltMinutesBefore * 60), 
+                  " to ", TimeToString(events[i].time + HaltMinutesAfter * 60));
+            
+            string impact = "";
+            switch(events[i].importance)
+            {
+                case 3: impact = "High";   break;
+                case 2: impact = "Medium"; break;
+                case 1: impact = "Low";    break;
+                default: impact = "None";  break;
+            }
+            Print("Event Impact: ", impact);
+            Print("Country Code: ", events[i].currencyCode);
+            return true;
+        }
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick()
@@ -106,9 +248,13 @@ void OnTick()
     if(dt_struct.day_of_week == 0)  // Sunday
         return;
         
-    // Check if current time is within no-trade hours (1 AM - 9 AM)
+    // Check if current time is within no-trade hours
     int currentHour = dt_struct.hour;
     if(currentHour >= NoTradeStartHour && currentHour < NoTradeEndHour)
+        return;
+        
+    // Check for economic events that should halt trading
+    if(ShouldHaltTrading())
         return;
         
     // Adjust risk for December
