@@ -186,6 +186,8 @@ int GetUpcomingEvents(CalendarEvent &events[])
                     MqlCalendarCountry country;
                     if(CalendarCountryById(event.country_id, country))
                         countryCode = country.code;
+                    else
+                        Print("=== CALENDAR ERROR ===\nFailed to get country data for event ID: ", event.country_id, "\nError code: ", GetLastError());
                         
                     events[count].currencyCode = countryCode;
                     events[count].importance = (int)event.importance;
@@ -193,7 +195,15 @@ int GetUpcomingEvents(CalendarEvent &events[])
                     count++;
                 }
             }
+            else
+            {
+                Print("=== CALENDAR ERROR ===\nFailed to get event details for event ID: ", values[i].event_id, "\nError code: ", GetLastError());
+            }
         }
+    }
+    else
+    {
+        Print("=== CALENDAR ERROR ===\nFailed to retrieve calendar history\nPeriod: ", TimeToString(currentTime), " to ", TimeToString(endTime), "\nError code: ", GetLastError());
     }
     
     return count;
