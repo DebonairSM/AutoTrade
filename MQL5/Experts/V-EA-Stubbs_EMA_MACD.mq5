@@ -242,10 +242,103 @@ bool ShouldHaltTrading()
 }
 
 //+------------------------------------------------------------------+
+//| Generate Hourly Trend Report                                       |
+//+------------------------------------------------------------------+
+void GenerateHourlyReport()
+{
+    static datetime lastReportTime = 0;
+    datetime currentTime = TimeCurrent();
+    
+    // Only generate report at the start of each hour
+    MqlDateTime dt_struct;
+    TimeToStruct(currentTime, dt_struct);
+    
+    // Changed condition to ensure we only report once per hour
+    if(dt_struct.min != 0 || dt_struct.sec != 0 || currentTime <= lastReportTime)
+        return;
+        
+    lastReportTime = currentTime;
+    
+    // Get current indicator values
+    double emaFastCurr = GetIndicatorValue(handleEmaFast, 0);
+    double emaMidCurr = GetIndicatorValue(handleEmaMid, 0);
+    double emaSlowCurr = GetIndicatorValue(handleEmaSlow, 0);
+    double macdMainCurr = GetIndicatorValue(handleMacd, 0, 0);
+    double macdSignalCurr = GetIndicatorValue(handleMacd, 0, 1);
+    
+    // Calculate trend strength based on EMA alignment
+    double emaTrendStrength = 0;
+    string emaAlignment = "";
+    
+    if(emaFastCurr > emaMidCurr && emaMidCurr > emaSlowCurr)
+    {
+        emaTrendStrength = ((emaFastCurr - emaSlowCurr) / emaSlowCurr) * 10000; // Convert to basis points
+        emaAlignment = "BULLISH";
+    }
+    else if(emaFastCurr < emaMidCurr && emaMidCurr < emaSlowCurr)
+    {
+        emaTrendStrength = ((emaSlowCurr - emaFastCurr) / emaSlowCurr) * 10000; // Convert to basis points
+        emaAlignment = "BEARISH";
+    }
+    else
+    {
+        emaAlignment = "MIXED";
+    }
+    
+    // Calculate MACD signal strength
+    double macdStrength = (macdMainCurr - macdSignalCurr) * 10000; // Convert to basis points
+    string macdTrend = macdStrength > 0 ? "BULLISH" : "BEARISH";
+    
+    // Calculate overall trend score (0-100)
+    double trendScore = 50; // Start at neutral
+    
+    // Add EMA contribution (up to ±30 points)
+    if(emaAlignment != "MIXED")
+    {
+        double emaContribution = MathMin(MathAbs(emaTrendStrength), 30);
+        trendScore += (emaAlignment == "BULLISH" ? emaContribution : -emaContribution);
+    }
+    
+    // Add MACD contribution (up to ±20 points)
+    double macdContribution = MathMin(MathAbs(macdStrength), 20);
+    trendScore += (macdStrength > 0 ? macdContribution : -macdContribution);
+    
+    // Print the report
+    Print("=== HOURLY TREND REPORT ===");
+    Print("Time: ", TimeToString(currentTime));
+    Print("EMA Analysis:");
+    Print("  - Alignment: ", emaAlignment);
+    Print("  - Trend Strength: ", DoubleToString(emaTrendStrength, 2), " basis points");
+    Print("MACD Analysis:");
+    Print("  - Direction: ", macdTrend);
+    Print("  - Signal Strength: ", DoubleToString(MathAbs(macdStrength), 2), " basis points");
+    Print("Overall Trend Score: ", DoubleToString(trendScore, 1), "/100");
+    Print("  - Above 70: Strong Bullish");
+    Print("  - 55-70: Moderate Bullish");
+    Print("  - 45-55: Neutral");
+    Print("  - 30-45: Moderate Bearish");
+    Print("  - Below 30: Strong Bearish");
+    
+    // Add trading suggestion based on score
+    string suggestion = "";
+    if(trendScore >= 70) suggestion = "Consider LONG positions on pullbacks";
+    else if(trendScore >= 55) suggestion = "Look for LONG opportunities with confirmation";
+    else if(trendScore > 45) suggestion = "Wait for clearer directional signals";
+    else if(trendScore > 30) suggestion = "Look for SHORT opportunities with confirmation";
+    else suggestion = "Consider SHORT positions on rallies";
+    
+    Print("Trading Suggestion: ", suggestion);
+    Print("========================");
+}
+
+//+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick()
 {
+    // Generate hourly report first
+    GenerateHourlyReport();
+    
     // Check if it's Sunday - never trade on Sundays
     MqlDateTime dt_struct;
     TimeToStruct(TimeCurrent(), dt_struct);
