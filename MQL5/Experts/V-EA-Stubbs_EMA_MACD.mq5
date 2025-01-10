@@ -20,28 +20,22 @@ struct CalendarEvent
 };
 
 //--- Input Parameters
-input int    EMAPeriodFast   = 8;     // Fast EMA Period
-input int    EMAPeriodMid    = 23;    // Mid EMA Period
-input int    EMAPeriodSlow   = 22;    // Slow EMA Period
-input int    MACDFast        = 15;    // MACD Fast EMA Period
-input int    MACDSlow        = 17;    // MACD Slow EMA Period
+input int    EMAPeriodFast   = 7;     // Fast EMA Period
+input int    EMAPeriodMid    = 32;    // Mid EMA Period
+input int    EMAPeriodSlow   = 33;    // Slow EMA Period
+input int    MACDFast        = 14;    // MACD Fast EMA Period
+input int    MACDSlow        = 19;    // MACD Slow EMA Period
 input int    MACDSignal      = 13;     // MACD Signal SMA Period
-input double RiskPercentage  = 5;     // Risk Percentage per Trade
-input int    RiskMonth1     = 4;    // Month to modify risk (1-12)
-input double RiskMultiplier1 = 2.4;  // Risk multiplier for Month1
-input int    RiskMonth2     = 5;     // Second month to modify risk (0=disabled)
-input double RiskMultiplier2 = 2.6;  // Risk multiplier for Month2
-input int    RiskMonth3     = 1;     // Third month to modify risk (0=disabled)
-input double RiskMultiplier3 = 5;  // Risk multiplier for Month3
-input int    ATRPeriod       = 19;    // ATR Period
-input double ATRMultiplierSL = 8.4;   // ATR Multiplier for Stop Loss
-input double ATRMultiplierTP = 6.0;   // ATR Multiplier for Take Profit
-input double MACDThreshold   = 0.00006; // Minimum MACD difference for signal
-input int    EntryTimeoutBars = 8;    // Bars to wait for entry sequence
-input double SLBufferPips    = 5.0;   // Stop-Loss Buffer in Pips
+input double RiskPercentage  = 7;     // Risk Percentage per Trade
+input int    ATRPeriod       = 20;    // ATR Period
+input double ATRMultiplierSL = 9;   // ATR Multiplier for Stop Loss
+input double ATRMultiplierTP = 10.2;   // ATR Multiplier for Take Profit
+input double MACDThreshold   = 0.0002; // Minimum MACD difference for signal
+input int    EntryTimeoutBars = 11;    // Bars to wait for entry sequence
+input double SLBufferPips    = 6.0;   // Stop-Loss Buffer in Pips
 //--- Trading Time Parameters
-input int    NoTradeStartHour = 6;     // No Trading Start Hour 
-input int    NoTradeEndHour   = 7;     // No Trading End Hour
+input int    NoTradeStartHour = 12;     // No Trading Start Hour 
+input int    NoTradeEndHour   = 4;     // No Trading End Hour
 input int    HaltMinutesBefore = 30;   // Minutes before news event to halt trading
 input int    HaltMinutesAfter  = 30;   // Minutes after news event to halt trading
 input bool   HaltOnCPI        = true;  // Halt on CPI announcements
@@ -628,20 +622,6 @@ void OnTick()
 //+------------------------------------------------------------------+
 double CalculateLotSize(double riskAmount, double pipsDistance)
 {
-    MqlDateTime dt_struct;
-    TimeToStruct(TimeCurrent(), dt_struct);
-    double adjustedRisk = RiskPercentage;
-    
-    // Apply month-specific risk multipliers
-    if(dt_struct.mon == RiskMonth1 && RiskMonth1 > 0 && RiskMonth1 <= 12)
-        adjustedRisk *= RiskMultiplier1;
-    else if(dt_struct.mon == RiskMonth2 && RiskMonth2 > 0 && RiskMonth2 <= 12)
-        adjustedRisk *= RiskMultiplier2;
-    else if(dt_struct.mon == RiskMonth3 && RiskMonth3 > 0 && RiskMonth3 <= 12)
-        adjustedRisk *= RiskMultiplier3;
-    
-    riskAmount = AccountInfoDouble(ACCOUNT_BALANCE) * (adjustedRisk / 100.0);
-    
     double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
     double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
     
