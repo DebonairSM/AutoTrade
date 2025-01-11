@@ -20,6 +20,7 @@ struct CalendarEvent
 };
 
 //--- Input Parameters
+input ENUM_TIMEFRAMES MainTimeframe = PERIOD_H2;  // Main Trading Timeframe
 input int    EMAPeriodFast   = 7;     // Fast EMA Period
 input int    EMAPeriodMid    = 32;    // Mid EMA Period
 input int    EMAPeriodSlow   = 33;    // Slow EMA Period
@@ -45,6 +46,26 @@ input bool   HaltOnGDP        = true;  // Halt on GDP reports
 input bool   HaltOnPPI        = true;  // Halt on PPI announcements
 input bool   HaltOnCentralBank = true; // Halt on Central Bank speeches
 
+//--- Pivot Point Parameters
+input ENUM_TIMEFRAMES PivotTimeframe = PERIOD_D1;  // Timeframe for Pivot Points
+input bool   UsePivotPoints = true;     // Use Pivot Points for Trading
+input double PivotBufferPips = 2.0;     // Buffer around pivot levels (pips)
+input bool   UseR1AsTP = true;          // Use R1 as Take Profit for longs
+input bool   UseS1AsTP = true;          // Use S1 as Take Profit for shorts
+input bool   UseS1AsSL = true;          // Use S1 as Stop Loss for longs
+input bool   UseR1AsSL = true;          // Use R1 as Stop Loss for shorts
+
+//--- Add new input parameters
+input bool   UseHybridExits = true;    // Use both Pivot and ATR for exits
+input double PivotWeight    = 0.5;     // Weight for Pivot Points (0.0-1.0)
+input double ATRWeight      = 0.5;     // Weight for ATR-based exits (0.0-1.0)
+input int    ATR_MA_Period    = 20;    // Period for Average ATR calculation
+input double SL_ATR_Mult     = 0.5;    // ATR multiplier for SL buffer
+input double TP_ATR_Mult     = 0.3;    // ATR multiplier for TP buffer
+input double SL_Dist_Mult    = 0.1;    // Distance multiplier for SL buffer (10%)
+input double TP_Dist_Mult    = 0.08;   // Distance multiplier for TP buffer (8%)
+input double Max_Buffer_Pips = 50.0;   // Maximum buffer size in pips
+
 //--- Global Variables
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
 datetime     lastBarTime       = 0;       // Tracks the last processed bar time
@@ -62,8 +83,148 @@ int          handleMacd;
 int          handleATR;      // ATR indicator handle
 int          tradeDirection = 0;   // 0 = No position, 1 = Buy, -1 = Sell
 
+// Pivot Point levels
+double       pivotPoint = 0;
+double       r1Level = 0;
+double       r2Level = 0;
+double       r3Level = 0;
+double       s1Level = 0;
+double       s2Level = 0;
+double       s3Level = 0;
+datetime     lastPivotCalc = 0;
+
 // Trade object
 CTrade      trade;
+
+// Add these as global variables
+double averageATR = 0;
+int handleAverageATR;
+
+//+------------------------------------------------------------------+
+//| Calculate Pivot Points and Support/Resistance Levels               |
+//+------------------------------------------------------------------+
+void CalculatePivotPoints()
+{
+    // Only recalculate at the start of a new period
+    datetime currentPeriodStart = iTime(_Symbol, PivotTimeframe, 0);
+    if(currentPeriodStart == lastPivotCalc) return;
+    
+    lastPivotCalc = currentPeriodStart;
+    
+    // Get previous period's high, low, and close
+    double prevHigh = iHigh(_Symbol, PivotTimeframe, 1);
+    double prevLow = iLow(_Symbol, PivotTimeframe, 1);
+    double prevClose = iClose(_Symbol, PivotTimeframe, 1);
+    
+    // Calculate pivot point
+    pivotPoint = (prevHigh + prevLow + prevClose) / 3.0;
+    
+    // Calculate resistance levels
+    r1Level = (2 * pivotPoint) - prevLow;
+    r2Level = pivotPoint + (prevHigh - prevLow);
+    r3Level = r2Level + (prevHigh - prevLow);
+    
+    // Calculate support levels
+    s1Level = (2 * pivotPoint) - prevHigh;
+    s2Level = pivotPoint - (prevHigh - prevLow);
+    s3Level = s2Level - (prevHigh - prevLow);
+    
+    Print("=== PIVOT POINTS UPDATED ===");
+    Print("Timeframe: ", EnumToString(PivotTimeframe));
+    Print("Pivot: ", pivotPoint);
+    Print("R1: ", r1Level, " R2: ", r2Level, " R3: ", r3Level);
+    Print("S1: ", s1Level, " S2: ", s2Level, " S3: ", s3Level);
+}
+
+//+------------------------------------------------------------------+
+//| Check if price is near a pivot level                              |
+//+------------------------------------------------------------------+
+bool IsPriceNearLevel(double price, double level)
+{
+    double bufferInPoints = PivotBufferPips * 10.0; // Convert pips to points
+    return (MathAbs(price - level) <= bufferInPoints * _Point);
+}
+
+//+------------------------------------------------------------------+
+//| Get modified take profit based on pivot levels                     |
+//+------------------------------------------------------------------+
+double GetPivotBasedTP(bool isBuy, double defaultTP)
+{
+    if(!UsePivotPoints) return defaultTP;
+    
+    double currentPrice = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) 
+                               : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    
+    if(isBuy && UseR1AsTP && currentPrice < r1Level)
+        return r1Level;
+    else if(!isBuy && UseS1AsTP && currentPrice > s1Level)
+        return s1Level;
+        
+    return defaultTP;
+}
+
+//+------------------------------------------------------------------+
+//| Get modified stop loss based on pivot levels                       |
+//+------------------------------------------------------------------+
+double GetPivotBasedSL(bool isBuy, double defaultSL)
+{
+    if(!UsePivotPoints) return defaultSL;
+    
+    double currentPrice = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) 
+                               : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    
+    if(isBuy && UseS1AsSL && currentPrice > s1Level)
+        return s1Level;
+    else if(!isBuy && UseR1AsSL && currentPrice < r1Level)
+        return r1Level;
+        
+    return defaultSL;
+}
+
+//+------------------------------------------------------------------+
+//| Get nearest pivot level (support or resistance)                    |
+//+------------------------------------------------------------------+
+double GetNearestLevel(double price, bool resistance)
+{
+    if(!UsePivotPoints) return 0.0;
+    
+    if(resistance)
+    {
+        // Find nearest resistance level
+        double levels[] = {r1Level, r2Level, r3Level};
+        double nearestLevel = r1Level;
+        double minDistance = MathAbs(price - r1Level);
+        
+        for(int i = 1; i < ArraySize(levels); i++)
+        {
+            double distance = MathAbs(price - levels[i]);
+            if(distance < minDistance && levels[i] > price)
+            {
+                minDistance = distance;
+                nearestLevel = levels[i];
+            }
+        }
+        return nearestLevel;
+    }
+    else
+    {
+        // Find nearest support level
+        double levels[] = {s1Level, s2Level, s3Level};
+        double nearestLevel = s1Level;
+        double minDistance = MathAbs(price - s1Level);
+        
+        for(int i = 1; i < ArraySize(levels); i++)
+        {
+            double distance = MathAbs(price - levels[i]);
+            if(distance < minDistance && levels[i] < price)
+            {
+                minDistance = distance;
+                nearestLevel = levels[i];
+            }
+        }
+        return nearestLevel;
+    }
+}
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -71,15 +232,18 @@ CTrade      trade;
 int OnInit()
 {
     // Initialize EMA indicators
-    handleEmaFast = iMA(_Symbol, PERIOD_H2, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE);
-    handleEmaMid  = iMA(_Symbol, PERIOD_H2, EMAPeriodMid,  0, MODE_EMA, PRICE_CLOSE);
-    handleEmaSlow = iMA(_Symbol, PERIOD_H2, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE);
+    handleEmaFast = iMA(_Symbol, MainTimeframe, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE);
+    handleEmaMid  = iMA(_Symbol, MainTimeframe, EMAPeriodMid,  0, MODE_EMA, PRICE_CLOSE);
+    handleEmaSlow = iMA(_Symbol, MainTimeframe, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE);
     
     // Initialize MACD indicator
-    handleMacd = iMACD(_Symbol, PERIOD_H2, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE);
+    handleMacd = iMACD(_Symbol, MainTimeframe, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE);
     
     // Initialize ATR indicator
-    handleATR = iATR(_Symbol, PERIOD_H2, ATRPeriod);
+    handleATR = iATR(_Symbol, MainTimeframe, ATRPeriod);
+    
+    // Initialize Average ATR indicator
+    handleAverageATR = iMA(_Symbol, MainTimeframe, ATR_MA_Period, 0, MODE_SMA, handleATR);
     
     // Check if indicators are initialized successfully
     if(handleEmaFast == INVALID_HANDLE || handleEmaMid == INVALID_HANDLE || 
@@ -87,6 +251,12 @@ int OnInit()
        handleATR == INVALID_HANDLE)
     {
         Print("Error initializing indicators.");
+        return(INIT_FAILED);
+    }
+    
+    if(handleAverageATR == INVALID_HANDLE)
+    {
+        Print("Error initializing Average ATR indicator");
         return(INIT_FAILED);
     }
     
@@ -336,6 +506,10 @@ void GenerateHourlyReport()
 //+------------------------------------------------------------------+
 void OnTick()
 {
+    // Calculate pivot points if enabled
+    if(UsePivotPoints)
+        CalculatePivotPoints();
+    
     // Generate hourly report first
     GenerateHourlyReport();
     
@@ -358,7 +532,7 @@ void OnTick()
     CheckTakeProfit();
     
     //--- Check for new 2-hour bar
-    datetime currentBar = iTime(_Symbol, PERIOD_H2, 0);
+    datetime currentBar = iTime(_Symbol, MainTimeframe, 0);
     if(currentBar <= lastBarTime)
         return; // No new bar yet
     
@@ -366,7 +540,7 @@ void OnTick()
     lastBarTime = currentBar;
     
     // Check for entry sequence timeout
-    if(inEntrySequence && currentBar > tradeEntryBar + (EntryTimeoutBars * PeriodSeconds(PERIOD_H2)))
+    if(inEntrySequence && currentBar > tradeEntryBar + (EntryTimeoutBars * PeriodSeconds(MainTimeframe)))
     {
         inEntrySequence = false;
         Print("=== ENTRY SEQUENCE TIMEOUT ===");
@@ -392,20 +566,49 @@ void OnTick()
     bool isBullishCross = false;
     bool isBearishCross = false;
     
-    // Detect Bullish EMA Crossover
-    if(emaFastCurr > emaSlowCurr && emaFastPrev <= emaSlowPrev)
+    // Get current price
+    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    
+    // Additional pivot point checks for trade direction
+    if(UsePivotPoints)
     {
-        // Optional Confirmation with Mid EMA
-        if(emaFastCurr > emaMidCurr)
-            isBullishCross = true;
+        // Strengthen bullish signal if price is near support levels
+        if(IsPriceNearLevel(currentPrice, s1Level) || 
+           IsPriceNearLevel(currentPrice, s2Level) || 
+           IsPriceNearLevel(currentPrice, s3Level))
+        {
+            if(emaFastCurr > emaMidCurr && macdMainCurr > macdSignalCurr)
+                isBullishCross = true;
+        }
+        
+        // Strengthen bearish signal if price is near resistance levels
+        if(IsPriceNearLevel(currentPrice, r1Level) || 
+           IsPriceNearLevel(currentPrice, r2Level) || 
+           IsPriceNearLevel(currentPrice, r3Level))
+        {
+            if(emaFastCurr < emaMidCurr && macdMainCurr < macdSignalCurr)
+                isBearishCross = true;
+        }
     }
     
-    // Detect Bearish EMA Crossover
-    if(emaFastCurr < emaSlowCurr && emaFastPrev >= emaSlowPrev)
+    // Standard EMA crossover checks if not already triggered by pivot points
+    if(!isBullishCross && !isBearishCross)
     {
-        // Optional Confirmation with Mid EMA
-        if(emaFastCurr < emaMidCurr)
-            isBearishCross = true;
+        // Detect Bullish EMA Crossover
+        if(emaFastCurr > emaSlowCurr && emaFastPrev <= emaSlowPrev)
+        {
+            // Optional Confirmation with Mid EMA
+            if(emaFastCurr > emaMidCurr)
+                isBullishCross = true;
+        }
+        
+        // Detect Bearish EMA Crossover
+        if(emaFastCurr < emaSlowCurr && emaFastPrev >= emaSlowPrev)
+        {
+            // Optional Confirmation with Mid EMA
+            if(emaFastCurr < emaMidCurr)
+                isBearishCross = true;
+        }
     }
     
     //--- Handle Signal Detection and Trade Direction
@@ -415,6 +618,13 @@ void OnTick()
         if(!HasOpenPositions(ORDER_TYPE_SELL))
         {
             Print("=== BULLISH SIGNAL DETECTED ===");
+            if(UsePivotPoints)
+            {
+                Print("Pivot Point Analysis:");
+                Print("Current Price: ", currentPrice);
+                Print("Nearest Support: ", GetNearestLevel(currentPrice, false));
+                Print("Nearest Resistance: ", GetNearestLevel(currentPrice, true));
+            }
             Print("Trigger: Fast EMA crossed above Slow EMA with Mid EMA confirmation");
             Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
             Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
@@ -443,6 +653,13 @@ void OnTick()
         if(!HasOpenPositions(ORDER_TYPE_BUY))
         {
             Print("=== BEARISH SIGNAL DETECTED ===");
+            if(UsePivotPoints)
+            {
+                Print("Pivot Point Analysis:");
+                Print("Current Price: ", currentPrice);
+                Print("Nearest Support: ", GetNearestLevel(currentPrice, false));
+                Print("Nearest Resistance: ", GetNearestLevel(currentPrice, true));
+            }
             Print("Trigger: Fast EMA crossed below Slow EMA with Mid EMA confirmation");
             Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
             Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
@@ -511,10 +728,10 @@ void OnTick()
         // Second position: Price action and MACD confirmation
         else if(entryPositions == 1)
         {
-            double currentClose = iClose(_Symbol, PERIOD_H2, 0);
-            double previousClose = iClose(_Symbol, PERIOD_H2, 1);
-            double previousHigh = iHigh(_Symbol, PERIOD_H2, 1);
-            double previousLow = iLow(_Symbol, PERIOD_H2, 1);
+            double currentClose = iClose(_Symbol, MainTimeframe, 0);
+            double previousClose = iClose(_Symbol, MainTimeframe, 1);
+            double previousHigh = iHigh(_Symbol, MainTimeframe, 1);
+            double previousLow = iLow(_Symbol, MainTimeframe, 1);
             
             if(orderType == ORDER_TYPE_BUY)
             {
@@ -544,8 +761,8 @@ void OnTick()
         // Third position: Strong trend continuation with volume OR drawdown entry
         else if(entryPositions == 2)
         {
-            double currentClose = iClose(_Symbol, PERIOD_H2, 0);
-            double previousClose = iClose(_Symbol, PERIOD_H2, 1);
+            double currentClose = iClose(_Symbol, MainTimeframe, 0);
+            double previousClose = iClose(_Symbol, MainTimeframe, 1);
             double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
             
             // Calculate drawdown from the highest/lowest point since trade entry
@@ -555,11 +772,11 @@ void OnTick()
             
             for(int i = 0; i < 100; i++) // Look back up to 100 bars
             {
-                datetime barTime = iTime(_Symbol, PERIOD_H2, i);
+                datetime barTime = iTime(_Symbol, MainTimeframe, i);
                 if(barTime < tradeEntryBar) break;
                 
-                double high = iHigh(_Symbol, PERIOD_H2, i);
-                double low = iLow(_Symbol, PERIOD_H2, i);
+                double high = iHigh(_Symbol, MainTimeframe, i);
+                double low = iLow(_Symbol, MainTimeframe, i);
                 
                 if(high > highestPrice) highestPrice = high;
                 if(low < lowestPrice) lowestPrice = low;
@@ -631,14 +848,14 @@ void OnTick()
                             StringFormat("%s Entry #%d", orderType == ORDER_TYPE_BUY ? "Bullish" : "Bearish", entryPositions + 1)))
                 {
                     entryPositions++;
-                    lastEntryBar = iTime(_Symbol, PERIOD_H2, 0); // Update last entry time after successful entry
+                    lastEntryBar = iTime(_Symbol, MainTimeframe, 0); // Update last entry time after successful entry
                 }
             }
         }
         
         // Check for entry sequence timeout using EntryTimeoutBars parameter
         datetime timeoutReference = (lastEntryBar > 0) ? lastEntryBar : tradeEntryBar;
-        if(iTime(_Symbol, PERIOD_H2, 0) > timeoutReference + (EntryTimeoutBars * PeriodSeconds(PERIOD_H2)))
+        if(iTime(_Symbol, MainTimeframe, 0) > timeoutReference + (EntryTimeoutBars * PeriodSeconds(MainTimeframe)))
         {
             // Only timeout if we have at least one position open
             if(entryPositions > 0)
@@ -647,7 +864,7 @@ void OnTick()
                 Print("=== ENTRY SEQUENCE TIMEOUT ===");
                 Print("Could not find confirmation for all entries within ", EntryTimeoutBars, " bars");
                 Print("Reason: Have ", entryPositions, " active position(s), stopping sequence for additional entries");
-                Print("Time since last entry: ", (iTime(_Symbol, PERIOD_H2, 0) - timeoutReference) / PeriodSeconds(PERIOD_H2), " bars");
+                Print("Time since last entry: ", (iTime(_Symbol, MainTimeframe, 0) - timeoutReference) / PeriodSeconds(MainTimeframe), " bars");
             }
             else if(tradeDirection != 0)  // If we have a direction but no positions yet
             {
@@ -655,7 +872,7 @@ void OnTick()
                 if(CheckEMAAlignment(tradeDirection))
                 {
                     // Reset the entry bar time to give more time for first entry
-                    tradeEntryBar = iTime(_Symbol, PERIOD_H2, 0);
+                    tradeEntryBar = iTime(_Symbol, MainTimeframe, 0);
                     Print("=== ENTRY SEQUENCE EXTENDED ===");
                     Print("No positions yet, resetting entry timer to allow more time for first entry");
                 }
@@ -768,17 +985,35 @@ bool OpenTrade(ENUM_ORDER_TYPE orderType, double lots, double sl, double tp, str
     
     bool result = false;
     
+    // Get current ATR value for dynamic SL/TP if pivot points are not used
+    double currentATR = GetIndicatorValue(handleATR, 0);
+    double atrPoints = currentATR / _Point;
+    
     if(orderType == ORDER_TYPE_BUY)
     {
         double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-        Print("Opening BUY Order - Price:", price, " Lots:", lots);
-        result = trade.Buy(lots, _Symbol, 0, 0, 0, comment);
+        double stopLoss = GetPivotBasedSL(true, sl);
+        double takeProfit = GetPivotBasedTP(true, tp);
+        
+        Print("=== OPENING BUY ORDER ===");
+        Print("Entry Price:", price);
+        Print("Stop Loss:", stopLoss, " (Distance:", (price - stopLoss) / _Point, " pips)");
+        Print("Take Profit:", takeProfit, " (Distance:", (takeProfit - price) / _Point, " pips)");
+        
+        result = trade.Buy(lots, _Symbol, 0, stopLoss, takeProfit, comment);
     }
     else if(orderType == ORDER_TYPE_SELL)
     {
         double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-        Print("Opening SELL Order - Price:", price, " Lots:", lots);
-        result = trade.Sell(lots, _Symbol, 0, 0, 0, comment);
+        double stopLoss = GetPivotBasedSL(false, sl);
+        double takeProfit = GetPivotBasedTP(false, tp);
+        
+        Print("=== OPENING SELL ORDER ===");
+        Print("Entry Price:", price);
+        Print("Stop Loss:", stopLoss, " (Distance:", (stopLoss - price) / _Point, " pips)");
+        Print("Take Profit:", takeProfit, " (Distance:", (price - takeProfit) / _Point, " pips)");
+        
+        result = trade.Sell(lots, _Symbol, 0, stopLoss, takeProfit, comment);
     }
     
     if(!result)
@@ -952,8 +1187,8 @@ bool IsMACDCrossOver(double macdMainPrev, double macdSignalPrev, double macdMain
 double GetStopLossPrice(bool isBuy)
 {
     // Fetch the previous bar's high and low
-    double previousHigh = iHigh(_Symbol, PERIOD_H2, 1);
-    double previousLow  = iLow(_Symbol, PERIOD_H2, 1);
+    double previousHigh = iHigh(_Symbol, MainTimeframe, 1);
+    double previousLow  = iLow(_Symbol, MainTimeframe, 1);
     
     // Define a buffer in pips to account for spread and volatility
     double bufferPips = SLBufferPips; // Adjustable buffer
@@ -1081,6 +1316,121 @@ void CheckTakeProfit()
             }
         }
     }
+}
+
+//+------------------------------------------------------------------+
+//| Get hybrid take profit level                                       |
+//+------------------------------------------------------------------+
+double GetHybridTP(bool isBuy, double price, double atrPoints)
+{
+    double atrTP = price + (isBuy ? 1 : -1) * (atrPoints * ATRMultiplierTP) * _Point;
+    double pivotTP = GetPivotBasedTP(isBuy, atrTP);
+    
+    if(!UseHybridExits)
+        return UsePivotPoints ? pivotTP : atrTP;
+        
+    // If price is very close to a pivot level, prefer the pivot target
+    if(IsPriceNearLevel(price, isBuy ? r1Level : s1Level))
+        return pivotTP;
+        
+    // Calculate weighted average if both targets are valid
+    if(pivotTP > 0)
+    {
+        double weightedTP = (atrTP * ATRWeight + pivotTP * PivotWeight) / (ATRWeight + PivotWeight);
+        
+        // Add logic to snap to nearest pivot if very close
+        double nearestPivot = GetNearestLevel(weightedTP, isBuy);
+        if(MathAbs(weightedTP - nearestPivot) < PivotBufferPips * _Point)
+            return nearestPivot;
+            
+        return weightedTP;
+    }
+    
+    return atrTP;
+}
+
+//+------------------------------------------------------------------+
+//| Get hybrid stop loss level                                         |
+//+------------------------------------------------------------------+
+double GetHybridSL(bool isBuy, double price, double atrPoints)
+{
+    double atrSL = price - (isBuy ? 1 : -1) * (atrPoints * ATRMultiplierSL) * _Point;
+    double pivotSL = GetPivotBasedSL(isBuy, atrSL);
+    
+    if(!UseHybridExits)
+        return UsePivotPoints ? pivotSL : atrSL;
+        
+    // If price is very close to a pivot level, prefer the pivot stop
+    if(IsPriceNearLevel(price, isBuy ? s1Level : r1Level))
+        return pivotSL;
+        
+    // Calculate weighted average if both stops are valid
+    if(pivotSL > 0)
+    {
+        double weightedSL = (atrSL * ATRWeight + pivotSL * PivotWeight) / (ATRWeight + PivotWeight);
+        
+        // Add logic to snap to nearest pivot if very close
+        double nearestPivot = GetNearestLevel(weightedSL, !isBuy);
+        if(MathAbs(weightedSL - nearestPivot) < PivotBufferPips * _Point)
+            return nearestPivot;
+            
+        return weightedSL;
+    }
+    
+    return atrSL;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate volatility ratio                                         |
+//+------------------------------------------------------------------+
+double GetVolatilityRatio()
+{
+    double currentATR = GetIndicatorValue(handleATR, 0);
+    averageATR = GetIndicatorValue(handleAverageATR, 0);
+    
+    if(averageATR == 0) return 1.0; // Prevent division by zero
+    
+    double ratio = currentATR / averageATR;
+    
+    Print("=== VOLATILITY RATIO ===");
+    Print("Current ATR: ", currentATR);
+    Print("Average ATR: ", averageATR);
+    Print("Ratio: ", ratio);
+    
+    return ratio;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate buffer size based on ATR and distance to pivot           |
+//+------------------------------------------------------------------+
+double CalculateBuffer(double price, double pivotLevel, bool isTP)
+{
+    double atrValue = GetIndicatorValue(handleATR, 0);
+    double distanceToPivot = MathAbs(price - pivotLevel);
+    
+    // Calculate both types of buffers
+    double atrBuffer = atrValue * (isTP ? TP_ATR_Mult : SL_ATR_Mult);
+    double distanceBuffer = distanceToPivot * (isTP ? TP_Dist_Mult : SL_Dist_Mult);
+    
+    // Take the larger of the two
+    double baseBuffer = MathMax(atrBuffer, distanceBuffer);
+    
+    // Apply volatility ratio
+    double volatilityRatio = GetVolatilityRatio();
+    double finalBuffer = baseBuffer * volatilityRatio;
+    
+    // Limit to maximum buffer size
+    double maxBuffer = Max_Buffer_Pips * _Point;
+    finalBuffer = MathMin(finalBuffer, maxBuffer);
+    
+    Print("=== BUFFER CALCULATION ===");
+    Print("Price: ", price, " Pivot Level: ", pivotLevel);
+    Print("ATR Buffer: ", atrBuffer, " Distance Buffer: ", distanceBuffer);
+    Print("Base Buffer: ", baseBuffer);
+    Print("Volatility Adjusted: ", finalBuffer);
+    Print("Final Buffer: ", finalBuffer);
+    
+    return finalBuffer;
 }
 
 //+------------------------------------------------------------------+
