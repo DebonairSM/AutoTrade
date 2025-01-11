@@ -3,7 +3,11 @@
 //|                        Your Name or Company                       |
 //|                                                                  |
 //+------------------------------------------------------------------+
+#property copyright "Your Name or Company"
+#property link      ""
+#property version   "1.00"
 #property strict
+#property description "Stubbs EA with EMA and MACD Strategy"
 
 #include <Trade\Trade.mqh>
 #include <Tools\DateTime.mqh>
@@ -19,26 +23,51 @@ struct CalendarEvent
     ulong id;
 };
 
-//--- Input Parameters
+//--- EA Parameters
+input group "=== Timeframe Settings ==="
 input ENUM_TIMEFRAMES MainTimeframe = PERIOD_H2;  // Main Trading Timeframe
-input int    EMAPeriodFast   = 7;     // Fast EMA Period
-input int    EMAPeriodMid    = 32;    // Mid EMA Period
-input int    EMAPeriodSlow   = 33;    // Slow EMA Period
-input int    MACDFast        = 14;    // MACD Fast EMA Period
-input int    MACDSlow        = 19;    // MACD Slow EMA Period
-input int    MACDSignal      = 13;     // MACD Signal SMA Period
-input double RiskPercentage  = 7;     // Risk Percentage per Trade
-input int    ATRPeriod       = 20;    // ATR Period
-input double ATRMultiplierSL = 9;   // ATR Multiplier for Stop Loss
-input double ATRMultiplierTP = 10.2;   // ATR Multiplier for Take Profit
-input double MACDThreshold   = 0.0002; // Minimum MACD difference for signal
-input int    EntryTimeoutBars = 11;    // Bars to wait for entry sequence
-input double SLBufferPips    = 6.0;   // Stop-Loss Buffer in Pips
-//--- Trading Time Parameters
-input int    NoTradeStartHour = 12;     // No Trading Start Hour 
-input int    NoTradeEndHour   = 4;     // No Trading End Hour
-input int    HaltMinutesBefore = 30;   // Minutes before news event to halt trading
-input int    HaltMinutesAfter  = 30;   // Minutes after news event to halt trading
+
+input group "=== EMA Parameters ==="
+input int      EmaFastPeriod = 7;        // Fast EMA Period [5-15, Step: 2]
+input int      EmaMidPeriod = 32;        // Mid EMA Period [20-40, Step: 4]
+input int      EmaSlowPeriod = 33;       // Slow EMA Period [21-41, Step: 4]
+
+input group "=== MACD Parameters ==="
+input int      MacdFastPeriod = 12;      // MACD Fast Period [12-24, Step: 4]
+input int      MacdSlowPeriod = 26;      // MACD Slow Period [26-38, Step: 4]
+input int      MacdSignalPeriod = 9;     // MACD Signal Period [9-15, Step: 2]
+
+input group "=== Risk Management ==="
+input double   RiskPercentage = 2.0;     // Risk per trade (%) [1.0-3.0, Step: 0.5]
+input double   MACDThreshold = 0.0004;   // MACD Crossover Threshold [0.0002-0.001, Step: 0.0002]
+input double   SLBufferPips = 6.0;       // Stop-Loss Buffer in Pips [4.0-8.0, Step: 0.5]
+
+input group "=== ATR Settings ==="
+input int      ATRPeriod = 20;           // ATR Period [14-26, Step: 2]
+input double   ATRMultiplierSL = 9.0;    // ATR Multiplier for Stop Loss [7.0-11.0, Step: 0.5]
+input double   ATRMultiplierTP = 10.2;   // ATR Multiplier for Take Profit [8.0-12.0, Step: 0.5]
+
+input group "=== Pivot Points & Buffers ==="
+input ENUM_TIMEFRAMES PivotTimeframe = PERIOD_D1;  // Timeframe for Pivot Points
+input bool    UsePivotPoints = true;     // Use Pivot Points for Trading
+input double  PivotBufferPips = 2.0;     // Buffer around pivot levels (pips) [1.0-5.0, Step: 0.5]
+input int     ATR_MA_Period = 20;        // Period for Average ATR calculation [15-25, Step: 5]
+input double  SL_ATR_Mult = 0.5;         // ATR multiplier for SL buffer [0.3-0.7, Step: 0.1]
+input double  TP_ATR_Mult = 0.3;         // ATR multiplier for TP buffer [0.2-0.4, Step: 0.05]
+input double  SL_Dist_Mult = 0.1;        // Distance multiplier for SL buffer [0.05-0.15, Step: 0.02]
+input double  TP_Dist_Mult = 0.08;       // Distance multiplier for TP buffer [0.04-0.12, Step: 0.02]
+input double  Max_Buffer_Pips = 50.0;    // Maximum buffer size in pips [30-70, Step: 10]
+
+input group "=== Trade Management ==="
+input int      EntryTimeoutBars = 11;    // Bars to wait for entry sequence [8-14, Step: 2]
+input int      HaltMinutesBefore = 60;   // Minutes to halt before news [30-90, Step: 15]
+input int      HaltMinutesAfter = 60;    // Minutes to halt after news [30-90, Step: 15]
+
+input group "=== Trading Hours ==="
+input int      NoTradeStartHour = 22;    // Hour to stop trading [21-23, Step: 1]
+input int      NoTradeEndHour = 3;       // Hour to resume trading [2-4, Step: 1]
+
+input group "=== News Trading ==="
 input bool   HaltOnCPI        = true;  // Halt on CPI announcements
 input bool   HaltOnNFP        = true;  // Halt on Non-Farm Payrolls
 input bool   HaltOnFOMC       = true;  // Halt on FOMC meetings
@@ -46,25 +75,10 @@ input bool   HaltOnGDP        = true;  // Halt on GDP reports
 input bool   HaltOnPPI        = true;  // Halt on PPI announcements
 input bool   HaltOnCentralBank = true; // Halt on Central Bank speeches
 
-//--- Pivot Point Parameters
-input ENUM_TIMEFRAMES PivotTimeframe = PERIOD_D1;  // Timeframe for Pivot Points
-input bool   UsePivotPoints = true;     // Use Pivot Points for Trading
-input double PivotBufferPips = 2.0;     // Buffer around pivot levels (pips)
-input bool   UseR1AsTP = true;          // Use R1 as Take Profit for longs
-input bool   UseS1AsTP = true;          // Use S1 as Take Profit for shorts
-input bool   UseS1AsSL = true;          // Use S1 as Stop Loss for longs
-input bool   UseR1AsSL = true;          // Use R1 as Stop Loss for shorts
-
-//--- Add new input parameters
+input group "=== Hybrid Exit Settings ==="
 input bool   UseHybridExits = true;    // Use both Pivot and ATR for exits
-input double PivotWeight    = 0.5;     // Weight for Pivot Points (0.0-1.0)
-input double ATRWeight      = 0.5;     // Weight for ATR-based exits (0.0-1.0)
-input int    ATR_MA_Period    = 20;    // Period for Average ATR calculation
-input double SL_ATR_Mult     = 0.5;    // ATR multiplier for SL buffer
-input double TP_ATR_Mult     = 0.3;    // ATR multiplier for TP buffer
-input double SL_Dist_Mult    = 0.1;    // Distance multiplier for SL buffer (10%)
-input double TP_Dist_Mult    = 0.08;   // Distance multiplier for TP buffer (8%)
-input double Max_Buffer_Pips = 50.0;   // Maximum buffer size in pips
+input double PivotWeight    = 0.5;     // Weight for Pivot Points [0.3-0.7, Step: 0.1]
+input double ATRWeight      = 0.5;     // Weight for ATR-based exits [0.3-0.7, Step: 0.1]
 
 //--- Global Variables
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
@@ -155,10 +169,10 @@ double GetPivotBasedTP(bool isBuy, double defaultTP)
     double currentPrice = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) 
                                : SymbolInfoDouble(_Symbol, SYMBOL_BID);
     
-    if(isBuy && UseR1AsTP && currentPrice < r1Level)
-        return r1Level;
-    else if(!isBuy && UseS1AsTP && currentPrice > s1Level)
-        return s1Level;
+    // Find nearest pivot level in profit direction
+    double pivotLevel = GetNearestLevel(currentPrice, isBuy);
+    if(pivotLevel != 0.0)
+        return pivotLevel;
         
     return defaultTP;
 }
@@ -173,10 +187,10 @@ double GetPivotBasedSL(bool isBuy, double defaultSL)
     double currentPrice = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) 
                                : SymbolInfoDouble(_Symbol, SYMBOL_BID);
     
-    if(isBuy && UseS1AsSL && currentPrice > s1Level)
-        return s1Level;
-    else if(!isBuy && UseR1AsSL && currentPrice < r1Level)
-        return r1Level;
+    // Find nearest pivot level in loss direction
+    double pivotLevel = GetNearestLevel(currentPrice, !isBuy);
+    if(pivotLevel != 0.0)
+        return pivotLevel;
         
     return defaultSL;
 }
@@ -232,15 +246,15 @@ double GetNearestLevel(double price, bool resistance)
 int OnInit()
 {
     // Initialize EMA indicators
-    handleEmaFast = iMA(_Symbol, MainTimeframe, EMAPeriodFast, 0, MODE_EMA, PRICE_CLOSE);
-    handleEmaMid  = iMA(_Symbol, MainTimeframe, EMAPeriodMid,  0, MODE_EMA, PRICE_CLOSE);
-    handleEmaSlow = iMA(_Symbol, MainTimeframe, EMAPeriodSlow, 0, MODE_EMA, PRICE_CLOSE);
+    handleEmaFast = iMA(_Symbol, MainTimeframe, EmaFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
+    handleEmaMid  = iMA(_Symbol, MainTimeframe, EmaMidPeriod,  0, MODE_EMA, PRICE_CLOSE);
+    handleEmaSlow = iMA(_Symbol, MainTimeframe, EmaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
     
     // Initialize MACD indicator
-    handleMacd = iMACD(_Symbol, MainTimeframe, MACDFast, MACDSlow, MACDSignal, PRICE_CLOSE);
+    handleMacd = iMACD(_Symbol, MainTimeframe, MacdFastPeriod, MacdSlowPeriod, MacdSignalPeriod, PRICE_CLOSE);
     
     // Initialize ATR indicator
-    handleATR = iATR(_Symbol, MainTimeframe, ATRPeriod);
+    handleATR = iATR(_Symbol, MainTimeframe, ATR_MA_Period);
     
     // Initialize Average ATR indicator
     handleAverageATR = iMA(_Symbol, MainTimeframe, ATR_MA_Period, 0, MODE_SMA, handleATR);
