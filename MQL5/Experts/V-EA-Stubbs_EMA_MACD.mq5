@@ -25,60 +25,60 @@ struct CalendarEvent
 
 //--- EA Parameters
 input group "=== Timeframe Settings ==="
-input ENUM_TIMEFRAMES MainTimeframe = PERIOD_H2;  // Main Trading Timeframe
+input ENUM_TIMEFRAMES MainTimeframe = PERIOD_H2;  // Main Trading Timeframe (Standard: H1-H4)
 
 input group "=== EMA Parameters ==="
-input int      EmaFastPeriod = 7;        // Fast EMA Period [5-15, Step: 2]
-input int      EmaMidPeriod = 32;        // Mid EMA Period [20-40, Step: 4]
-input int      EmaSlowPeriod = 33;       // Slow EMA Period [21-41, Step: 4]
+input int      EmaFastPeriod = 13;        // Fast EMA Period (Standard: 12-13) [5-15, Step: 2]
+input int      EmaMidPeriod = 32;        // Mid EMA Period (Standard: 34) [20-40, Step: 4]
+input int      EmaSlowPeriod = 37;       // Slow EMA Period (Standard: 50) [21-41, Step: 4]
 
 input group "=== MACD Parameters ==="
-input int      MacdFastPeriod = 12;      // MACD Fast Period [12-24, Step: 4]
-input int      MacdSlowPeriod = 26;      // MACD Slow Period [26-38, Step: 4]
-input int      MacdSignalPeriod = 9;     // MACD Signal Period [9-15, Step: 2]
+input int      MacdFastPeriod = 24;      // MACD Fast Period (Standard: 12) [12-24, Step: 4]
+input int      MacdSlowPeriod = 26;      // MACD Slow Period (Standard: 26) [26-38, Step: 4]
+input int      MacdSignalPeriod = 15;     // MACD Signal Period (Standard: 9) [9-15, Step: 2]
 
 input group "=== Risk Management ==="
-input double   RiskPercentage = 2.0;     // Risk per trade (%) [1.0-3.0, Step: 0.5]
-input double   MACDThreshold = 0.0004;   // MACD Crossover Threshold [0.0002-0.001, Step: 0.0002]
-input double   SLBufferPips = 6.0;       // Stop-Loss Buffer in Pips [4.0-8.0, Step: 0.5]
+input double   RiskPercentage = 3.0;     // Risk per trade (Standard: 1-2%) [1.0-3.0, Step: 0.5]
+input double   MACDThreshold = 0.0004;   // MACD Crossover Threshold (Standard: 0.0003) [0.0002-0.001, Step: 0.0002]
+input double   SLBufferPips = 4.5;       // Stop-Loss Buffer in Pips (Standard: 5.0) [4.0-8.0, Step: 0.5]
 
 input group "=== ATR Settings ==="
-input int      ATRPeriod = 20;           // ATR Period [14-26, Step: 2]
-input double   ATRMultiplierSL = 9.0;    // ATR Multiplier for Stop Loss [7.0-11.0, Step: 0.5]
-input double   ATRMultiplierTP = 10.2;   // ATR Multiplier for Take Profit [8.0-12.0, Step: 0.5]
+input int      ATRPeriod = 22;           // ATR Period (Standard: 14-21) [14-26, Step: 2]
+input double   ATRMultiplierSL = 8.5;    // ATR Multiplier for Stop Loss (Standard: 2-3) [7.0-11.0, Step: 0.5]
+input double   ATRMultiplierTP = 8.0;    // ATR Multiplier for Take Profit (Standard: 3-4) [8.0-12.0, Step: 0.5]
 
 input group "=== Pivot Points & Buffers ==="
-input ENUM_TIMEFRAMES PivotTimeframe = PERIOD_D1;  // Timeframe for Pivot Points
-input bool    UsePivotPoints = true;     // Use Pivot Points for Trading
-input double  PivotBufferPips = 2.0;     // Buffer around pivot levels (pips) [1.0-5.0, Step: 0.5]
-input int     ATR_MA_Period = 20;        // Period for Average ATR calculation [15-25, Step: 5]
-input double  SL_ATR_Mult = 0.5;         // ATR multiplier for SL buffer [0.3-0.7, Step: 0.1]
-input double  TP_ATR_Mult = 0.3;         // ATR multiplier for TP buffer [0.2-0.4, Step: 0.05]
-input double  SL_Dist_Mult = 0.1;        // Distance multiplier for SL buffer [0.05-0.15, Step: 0.02]
-input double  TP_Dist_Mult = 0.08;       // Distance multiplier for TP buffer [0.04-0.12, Step: 0.02]
-input double  Max_Buffer_Pips = 50.0;    // Maximum buffer size in pips [30-70, Step: 10]
+input ENUM_TIMEFRAMES PivotTimeframe = PERIOD_D1;  // Timeframe for Pivot Points (Standard: D1)
+input bool    UsePivotPoints = true;     // Use Pivot Points for Trading (Standard: true)
+input double  PivotBufferPips = 1.0;     // Buffer around pivot levels (Standard: 2-3) [1.0-5.0, Step: 0.5]
+input int     ATR_MA_Period = 15;        // Period for Average ATR calculation (Standard: 20) [15-25, Step: 5]
+input double  SL_ATR_Mult = 0.5;         // ATR multiplier for SL buffer (Standard: 0.5) [0.3-0.7, Step: 0.1]
+input double  TP_ATR_Mult = 0.25;        // ATR multiplier for TP buffer (Standard: 0.3) [0.2-0.4, Step: 0.05]
+input double  SL_Dist_Mult = 0.13;       // Distance multiplier for SL buffer (Standard: 0.1) [0.05-0.15, Step: 0.02]
+input double  TP_Dist_Mult = 0.12;       // Distance multiplier for TP buffer (Standard: 0.1) [0.04-0.12, Step: 0.02]
+input double  Max_Buffer_Pips = 50.0;    // Maximum buffer size in pips (Standard: 40-50) [30-70, Step: 10]
 
 input group "=== Trade Management ==="
-input int      EntryTimeoutBars = 11;    // Bars to wait for entry sequence [8-14, Step: 2]
-input int      HaltMinutesBefore = 60;   // Minutes to halt before news [30-90, Step: 15]
-input int      HaltMinutesAfter = 60;    // Minutes to halt after news [30-90, Step: 15]
+input int      EntryTimeoutBars = 14;    // Bars to wait for entry sequence (Standard: 10) [8-14, Step: 2]
+input int      HaltMinutesBefore = 60;   // Minutes to halt before news (Standard: 30-60) [30-90, Step: 15]
+input int      HaltMinutesAfter = 60;    // Minutes to halt after news (Standard: 30-60) [30-90, Step: 15]
 
 input group "=== Trading Hours ==="
-input int      NoTradeStartHour = 22;    // Hour to stop trading [21-23, Step: 1]
-input int      NoTradeEndHour = 3;       // Hour to resume trading [2-4, Step: 1]
+input int      NoTradeStartHour = 23;    // Hour to stop trading (Standard: 22) [21-23, Step: 1]
+input int      NoTradeEndHour = 2;       // Hour to resume trading (Standard: 3) [2-4, Step: 1]
 
 input group "=== News Trading ==="
-input bool   HaltOnCPI        = true;  // Halt on CPI announcements
-input bool   HaltOnNFP        = true;  // Halt on Non-Farm Payrolls
-input bool   HaltOnFOMC       = true;  // Halt on FOMC meetings
-input bool   HaltOnGDP        = true;  // Halt on GDP reports
-input bool   HaltOnPPI        = true;  // Halt on PPI announcements
-input bool   HaltOnCentralBank = true; // Halt on Central Bank speeches
+input bool   HaltOnCPI        = true;  // Halt on CPI announcements (Standard: true)
+input bool   HaltOnNFP        = true;  // Halt on Non-Farm Payrolls (Standard: true)
+input bool   HaltOnFOMC       = true;  // Halt on FOMC meetings (Standard: true)
+input bool   HaltOnGDP        = true;  // Halt on GDP reports (Standard: true)
+input bool   HaltOnPPI        = true;  // Halt on PPI announcements (Standard: true)
+input bool   HaltOnCentralBank = true; // Halt on Central Bank speeches (Standard: true)
 
 input group "=== Hybrid Exit Settings ==="
-input bool   UseHybridExits = true;    // Use both Pivot and ATR for exits
-input double PivotWeight    = 0.5;     // Weight for Pivot Points [0.3-0.7, Step: 0.1]
-input double ATRWeight      = 0.5;     // Weight for ATR-based exits [0.3-0.7, Step: 0.1]
+input bool   UseHybridExits = true;    // Use both Pivot and ATR for exits (Standard: true)
+input double PivotWeight    = 0.4;     // Weight for Pivot Points (Standard: 0.5) [0.3-0.7, Step: 0.1]
+input double ATRWeight      = 0.4;     // Weight for ATR-based exits (Standard: 0.5) [0.3-0.7, Step: 0.1]
 
 //--- Global Variables
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
