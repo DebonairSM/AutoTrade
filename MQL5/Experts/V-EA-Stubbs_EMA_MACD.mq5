@@ -75,11 +75,6 @@ input bool   HaltOnGDP        = true;  // Halt on GDP reports (Standard: true)
 input bool   HaltOnPPI        = true;  // Halt on PPI announcements (Standard: true)
 input bool   HaltOnCentralBank = true; // Halt on Central Bank speeches (Standard: true)
 
-input group "=== Hybrid Exit Settings ==="
-input bool   UseHybridExits = true;    // Use both Pivot and ATR for exits (Standard: true)
-input double PivotWeight    = 0.4;     // Weight for Pivot Points (Standard: 0.5) [0.3-0.7, Step: 0.1]
-input double ATRWeight      = 0.4;     // Weight for ATR-based exits (Standard: 0.5) [0.3-0.7, Step: 0.1]
-
 //--- Global Variables
 int          MagicNumber       = 123456; // Unique identifier for EA's trades
 datetime     lastBarTime       = 0;       // Tracks the last processed bar time
@@ -1276,17 +1271,49 @@ void CheckTakeProfit()
             double tpLevel = atrPips * ATRMultiplierTP;
             double slLevel = atrPips * ATRMultiplierSL;
             
+            string exitType = "";
+            string exitReason = "";
+            string pivotInfo = "";
+            
             // Check for Take Profit
             if(profitPips >= tpLevel)
             {
-                Print("=== TAKE PROFIT EXIT TRIGGERED ===");
+                // Build detailed exit information
+                exitType = "TAKE PROFIT";
+                exitReason = StringFormat("ATR-based TP reached (%.1f pips profit)", profitPips);
+                
+                // Add pivot point information if enabled
+                if(UsePivotPoints)
+                {
+                    double nearestPivot = GetNearestLevel(currentPrice, posType == POSITION_TYPE_BUY);
+                    if(nearestPivot != 0.0)
+                    {
+                        pivotInfo = StringFormat("\nNearest Pivot Level: %.5f\nDistance to Pivot: %.1f pips", 
+                                               nearestPivot, 
+                                               MathAbs(currentPrice - nearestPivot) / point);
+                    }
+                }
+                
+                Print("=== ", exitType, " EXIT TRIGGERED ===");
                 Print("Position Type: ", EnumToString(posType));
                 Print("Entry Price: ", openPrice);
                 Print("Current Price: ", currentPrice);
-                Print("Profit in Pips: ", profitPips);
+                Print("Exit Reason: ", exitReason);
+                Print("ATR Value: ", currentATR);
                 Print("ATR in Pips: ", atrPips);
                 Print("TP Level: ", tpLevel);
+                if(pivotInfo != "") Print(pivotInfo);
                 
+                string comment = StringFormat("%s: %s%s", 
+                                            exitType, 
+                                            exitReason,
+                                            pivotInfo);
+                
+                // Set position comment before closing
+                if(PositionSelectByTicket(ticket))
+                {
+                    Print("Exit Comment: ", comment);  // Just print the comment
+                }
                 if(trade.PositionClose(ticket))
                 {
                     Print("Successfully closed position #", ticket, " at take profit");
@@ -1305,14 +1332,42 @@ void CheckTakeProfit()
             // Check for Stop Loss
             else if(profitPips <= -slLevel)
             {
-                Print("=== STOP LOSS EXIT TRIGGERED ===");
+                // Build detailed exit information
+                exitType = "STOP LOSS";
+                exitReason = StringFormat("ATR-based SL reached (%.1f pips loss)", MathAbs(profitPips));
+                
+                // Add pivot point information if enabled
+                if(UsePivotPoints)
+                {
+                    double nearestPivot = GetNearestLevel(currentPrice, posType != POSITION_TYPE_BUY);
+                    if(nearestPivot != 0.0)
+                    {
+                        pivotInfo = StringFormat("\nNearest Pivot Level: %.5f\nDistance to Pivot: %.1f pips", 
+                                               nearestPivot, 
+                                               MathAbs(currentPrice - nearestPivot) / point);
+                    }
+                }
+                
+                Print("=== ", exitType, " EXIT TRIGGERED ===");
                 Print("Position Type: ", EnumToString(posType));
                 Print("Entry Price: ", openPrice);
                 Print("Current Price: ", currentPrice);
-                Print("Loss in Pips: ", profitPips);
+                Print("Exit Reason: ", exitReason);
+                Print("ATR Value: ", currentATR);
                 Print("ATR in Pips: ", atrPips);
                 Print("SL Level: ", slLevel);
+                if(pivotInfo != "") Print(pivotInfo);
                 
+                string comment = StringFormat("%s: %s%s", 
+                                            exitType, 
+                                            exitReason,
+                                            pivotInfo);
+                
+                // Set position comment before closing
+                if(PositionSelectByTicket(ticket))
+                {
+                    Print("Exit Comment: ", comment);  // Just print the comment
+                }
                 if(trade.PositionClose(ticket))
                 {
                     Print("Successfully closed position #", ticket, " at stop loss");
@@ -1332,119 +1387,5 @@ void CheckTakeProfit()
     }
 }
 
-//+------------------------------------------------------------------+
-//| Get hybrid take profit level                                       |
-//+------------------------------------------------------------------+
-double GetHybridTP(bool isBuy, double price, double atrPoints)
-{
-    double atrTP = price + (isBuy ? 1 : -1) * (atrPoints * ATRMultiplierTP) * _Point;
-    double pivotTP = GetPivotBasedTP(isBuy, atrTP);
-    
-    if(!UseHybridExits)
-        return UsePivotPoints ? pivotTP : atrTP;
-        
-    // If price is very close to a pivot level, prefer the pivot target
-    if(IsPriceNearLevel(price, isBuy ? r1Level : s1Level))
-        return pivotTP;
-        
-    // Calculate weighted average if both targets are valid
-    if(pivotTP > 0)
-    {
-        double weightedTP = (atrTP * ATRWeight + pivotTP * PivotWeight) / (ATRWeight + PivotWeight);
-        
-        // Add logic to snap to nearest pivot if very close
-        double nearestPivot = GetNearestLevel(weightedTP, isBuy);
-        if(MathAbs(weightedTP - nearestPivot) < PivotBufferPips * _Point)
-            return nearestPivot;
-            
-        return weightedTP;
-    }
-    
-    return atrTP;
-}
-
-//+------------------------------------------------------------------+
-//| Get hybrid stop loss level                                         |
-//+------------------------------------------------------------------+
-double GetHybridSL(bool isBuy, double price, double atrPoints)
-{
-    double atrSL = price - (isBuy ? 1 : -1) * (atrPoints * ATRMultiplierSL) * _Point;
-    double pivotSL = GetPivotBasedSL(isBuy, atrSL);
-    
-    if(!UseHybridExits)
-        return UsePivotPoints ? pivotSL : atrSL;
-        
-    // If price is very close to a pivot level, prefer the pivot stop
-    if(IsPriceNearLevel(price, isBuy ? s1Level : r1Level))
-        return pivotSL;
-        
-    // Calculate weighted average if both stops are valid
-    if(pivotSL > 0)
-    {
-        double weightedSL = (atrSL * ATRWeight + pivotSL * PivotWeight) / (ATRWeight + PivotWeight);
-        
-        // Add logic to snap to nearest pivot if very close
-        double nearestPivot = GetNearestLevel(weightedSL, !isBuy);
-        if(MathAbs(weightedSL - nearestPivot) < PivotBufferPips * _Point)
-            return nearestPivot;
-            
-        return weightedSL;
-    }
-    
-    return atrSL;
-}
-
-//+------------------------------------------------------------------+
-//| Calculate volatility ratio                                         |
-//+------------------------------------------------------------------+
-double GetVolatilityRatio()
-{
-    double currentATR = GetIndicatorValue(handleATR, 0);
-    averageATR = GetIndicatorValue(handleAverageATR, 0);
-    
-    if(averageATR == 0) return 1.0; // Prevent division by zero
-    
-    double ratio = currentATR / averageATR;
-    
-    Print("=== VOLATILITY RATIO ===");
-    Print("Current ATR: ", currentATR);
-    Print("Average ATR: ", averageATR);
-    Print("Ratio: ", ratio);
-    
-    return ratio;
-}
-
-//+------------------------------------------------------------------+
-//| Calculate buffer size based on ATR and distance to pivot           |
-//+------------------------------------------------------------------+
-double CalculateBuffer(double price, double pivotLevel, bool isTP)
-{
-    double atrValue = GetIndicatorValue(handleATR, 0);
-    double distanceToPivot = MathAbs(price - pivotLevel);
-    
-    // Calculate both types of buffers
-    double atrBuffer = atrValue * (isTP ? TP_ATR_Mult : SL_ATR_Mult);
-    double distanceBuffer = distanceToPivot * (isTP ? TP_Dist_Mult : SL_Dist_Mult);
-    
-    // Take the larger of the two
-    double baseBuffer = MathMax(atrBuffer, distanceBuffer);
-    
-    // Apply volatility ratio
-    double volatilityRatio = GetVolatilityRatio();
-    double finalBuffer = baseBuffer * volatilityRatio;
-    
-    // Limit to maximum buffer size
-    double maxBuffer = Max_Buffer_Pips * _Point;
-    finalBuffer = MathMin(finalBuffer, maxBuffer);
-    
-    Print("=== BUFFER CALCULATION ===");
-    Print("Price: ", price, " Pivot Level: ", pivotLevel);
-    Print("ATR Buffer: ", atrBuffer, " Distance Buffer: ", distanceBuffer);
-    Print("Base Buffer: ", baseBuffer);
-    Print("Volatility Adjusted: ", finalBuffer);
-    Print("Final Buffer: ", finalBuffer);
-    
-    return finalBuffer;
-}
 
 //+------------------------------------------------------------------+
