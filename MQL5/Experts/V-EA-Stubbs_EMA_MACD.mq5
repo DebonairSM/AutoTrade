@@ -1,9 +1,9 @@
 //+------------------------------------------------------------------+
-//|                                                      StubbsEA.mq5 |
-//|                        Your Name or Company                       |
+//|                                                     StubbsEA.mq5 |
+//|                        VSol Software                             |
 //|                                                                  |
 //+------------------------------------------------------------------+
-#property copyright "Your Name or Company"
+#property copyright "VSol Software"
 #property link      ""
 #property version   "1.00"
 #property strict
