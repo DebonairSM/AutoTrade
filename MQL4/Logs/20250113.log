@@ -1,0 +1,48 @@
+0	00:00:05.345	VSol-MT4 EURUSD,M30: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	00:00:05.475	VSol-MT4 EURUSD,M30: Failed to open trade. Error: 136
+0	01:00:00.867	VSol-MT4 EURUSD,M30: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	01:00:01.004	VSol-MT4 EURUSD,M30: Failed to open trade. Error: 136
+0	02:00:00.732	VSol-MT4 EURUSD,M30: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	02:00:00.847	VSol-MT4 EURUSD,M30: Failed to open trade. Error: 136
+0	03:00:00.639	VSol-MT4 EURUSD,M30: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	03:00:00.755	VSol-MT4 EURUSD,M30: Failed to open trade. Error: 136
+2	04:00:01.050	VSol-MT4 EURUSD,M30: close #109451061 sell 0.01 EURUSD at 1.02149 at price 1.02220
+0	04:00:01.050	VSol-MT4 EURUSD,M30: Closed SELL position due to MACD exit signal.
+0	04:00:01.050	VSol-MT4 EURUSD,M30: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+2	04:00:01.188	VSol-MT4 EURUSD,M30: open #109454491 sell 0.01 EURUSD at 1.02211 ok
+0	04:00:01.188	VSol-MT4 EURUSD,M30: Successfully opened SELL trade.
+0	05:00:00.800	VSol-MT4 EURUSD,M30: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	05:00:00.937	VSol-MT4 EURUSD,M30: Failed to open trade. Error: 136
+0	06:00:01.121	VSol-MT4 EURUSD,M30: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	06:00:01.248	VSol-MT4 EURUSD,M30: Failed to open trade. Error: 136
+0	07:00:00.800	VSol-MT4 EURUSD,M30: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	07:00:00.929	VSol-MT4 EURUSD,M30: Failed to open trade. Error: 136
+0	08:00:01.018	VSol-MT4 EURUSD,M30: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	08:00:01.133	VSol-MT4 EURUSD,M30: Failed to open trade. Error: 136
+0	08:26:35.997	VSol-MT4 EURUSD,M30: uninit reason 3
+0	08:26:35.997	VSol-MT4 EURUSD,M30: EA Deinitialized.
+0	08:26:36.007	VSol-MT4 EURUSD,H1: EA Initialized Successfully.
+0	08:26:36.007	VSol-MT4 EURUSD,H1: initialized
+2	09:00:01.107	VSol-MT4 EURUSD,H1: close #109454491 sell 0.01 EURUSD at 1.02211 at price 1.02089
+0	09:00:01.107	VSol-MT4 EURUSD,H1: Closed SELL position due to MACD exit signal.
+0	09:00:01.107	VSol-MT4 EURUSD,H1: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+2	09:00:01.262	VSol-MT4 EURUSD,H1: open #109456876 sell 0.01 EURUSD at 1.02078 ok
+0	09:00:01.262	VSol-MT4 EURUSD,H1: Successfully opened SELL trade.
+0	10:00:00.940	VSol-MT4 EURUSD,H1: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	10:00:01.105	VSol-MT4 EURUSD,H1: Failed to open trade. Error: 136
+0	11:00:01.078	VSol-MT4 EURUSD,H1: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	11:00:01.194	VSol-MT4 EURUSD,H1: Failed to open trade. Error: 136
+0	12:00:01.088	VSol-MT4 EURUSD,H1: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	12:00:01.261	VSol-MT4 EURUSD,H1: Failed to open trade. Error: 136
+0	13:00:01.767	VSol-MT4 EURUSD,H1: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	13:00:01.903	VSol-MT4 EURUSD,H1: Failed to open trade. Error: 136
+0	14:00:01.039	VSol-MT4 EURUSD,H1: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	14:00:01.165	VSol-MT4 EURUSD,H1: Failed to open trade. Error: 136
+0	15:00:01.635	VSol-MT4 EURUSD,H1: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	15:00:01.763	VSol-MT4 EURUSD,H1: Failed to open trade. Error: 136
+0	16:00:01.141	VSol-MT4 EURUSD,H1: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	16:00:01.302	VSol-MT4 EURUSD,H1: Failed to open trade. Error: 136
+0	17:04:56.255	VSol-MT4 EURUSD,H1: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	17:04:56.390	VSol-MT4 EURUSD,H1: Failed to open trade. Error: 132
+0	18:00:01.198	VSol-MT4 EURUSD,H1: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+0	18:00:01.310	VSol-MT4 EURUSD,H1: Failed to open trade. Error: 134

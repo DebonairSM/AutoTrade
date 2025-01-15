@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "VSol Software"
 #property link      ""
-#property version   "1.00"
+#property version   "2.00"
 #property strict
 #property description "Stubbs EA with EMA and MACD Strategy"
 
@@ -29,43 +29,43 @@ input ENUM_TIMEFRAMES MainTimeframe = PERIOD_H2;  // Main Trading Timeframe (Sta
 
 input group "=== EMA Parameters ==="
 input int      EmaFastPeriod = 13;        // Fast EMA Period (Standard: 12-13) [5-15, Step: 2]
-input int      EmaMidPeriod = 32;        // Mid EMA Period (Standard: 34) [20-40, Step: 4]
-input int      EmaSlowPeriod = 37;       // Slow EMA Period (Standard: 50) [21-41, Step: 4]
+input int      EmaMidPeriod = 24;        // Mid EMA Period (Standard: 34) [20-40, Step: 4]
+input int      EmaSlowPeriod = 33;       // Slow EMA Period (Standard: 50) [21-41, Step: 4]
 
 input group "=== MACD Parameters ==="
-input int      MacdFastPeriod = 24;      // MACD Fast Period (Standard: 12) [12-24, Step: 4]
-input int      MacdSlowPeriod = 26;      // MACD Slow Period (Standard: 26) [26-38, Step: 4]
+input int      MacdFastPeriod = 20;      // MACD Fast Period (Standard: 12) [12-24, Step: 4]
+input int      MacdSlowPeriod = 34;      // MACD Slow Period (Standard: 26) [26-38, Step: 4]
 input int      MacdSignalPeriod = 15;     // MACD Signal Period (Standard: 9) [9-15, Step: 2]
 
 input group "=== Risk Management ==="
 input double   RiskPercentage = 3.0;     // Risk per trade (Standard: 1-2%) [1.0-3.0, Step: 0.5]
-input double   MACDThreshold = 0.0004;   // MACD Crossover Threshold (Standard: 0.0003) [0.0002-0.001, Step: 0.0002]
-input double   SLBufferPips = 4.5;       // Stop-Loss Buffer in Pips (Standard: 5.0) [4.0-8.0, Step: 0.5]
+input double   MACDThreshold = 0.0010;   // MACD Crossover Threshold (Standard: 0.0003) [0.0002-0.001, Step: 0.0002]
+input double   SLBufferPips = 6.0;       // Stop-Loss Buffer in Pips (Standard: 5.0) [4.0-8.0, Step: 0.5]
 
 input group "=== ATR Settings ==="
-input int      ATRPeriod = 22;           // ATR Period (Standard: 14-21) [14-26, Step: 2]
-input double   ATRMultiplierSL = 8.5;    // ATR Multiplier for Stop Loss (Standard: 2-3) [7.0-11.0, Step: 0.5]
-input double   ATRMultiplierTP = 8.0;    // ATR Multiplier for Take Profit (Standard: 3-4) [8.0-12.0, Step: 0.5]
+input int      ATRPeriod = 18;           // ATR Period (Standard: 14-21) [14-26, Step: 2]
+input double   ATRMultiplierSL = 10.0;    // ATR Multiplier for Stop Loss (Standard: 2-3) [7.0-11.0, Step: 0.5]
+input double   ATRMultiplierTP = 10.5;    // ATR Multiplier for Take Profit (Standard: 3-4) [8.0-12.0, Step: 0.5]
 
 input group "=== Pivot Points & Buffers ==="
 input ENUM_TIMEFRAMES PivotTimeframe = PERIOD_D1;  // Timeframe for Pivot Points (Standard: D1)
 input bool    UsePivotPoints = true;     // Use Pivot Points for Trading (Standard: true)
-input double  PivotBufferPips = 1.0;     // Buffer around pivot levels (Standard: 2-3) [1.0-5.0, Step: 0.5]
-input int     ATR_MA_Period = 15;        // Period for Average ATR calculation (Standard: 20) [15-25, Step: 5]
+input double  PivotBufferPips = 3.0;     // Buffer around pivot levels (Standard: 2-3) [1.0-5.0, Step: 0.5]
+input int     ATR_MA_Period = 20;        // Period for Average ATR calculation (Standard: 20) [15-25, Step: 5]
 input double  SL_ATR_Mult = 0.5;         // ATR multiplier for SL buffer (Standard: 0.5) [0.3-0.7, Step: 0.1]
 input double  TP_ATR_Mult = 0.25;        // ATR multiplier for TP buffer (Standard: 0.3) [0.2-0.4, Step: 0.05]
-input double  SL_Dist_Mult = 0.13;       // Distance multiplier for SL buffer (Standard: 0.1) [0.05-0.15, Step: 0.02]
-input double  TP_Dist_Mult = 0.12;       // Distance multiplier for TP buffer (Standard: 0.1) [0.04-0.12, Step: 0.02]
+input double  SL_Dist_Mult = 0.09;       // Distance multiplier for SL buffer (Standard: 0.1) [0.05-0.15, Step: 0.02]
+input double  TP_Dist_Mult = 0.06;       // Distance multiplier for TP buffer (Standard: 0.1) [0.04-0.12, Step: 0.02]
 input double  Max_Buffer_Pips = 50.0;    // Maximum buffer size in pips (Standard: 40-50) [30-70, Step: 10]
 
 input group "=== Trade Management ==="
-input int      EntryTimeoutBars = 14;    // Bars to wait for entry sequence (Standard: 10) [8-14, Step: 2]
+input int      EntryTimeoutBars = 12;    // Bars to wait for entry sequence (Standard: 10) [8-14, Step: 2]
 input int      HaltMinutesBefore = 60;   // Minutes to halt before news (Standard: 30-60) [30-90, Step: 15]
 input int      HaltMinutesAfter = 60;    // Minutes to halt after news (Standard: 30-60) [30-90, Step: 15]
 
 input group "=== Trading Hours ==="
-input int      NoTradeStartHour = 23;    // Hour to stop trading (Standard: 22) [21-23, Step: 1]
-input int      NoTradeEndHour = 2;       // Hour to resume trading (Standard: 3) [2-4, Step: 1]
+input int      NoTradeStartHour = 21;    // Hour to stop trading (Standard: 22) [21-23, Step: 1]
+input int      NoTradeEndHour = 4;       // Hour to resume trading (Standard: 3) [2-4, Step: 1]
 
 input group "=== News Trading ==="
 input bool   HaltOnCPI        = true;  // Halt on CPI announcements (Standard: true)
@@ -109,6 +109,34 @@ CTrade      trade;
 double averageATR = 0;
 int handleAverageATR;
 
+// Add new global variables for caching
+double g_lastEmaFast = 0;
+double g_lastEmaMid = 0;
+double g_lastEmaSlow = 0;
+double g_lastMacdMain = 0;
+double g_lastMacdSignal = 0;
+datetime g_lastCacheTime = 0;
+
+// Add new global variables for pivot caching
+double g_lastPivotPoint = 0;
+double g_lastR1 = 0, g_lastR2 = 0, g_lastR3 = 0;
+double g_lastS1 = 0, g_lastS2 = 0, g_lastS3 = 0;
+datetime g_lastPivotCalcTime = 0;
+
+// Add new global variables for position tracking
+struct PositionInfo {
+    ulong ticket;
+    double openPrice;
+    datetime openTime;
+    double lots;
+    ENUM_POSITION_TYPE type;
+    double stopLoss;
+    double takeProfit;
+};
+
+PositionInfo g_positions[];
+int g_positionCount = 0;
+
 //+------------------------------------------------------------------+
 //| Calculate Pivot Points and Support/Resistance Levels               |
 //+------------------------------------------------------------------+
@@ -116,9 +144,9 @@ void CalculatePivotPoints()
 {
     // Only recalculate at the start of a new period
     datetime currentPeriodStart = iTime(_Symbol, PivotTimeframe, 0);
-    if(currentPeriodStart == lastPivotCalc) return;
+    if(currentPeriodStart == g_lastPivotCalcTime) return;
     
-    lastPivotCalc = currentPeriodStart;
+    g_lastPivotCalcTime = currentPeriodStart;
     
     // Get previous period's high, low, and close
     double prevHigh = iHigh(_Symbol, PivotTimeframe, 1);
@@ -126,17 +154,25 @@ void CalculatePivotPoints()
     double prevClose = iClose(_Symbol, PivotTimeframe, 1);
     
     // Calculate pivot point
-    pivotPoint = (prevHigh + prevLow + prevClose) / 3.0;
+    g_lastPivotPoint = (prevHigh + prevLow + prevClose) / 3.0;
     
     // Calculate resistance levels
-    r1Level = (2 * pivotPoint) - prevLow;
-    r2Level = pivotPoint + (prevHigh - prevLow);
-    r3Level = r2Level + (prevHigh - prevLow);
+    g_lastR1 = (2 * g_lastPivotPoint) - prevLow;
+    g_lastR2 = g_lastPivotPoint + (prevHigh - prevLow);
+    g_lastR3 = g_lastR2 + (prevHigh - prevLow);
     
     // Calculate support levels
-    s1Level = (2 * pivotPoint) - prevHigh;
-    s2Level = pivotPoint - (prevHigh - prevLow);
-    s3Level = s2Level - (prevHigh - prevLow);
+    g_lastS1 = (2 * g_lastPivotPoint) - prevHigh;
+    g_lastS2 = g_lastPivotPoint - (prevHigh - prevLow);
+    g_lastS3 = g_lastS2 - (prevHigh - prevLow);
+    
+    pivotPoint = g_lastPivotPoint;
+    r1Level = g_lastR1;
+    r2Level = g_lastR2;
+    r3Level = g_lastR3;
+    s1Level = g_lastS1;
+    s2Level = g_lastS2;
+    s3Level = g_lastS3;
     
     Print("=== PIVOT POINTS UPDATED ===");
     Print("Timeframe: ", EnumToString(PivotTimeframe));
@@ -148,9 +184,9 @@ void CalculatePivotPoints()
 //+------------------------------------------------------------------+
 //| Check if price is near a pivot level                              |
 //+------------------------------------------------------------------+
-bool IsPriceNearLevel(double price, double level)
+bool IsPriceNearLevel(const double price, const double level)
 {
-    double bufferInPoints = PivotBufferPips * 10.0; // Convert pips to points
+    static double bufferInPoints = PivotBufferPips * 10.0; // Convert pips to points once
     return (MathAbs(price - level) <= bufferInPoints * _Point);
 }
 
@@ -193,18 +229,18 @@ double GetPivotBasedSL(bool isBuy, double defaultSL)
 //+------------------------------------------------------------------+
 //| Get nearest pivot level (support or resistance)                    |
 //+------------------------------------------------------------------+
-double GetNearestLevel(double price, bool resistance)
+double GetNearestLevel(const double price, const bool resistance)
 {
     if(!UsePivotPoints) return 0.0;
     
     if(resistance)
     {
-        // Find nearest resistance level
-        double levels[] = {r1Level, r2Level, r3Level};
-        double nearestLevel = r1Level;
-        double minDistance = MathAbs(price - r1Level);
+        // Find nearest resistance level using cached values
+        double levels[3] = {g_lastR1, g_lastR2, g_lastR3};
+        double nearestLevel = g_lastR1;
+        double minDistance = MathAbs(price - g_lastR1);
         
-        for(int i = 1; i < ArraySize(levels); i++)
+        for(int i = 1; i < 3; i++)
         {
             double distance = MathAbs(price - levels[i]);
             if(distance < minDistance && levels[i] > price)
@@ -217,12 +253,12 @@ double GetNearestLevel(double price, bool resistance)
     }
     else
     {
-        // Find nearest support level
-        double levels[] = {s1Level, s2Level, s3Level};
-        double nearestLevel = s1Level;
-        double minDistance = MathAbs(price - s1Level);
+        // Find nearest support level using cached values
+        double levels[3] = {g_lastS1, g_lastS2, g_lastS3};
+        double nearestLevel = g_lastS1;
+        double minDistance = MathAbs(price - g_lastS1);
         
-        for(int i = 1; i < ArraySize(levels); i++)
+        for(int i = 1; i < 3; i++)
         {
             double distance = MathAbs(price - levels[i]);
             if(distance < minDistance && levels[i] < price)
@@ -511,10 +547,51 @@ void GenerateHourlyReport()
 }
 
 //+------------------------------------------------------------------+
+//| Get cached indicator values                                        |
+//+------------------------------------------------------------------+
+bool GetCachedIndicatorValues(datetime currentTime, int shift,
+    double &emaFast, double &emaMid, double &emaSlow,
+    double &macdMain, double &macdSignal)
+{
+    // Only recalculate if we're on a new bar or values not cached
+    if(currentTime != g_lastCacheTime || shift > 0)
+    {
+        emaFast = GetIndicatorValue(handleEmaFast, shift);
+        emaMid = GetIndicatorValue(handleEmaMid, shift);
+        emaSlow = GetIndicatorValue(handleEmaSlow, shift);
+        macdMain = GetIndicatorValue(handleMacd, shift, 0);
+        macdSignal = GetIndicatorValue(handleMacd, shift, 1);
+        
+        if(shift == 0)
+        {
+            g_lastEmaFast = emaFast;
+            g_lastEmaMid = emaMid;
+            g_lastEmaSlow = emaSlow;
+            g_lastMacdMain = macdMain;
+            g_lastMacdSignal = macdSignal;
+            g_lastCacheTime = currentTime;
+        }
+    }
+    else
+    {
+        emaFast = g_lastEmaFast;
+        emaMid = g_lastEmaMid;
+        emaSlow = g_lastEmaSlow;
+        macdMain = g_lastMacdMain;
+        macdSignal = g_lastMacdSignal;
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick()
 {
+    // Update position tracking at the start of each tick
+    UpdatePositionTracking();
+    
     // Calculate pivot points if enabled
     if(UsePivotPoints)
         CalculatePivotPoints();
@@ -557,19 +634,22 @@ void OnTick()
     }
     
     //--- Retrieve EMA values for the previous and current closed bars
-    double emaFastPrev = GetIndicatorValue(handleEmaFast, 1);
-    double emaMidPrev  = GetIndicatorValue(handleEmaMid,  1);
-    double emaSlowPrev = GetIndicatorValue(handleEmaSlow, 1);
+    double emaFastPrev, emaMidPrev, emaSlowPrev;
+    double emaFastCurr, emaMidCurr, emaSlowCurr;
+    double macdMainPrev, macdSignalPrev;
+    double macdMainCurr, macdSignalCurr;
     
-    double emaFastCurr = GetIndicatorValue(handleEmaFast, 0);
-    double emaMidCurr  = GetIndicatorValue(handleEmaMid,  0);
-    double emaSlowCurr = GetIndicatorValue(handleEmaSlow, 0);
-    
-    //--- Retrieve MACD values for the previous and current closed bars
-    double macdMainPrev   = GetIndicatorValue(handleMacd, 1, 0); // MACD Main Line
-    double macdSignalPrev = GetIndicatorValue(handleMacd, 1, 1); // MACD Signal Line
-    double macdMainCurr   = GetIndicatorValue(handleMacd, 0, 0);
-    double macdSignalCurr = GetIndicatorValue(handleMacd, 0, 1);
+    // Get cached indicator values for current bar
+    if(!GetCachedIndicatorValues(currentBar, 0,
+        emaFastCurr, emaMidCurr, emaSlowCurr,
+        macdMainCurr, macdSignalCurr))
+        return;
+        
+    // Get cached indicator values for previous bar
+    if(!GetCachedIndicatorValues(currentBar, 1,
+        emaFastPrev, emaMidPrev, emaSlowPrev,
+        macdMainPrev, macdSignalPrev))
+        return;
     
     //--- Check for EMA Crossovers
     bool isBullishCross = false;
@@ -623,69 +703,67 @@ void OnTick()
     //--- Handle Signal Detection and Trade Direction
     if(isBullishCross && tradeDirection <= 0)  // Only take bullish signal if not already in a buy position
     {
-        // Check for existing sell positions first
-        if(!HasOpenPositions(ORDER_TYPE_SELL))
+        // Close any existing sell positions first
+        if(HasOpenPositions(ORDER_TYPE_SELL))
         {
-            Print("=== BULLISH SIGNAL DETECTED ===");
-            if(UsePivotPoints)
-            {
-                Print("Pivot Point Analysis:");
-                Print("Current Price: ", currentPrice);
-                Print("Nearest Support: ", GetNearestLevel(currentPrice, false));
-                Print("Nearest Resistance: ", GetNearestLevel(currentPrice, true));
-            }
-            Print("Trigger: Fast EMA crossed above Slow EMA with Mid EMA confirmation");
-            Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
-            Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
-            Print("MACD Values  - Main:", macdMainCurr, " Signal:", macdSignalCurr);
-            Print("Trade Direction changed from ", tradeDirection, " to 1 (Buy)");
-            
-            // Reset entry sequence and set direction
-            entryPositions = 0;
-            inEntrySequence = true;
-            tradeEntryBar = currentBar;
-            tradeDirection = 1; // Set direction to Buy
-            
-            // Since we took a bullish signal, ignore any bearish signal on this bar
-            isBearishCross = false;
+            Print("=== CLOSING SELL POSITIONS ===");
+            Print("Reason: Signal changed to bullish");
+            CloseAllPositions(ORDER_TYPE_SELL);
         }
-        else
+
+        Print("=== BULLISH SIGNAL DETECTED ===");
+        if(UsePivotPoints)
         {
-            Print("=== BULLISH SIGNAL IGNORED ===");
-            Print("Reason: Existing SELL positions are still open");
+            Print("Pivot Point Analysis:");
+            Print("Current Price: ", currentPrice);
+            Print("Nearest Support: ", GetNearestLevel(currentPrice, false));
+            Print("Nearest Resistance: ", GetNearestLevel(currentPrice, true));
         }
+        Print("Trigger: Fast EMA crossed above Slow EMA with Mid EMA confirmation");
+        Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
+        Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
+        Print("MACD Values  - Main:", macdMainCurr, " Signal:", macdSignalCurr);
+        Print("Trade Direction changed from ", tradeDirection, " to 1 (Buy)");
+        
+        // Reset entry sequence and set direction
+        entryPositions = 0;
+        inEntrySequence = true;
+        tradeEntryBar = currentBar;
+        tradeDirection = 1; // Set direction to Buy
+        
+        // Since we took a bullish signal, ignore any bearish signal on this bar
+        isBearishCross = false;
     }
-    
+
     if(isBearishCross && tradeDirection >= 0)  // Only take bearish signal if not already in a sell position
     {
-        // Check for existing buy positions first
-        if(!HasOpenPositions(ORDER_TYPE_BUY))
+        // Close any existing buy positions first
+        if(HasOpenPositions(ORDER_TYPE_BUY))
         {
-            Print("=== BEARISH SIGNAL DETECTED ===");
-            if(UsePivotPoints)
-            {
-                Print("Pivot Point Analysis:");
-                Print("Current Price: ", currentPrice);
-                Print("Nearest Support: ", GetNearestLevel(currentPrice, false));
-                Print("Nearest Resistance: ", GetNearestLevel(currentPrice, true));
-            }
-            Print("Trigger: Fast EMA crossed below Slow EMA with Mid EMA confirmation");
-            Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
-            Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
-            Print("MACD Values  - Main:", macdMainCurr, " Signal:", macdSignalCurr);
-            Print("Trade Direction changed from ", tradeDirection, " to -1 (Sell)");
-            
-            // Reset entry sequence and set direction
-            entryPositions = 0;
-            inEntrySequence = true;
-            tradeEntryBar = currentBar;
-            tradeDirection = -1; // Set direction to Sell
+            Print("=== CLOSING BUY POSITIONS ===");
+            Print("Reason: Signal changed to bearish");
+            CloseAllPositions(ORDER_TYPE_BUY);
         }
-        else
+
+        Print("=== BEARISH SIGNAL DETECTED ===");
+        if(UsePivotPoints)
         {
-            Print("=== BEARISH SIGNAL IGNORED ===");
-            Print("Reason: Existing BUY positions are still open");
+            Print("Pivot Point Analysis:");
+            Print("Current Price: ", currentPrice);
+            Print("Nearest Support: ", GetNearestLevel(currentPrice, false));
+            Print("Nearest Resistance: ", GetNearestLevel(currentPrice, true));
         }
+        Print("Trigger: Fast EMA crossed below Slow EMA with Mid EMA confirmation");
+        Print("Previous Bar - Fast:", emaFastPrev, " Mid:", emaMidPrev, " Slow:", emaSlowPrev);
+        Print("Current Bar  - Fast:", emaFastCurr, " Mid:", emaMidCurr, " Slow:", emaSlowCurr);
+        Print("MACD Values  - Main:", macdMainCurr, " Signal:", macdSignalCurr);
+        Print("Trade Direction changed from ", tradeDirection, " to -1 (Sell)");
+        
+        // Reset entry sequence and set direction
+        entryPositions = 0;
+        inEntrySequence = true;
+        tradeEntryBar = currentBar;
+        tradeDirection = -1; // Set direction to Sell
     }
     
     //--- Check for Additional Entry Confirmations
@@ -898,7 +976,7 @@ void OnTick()
     }
     
     //--- Check for MACD Exit Signals (Partial Exit)
-    if(IsMACDCrossOver(macdMainPrev, macdSignalPrev, macdMainCurr, macdSignalCurr) && (currentBar > tradeEntryBar))
+    if(IsMACDCrossedOver(macdMainPrev, macdSignalPrev, macdMainCurr, macdSignalCurr) && (currentBar > tradeEntryBar))
     {
         Print("=== MACD EXIT SIGNAL DETECTED ===");
         Print("Trigger: MACD line crossed Signal line");
@@ -1036,49 +1114,41 @@ bool OpenTrade(ENUM_ORDER_TYPE orderType, double lots, double sl, double tp, str
 //+------------------------------------------------------------------+
 bool CloseOnePosition(ENUM_ORDER_TYPE orderType)
 {
-    int totalPositions = PositionsTotal();
-    bool closed = false;
-    
-    for(int i = totalPositions - 1; i >= 0; i--)
+    for(int i = g_positionCount - 1; i >= 0; i--)
     {
-        ulong ticket = PositionGetTicket(i);
-        if(ticket <= 0) continue;
+        bool matchingType = (orderType == ORDER_TYPE_BUY && g_positions[i].type == POSITION_TYPE_BUY) ||
+                           (orderType == ORDER_TYPE_SELL && g_positions[i].type == POSITION_TYPE_SELL);
         
-        // Check if the position belongs to this EA
-        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        if(matchingType)
         {
-            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-            bool matchingType = (orderType == ORDER_TYPE_BUY && posType == POSITION_TYPE_BUY) ||
-                                (orderType == ORDER_TYPE_SELL && posType == POSITION_TYPE_SELL);
+            bool result = trade.PositionClose(g_positions[i].ticket);
             
-            if(matchingType)
+            if(result)
             {
-                bool result = trade.PositionClose(ticket);
+                Print("Closed position #", g_positions[i].ticket, " successfully.");
                 
-                if(result)
+                // Update position tracking
+                UpdatePositionTracking();
+                
+                // Check if this was the last position
+                if(g_positionCount == 0)
                 {
-                    Print("Closed position #", ticket, " successfully.");
-                    closed = true;
-                    
-                    // Check if this was the last position
-                    if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
-                    {
-                        tradeDirection = 0;
-                        inEntrySequence = false;
-                        entryPositions = 0;
-                        Print("=== TRADE DIRECTION RESET ===");
-                        Print("Reason: All positions have been closed");
-                    }
-                    break; // Close only one position
+                    tradeDirection = 0;
+                    inEntrySequence = false;
+                    entryPositions = 0;
+                    Print("=== TRADE DIRECTION RESET ===");
+                    Print("Reason: All positions have been closed");
                 }
-                else
-                {
-                    Print("Failed to close position #", ticket, ". Error: ", GetLastError());
-                }
+                return true;
+            }
+            else
+            {
+                Print("Failed to close position #", g_positions[i].ticket, ". Error: ", GetLastError());
+                return false;
             }
         }
     }
-    return closed;
+    return false;
 }
 
 //+------------------------------------------------------------------+
@@ -1135,22 +1205,13 @@ bool CloseAllPositions(ENUM_ORDER_TYPE orderType)
 //+------------------------------------------------------------------+
 bool HasOpenPositions(ENUM_ORDER_TYPE orderType)
 {
-    int totalPositions = PositionsTotal();
-    
-    for(int i = 0; i < totalPositions; i++)
+    for(int i = 0; i < g_positionCount; i++)
     {
-        ulong ticket = PositionGetTicket(i);
-        if(ticket <= 0) continue;
+        bool matchingType = (orderType == ORDER_TYPE_BUY && g_positions[i].type == POSITION_TYPE_BUY) ||
+                           (orderType == ORDER_TYPE_SELL && g_positions[i].type == POSITION_TYPE_SELL);
         
-        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
-        {
-            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-            bool matchingType = (orderType == ORDER_TYPE_BUY && posType == POSITION_TYPE_BUY) ||
-                                (orderType == ORDER_TYPE_SELL && posType == POSITION_TYPE_SELL);
-            
-            if(matchingType)
-                return true;
-        }
+        if(matchingType)
+            return true;
     }
     return false;
 }
@@ -1173,18 +1234,18 @@ double GetIndicatorValue(int handle, int shift, int buffer = 0)
 //+------------------------------------------------------------------+
 //| Detect MACD Crossover                                           |
 //+------------------------------------------------------------------+
-bool IsMACDCrossOver(double macdMainPrev, double macdSignalPrev, double macdMainCurr, double macdSignalCurr)
+bool IsMACDCrossedOver(double macdMainPrev, double macdSignalPrev, double macdMainCurr, double macdSignalCurr)
 {
     // Check if the difference between MACD and Signal is significant enough
     if(MathAbs(macdMainCurr - macdSignalCurr) < MACDThreshold)
         return false;
         
-    // Check for bullish crossover
-    if(macdMainPrev <= macdSignalPrev && macdMainCurr > macdSignalCurr)
+    // For bullish positions: Exit when MACD is below signal
+    if(tradeDirection == 1 && macdMainCurr < macdSignalCurr)
         return true;
     
-    // Check for bearish crossover
-    if(macdMainPrev >= macdSignalPrev && macdMainCurr < macdSignalCurr)
+    // For bearish positions: Exit when MACD is above signal
+    if(tradeDirection == -1 && macdMainCurr > macdSignalCurr)
         return true;
     
     return false;
@@ -1244,145 +1305,121 @@ bool CheckEMAAlignment(int direction)
 //+------------------------------------------------------------------+
 void CheckTakeProfit()
 {
-    int totalPositions = PositionsTotal();
+    if(g_positionCount == 0) return;
+    
     double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
     double currentATR = GetIndicatorValue(handleATR, 0);
     
-    for(int i = totalPositions - 1; i >= 0; i--)
+    // Calculate ATR-based exit levels in pips once
+    double atrPips = currentATR / point;
+    double tpLevel = atrPips * ATRMultiplierTP;
+    double slLevel = atrPips * ATRMultiplierSL;
+    
+    for(int i = g_positionCount - 1; i >= 0; i--)
+    {
+        double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+        double profitPips = 0;
+        
+        if(g_positions[i].type == POSITION_TYPE_BUY)
+            profitPips = (currentPrice - g_positions[i].openPrice) / point;
+        else
+            profitPips = (g_positions[i].openPrice - currentPrice) / point;
+        
+        string exitType = "";
+        string exitReason = "";
+        string pivotInfo = "";
+        
+        bool shouldClose = false;
+        
+        // Check for Take Profit
+        if(profitPips >= tpLevel)
+        {
+            exitType = "TAKE PROFIT";
+            exitReason = StringFormat("ATR-based TP reached (%.1f pips profit)", profitPips);
+            shouldClose = true;
+        }
+        // Check for Stop Loss
+        else if(profitPips <= -slLevel)
+        {
+            exitType = "STOP LOSS";
+            exitReason = StringFormat("ATR-based SL reached (%.1f pips loss)", MathAbs(profitPips));
+            shouldClose = true;
+        }
+        
+        if(shouldClose)
+        {
+            // Add pivot point information if enabled
+            if(UsePivotPoints)
+            {
+                double nearestPivot = GetNearestLevel(currentPrice, g_positions[i].type == POSITION_TYPE_BUY);
+                if(nearestPivot != 0.0)
+                {
+                    pivotInfo = StringFormat("\nNearest Pivot Level: %.5f\nDistance to Pivot: %.1f pips", 
+                                           nearestPivot, 
+                                           MathAbs(currentPrice - nearestPivot) / point);
+                }
+            }
+            
+            Print("=== ", exitType, " EXIT TRIGGERED ===");
+            Print("Position Type: ", EnumToString(g_positions[i].type));
+            Print("Entry Price: ", g_positions[i].openPrice);
+            Print("Current Price: ", currentPrice);
+            Print("Exit Reason: ", exitReason);
+            Print("ATR Value: ", currentATR);
+            Print("ATR in Pips: ", atrPips);
+            if(exitType == "TAKE PROFIT")
+                Print("TP Level: ", tpLevel);
+            else
+                Print("SL Level: ", slLevel);
+            if(pivotInfo != "") Print(pivotInfo);
+            
+            if(trade.PositionClose(g_positions[i].ticket))
+            {
+                Print("Successfully closed position #", g_positions[i].ticket, " at ", exitType);
+                
+                // Update position tracking
+                UpdatePositionTracking();
+                
+                // Check if this was the last position
+                if(g_positionCount == 0)
+                {
+                    tradeDirection = 0;
+                    inEntrySequence = false;
+                    entryPositions = 0;
+                    Print("=== TRADE DIRECTION RESET ===");
+                    Print("Reason: All positions have been closed after ", exitType);
+                }
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Update tracked positions                                           |
+//+------------------------------------------------------------------+
+void UpdatePositionTracking()
+{
+    // Reset position array
+    ArrayResize(g_positions, 0);
+    g_positionCount = 0;
+    
+    int totalPositions = PositionsTotal();
+    for(int i = 0; i < totalPositions; i++)
     {
         ulong ticket = PositionGetTicket(i);
         if(ticket <= 0) continue;
         
         if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
         {
-            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-            double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
-            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-            
-            double profitPips = 0;
-            
-            if(posType == POSITION_TYPE_BUY)
-                profitPips = (currentPrice - openPrice) / point;
-            else if(posType == POSITION_TYPE_SELL)
-                profitPips = (openPrice - currentPrice) / point;
-            
-            // Calculate ATR-based exit levels in pips
-            double atrPips = currentATR / point;
-            double tpLevel = atrPips * ATRMultiplierTP;
-            double slLevel = atrPips * ATRMultiplierSL;
-            
-            string exitType = "";
-            string exitReason = "";
-            string pivotInfo = "";
-            
-            // Check for Take Profit
-            if(profitPips >= tpLevel)
-            {
-                // Build detailed exit information
-                exitType = "TAKE PROFIT";
-                exitReason = StringFormat("ATR-based TP reached (%.1f pips profit)", profitPips);
-                
-                // Add pivot point information if enabled
-                if(UsePivotPoints)
-                {
-                    double nearestPivot = GetNearestLevel(currentPrice, posType == POSITION_TYPE_BUY);
-                    if(nearestPivot != 0.0)
-                    {
-                        pivotInfo = StringFormat("\nNearest Pivot Level: %.5f\nDistance to Pivot: %.1f pips", 
-                                               nearestPivot, 
-                                               MathAbs(currentPrice - nearestPivot) / point);
-                    }
-                }
-                
-                Print("=== ", exitType, " EXIT TRIGGERED ===");
-                Print("Position Type: ", EnumToString(posType));
-                Print("Entry Price: ", openPrice);
-                Print("Current Price: ", currentPrice);
-                Print("Exit Reason: ", exitReason);
-                Print("ATR Value: ", currentATR);
-                Print("ATR in Pips: ", atrPips);
-                Print("TP Level: ", tpLevel);
-                if(pivotInfo != "") Print(pivotInfo);
-                
-                string comment = StringFormat("%s: %s%s", 
-                                            exitType, 
-                                            exitReason,
-                                            pivotInfo);
-                
-                // Set position comment before closing
-                if(PositionSelectByTicket(ticket))
-                {
-                    Print("Exit Comment: ", comment);  // Just print the comment
-                }
-                if(trade.PositionClose(ticket))
-                {
-                    Print("Successfully closed position #", ticket, " at take profit");
-                    
-                    // Check if this was the last position
-                    if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
-                    {
-                        tradeDirection = 0;
-                        inEntrySequence = false;
-                        entryPositions = 0;
-                        Print("=== TRADE DIRECTION RESET ===");
-                        Print("Reason: All positions have been closed after take profit");
-                    }
-                }
-            }
-            // Check for Stop Loss
-            else if(profitPips <= -slLevel)
-            {
-                // Build detailed exit information
-                exitType = "STOP LOSS";
-                exitReason = StringFormat("ATR-based SL reached (%.1f pips loss)", MathAbs(profitPips));
-                
-                // Add pivot point information if enabled
-                if(UsePivotPoints)
-                {
-                    double nearestPivot = GetNearestLevel(currentPrice, posType != POSITION_TYPE_BUY);
-                    if(nearestPivot != 0.0)
-                    {
-                        pivotInfo = StringFormat("\nNearest Pivot Level: %.5f\nDistance to Pivot: %.1f pips", 
-                                               nearestPivot, 
-                                               MathAbs(currentPrice - nearestPivot) / point);
-                    }
-                }
-                
-                Print("=== ", exitType, " EXIT TRIGGERED ===");
-                Print("Position Type: ", EnumToString(posType));
-                Print("Entry Price: ", openPrice);
-                Print("Current Price: ", currentPrice);
-                Print("Exit Reason: ", exitReason);
-                Print("ATR Value: ", currentATR);
-                Print("ATR in Pips: ", atrPips);
-                Print("SL Level: ", slLevel);
-                if(pivotInfo != "") Print(pivotInfo);
-                
-                string comment = StringFormat("%s: %s%s", 
-                                            exitType, 
-                                            exitReason,
-                                            pivotInfo);
-                
-                // Set position comment before closing
-                if(PositionSelectByTicket(ticket))
-                {
-                    Print("Exit Comment: ", comment);  // Just print the comment
-                }
-                if(trade.PositionClose(ticket))
-                {
-                    Print("Successfully closed position #", ticket, " at stop loss");
-                    
-                    // Check if this was the last position
-                    if(!HasOpenPositions(ORDER_TYPE_BUY) && !HasOpenPositions(ORDER_TYPE_SELL))
-                    {
-                        tradeDirection = 0;
-                        inEntrySequence = false;
-                        entryPositions = 0;
-                        Print("=== TRADE DIRECTION RESET ===");
-                        Print("Reason: All positions have been closed after stop loss");
-                    }
-                }
-            }
+            ArrayResize(g_positions, g_positionCount + 1);
+            g_positions[g_positionCount].ticket = ticket;
+            g_positions[g_positionCount].openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            g_positions[g_positionCount].openTime = (datetime)PositionGetInteger(POSITION_TIME);
+            g_positions[g_positionCount].lots = PositionGetDouble(POSITION_VOLUME);
+            g_positions[g_positionCount].type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            g_positions[g_positionCount].stopLoss = PositionGetDouble(POSITION_SL);
+            g_positions[g_positionCount].takeProfit = PositionGetDouble(POSITION_TP);
+            g_positionCount++;
         }
     }
 }

@@ -41,9 +41,10 @@ double Hybrid_SL_Buffer[];
 
 //--- EA Parameters from V-EA-Stubbs_EMA_MACD.mq5
 input group "=== ATR Settings ==="
-input int      ATRPeriod = 22;           // ATR Period (Standard: 14-21) [14-26, Step: 2]
-input double   ATRMultiplierSL = 8.5;    // ATR Multiplier for Stop Loss (Standard: 2-3) [7.0-11.0, Step: 0.5]
-input double   ATRMultiplierTP = 8.0;    // ATR Multiplier for Take Profit (Standard: 3-4) [8.0-12.0, Step: 0.5]
+input int      ATRPeriod = 22;           // ATR Period
+input double   ATRMultiplierSL = 8.5;    // ATR Multiplier for Stop Loss
+input double   ATRMultiplierTP = 8.0;    // ATR Multiplier for Take Profit
+input int      ATR_MA_Period = 15;       // Period for Average ATR calculation
 
 input group "=== Hybrid Exit Settings ==="
 input bool     UseHybridExits = true;    // Use both Pivot and ATR for exits
@@ -61,6 +62,16 @@ input double   Max_Buffer_Pips = 50.0;   // Maximum buffer size in pips
 int ATRHandle;
 int EMAHandle;
 
+// Add missing parameters from EA
+input group "=== Pivot Points & Buffers ==="
+input ENUM_TIMEFRAMES PivotTimeframe = PERIOD_D1;  // Timeframe for Pivot Points
+input bool    UsePivotPoints = true;     // Use Pivot Points for Trading
+input double  PivotBufferPips = 1.0;     // Buffer around pivot levels
+
+// Add pivot point variables
+double pivotPoint, r1Level, r2Level, r3Level, s1Level, s2Level, s3Level;
+datetime lastPivotCalc = 0;
+
 //+------------------------------------------------------------------+
 //| Custom indicator initialization function                           |
 //+------------------------------------------------------------------+
@@ -73,7 +84,7 @@ int OnInit()
    SetIndexBuffer(3, Hybrid_SL_Buffer, INDICATOR_DATA);
    
    //--- Initialize ATR indicator handle
-   ATRHandle = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
+   ATRHandle = iATR(_Symbol, PERIOD_D1, ATRPeriod);
    
    if(ATRHandle == INVALID_HANDLE)
    {

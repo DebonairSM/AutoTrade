@@ -1,0 +1,86 @@
+//@version=5
+indicator("Stubbs EA Monitor with Enhanced Visibility", overlay=true)
+
+// Inputs for EMA settings
+emaFastLength = input.int(13, title="Fast EMA Length")   // Default: 13
+emaMidLength = input.int(32, title="Mid EMA Length")     // Default: 32
+emaSlowLength = input.int(37, title="Slow EMA Length")   // Default: 37
+
+// Inputs for MACD settings
+macdFast = input.int(24, title="MACD Fast Length")       // Default: 24
+macdSlow = input.int(26, title="MACD Slow Length")       // Default: 26
+macdSignal = input.int(15, title="MACD Signal Length")   // Default: 15
+
+// ATR settings
+atrLength = input.int(14, title="ATR Length")            // ATR Period
+slMultiplier = input.float(8.5, title="SL Multiplier")   // Stop Loss Multiplier
+tpMultiplier = input.float(8.0, title="TP Multiplier")   // Take Profit Multiplier
+slBufferPips = input.float(4.5, title="SL Buffer (Pips)")// SL Buffer in pips
+
+// Fixed H2 timeframe
+tf = "120"
+
+// Calculate EMAs directly on H2 data
+emaFast = request.security(syminfo.tickerid, tf, ta.ema(close, emaFastLength))
+emaMid = request.security(syminfo.tickerid, tf, ta.ema(close, emaMidLength))
+emaSlow = request.security(syminfo.tickerid, tf, ta.ema(close, emaSlowLength))
+
+// Compute MACD values on the current chart timeframe
+[macdLineSrc, signalLineSrc, _] = ta.macd(close, macdFast, macdSlow, macdSignal)
+
+// Use request.security() to lock MACD values to the H2 timeframe
+macdLine = request.security(syminfo.tickerid, tf, macdLineSrc)
+signalLine = request.security(syminfo.tickerid, tf, signalLineSrc)
+
+// ATR Calculation (H2 timeframe)
+atr = request.security(syminfo.tickerid, tf, ta.atr(atrLength))
+
+// Entry and exit conditions
+emaEntry = ta.crossover(emaFast, emaMid) and emaFast > emaSlow
+emaExit = ta.crossunder(emaFast, emaMid)
+
+// Updated MACD conditions
+macdEntry = ta.crossover(macdLine, signalLine) or (macdLine > signalLine) // Long signal logic
+macdExit = ta.crossunder(macdLine, signalLine) or (macdLine < signalLine) // Short signal logic
+
+// Combine conditions for visual signals
+longSignal = emaEntry and macdEntry
+shortSignal = emaExit and macdExit
+
+// Calculate dynamic SL and TP
+slDistance = atr * slMultiplier
+tpDistance = atr * tpMultiplier
+
+// Add buffer to SL
+bufferInPrice = slBufferPips * syminfo.mintick
+
+// SL and TP levels for long positions
+longSL = low - slDistance - bufferInPrice
+longTP = close + tpDistance
+
+// SL and TP levels for short positions
+shortSL = high + slDistance + bufferInPrice
+shortTP = close - tpDistance
+
+// Plot EMAs
+plot(emaFast, color=color.blue, title="Fast EMA (H2)")
+plot(emaMid, color=color.orange, title="Mid EMA (H2)")
+plot(emaSlow, color=color.red, title="Slow EMA (H2)")
+
+// Plot SL and TP levels as small fixed horizontal segments
+plot(longSignal ? longSL : na, color=color.red, title="Long SL", style=plot.style_circles, linewidth=2)
+plot(longSignal ? longTP : na, color=color.green, title="Long TP", style=plot.style_circles, linewidth=2)
+plot(shortSignal ? shortSL : na, color=color.red, title="Short SL", style=plot.style_circles, linewidth=2)
+plot(shortSignal ? shortTP : na, color=color.green, title="Short TP", style=plot.style_circles, linewidth=2)
+
+// Plot signals on the chart
+plotshape(longSignal, style=shape.triangleup, location=location.belowbar, color=color.green, title="Long Signal", text="BUY", textcolor=color.white, size=size.normal)
+plotshape(shortSignal, style=shape.triangledown, location=location.abovebar, color=color.red, title="Short Signal", text="SELL", textcolor=color.white, size=size.normal)
+
+// Background highlight for signals
+bgcolor(longSignal ? color.new(color.green, 85) : na, title="Long Signal Background")
+bgcolor(shortSignal ? color.new(color.red, 85) : na, title="Short Signal Background")
+
+// Alerts
+alertcondition(longSignal, title="Long Signal Alert", message="Stubbs EA: Long Entry Signal")
+alertcondition(shortSignal, title="Short Signal Alert", message="Stubbs EA: Short Exit Signal")

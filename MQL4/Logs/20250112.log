@@ -1,0 +1,14 @@
+0	21:44:52.944	Expert VSol-MT4 EURUSD,H1: loaded successfully
+0	21:44:52.944	VSol-MT4 EURUSD,H1 inputs: EMAPeriodFast=8; EMAPeriodMid=23; EMAPeriodSlow=22; MACDFast=15; MACDSlow=17; MACDSignal=13; RiskPercentage=1.0; ATRPeriod=19; MACDThreshold=0.00006; EntryTimeoutBars=8; 
+0	21:44:54.755	VSol-MT4 EURUSD,H1: EA Initialized Successfully.
+0	21:44:56.324	VSol-MT4 EURUSD,H1: initialized
+2	21:45:02.431	VSol-MT4 EURUSD,H1: close #109436617 sell 0.01 EURUSD at 1.02967 at price 1.02414
+0	21:45:02.431	VSol-MT4 EURUSD,H1: Closed SELL position due to MACD exit signal.
+0	21:48:54.393	VSol-MT4 EURUSD,H1: uninit reason 3
+0	21:48:54.393	VSol-MT4 EURUSD,H1: EA Deinitialized.
+0	21:48:54.526	VSol-MT4 EURUSD,M30: EA Initialized Successfully.
+0	21:48:54.526	VSol-MT4 EURUSD,M30: initialized
+0	23:00:00.845	VSol-MT4 EURUSD,M30: Bearish signal detected. Starting entry sequence.
+0	23:00:00.845	VSol-MT4 EURUSD,M30: Calculated Lot Size: 0.01 | Min Lot: 0.01 | Max Lot: 100000.0 | Step Lot: 0.01
+2	23:00:00.995	VSol-MT4 EURUSD,M30: open #109451061 sell 0.01 EURUSD at 1.02149 ok
+0	23:00:00.995	VSol-MT4 EURUSD,M30: Successfully opened SELL trade.
