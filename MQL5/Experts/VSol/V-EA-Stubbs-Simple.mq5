@@ -18,29 +18,48 @@ input group "=== Timeframe Settings ==="
 input ENUM_TIMEFRAMES MainTimeframe = PERIOD_H2;  // Main Trading Timeframe [H1,H2,H4,D1]
 
 input group "=== EMA Parameters ==="
-input int EmaFastPeriod = 14;        // Fast EMA Period [8-21, step=1]
-input int EmaMidPeriod = 31;         // Mid EMA Period [21-55, step=1]
-input int EmaSlowPeriod = 86;        // Slow EMA Period [34-89, step=1]
+input int EmaFastPeriod = 15;        // Fast EMA Period [8-21, step=1]
+input int EmaMidPeriod = 23;         // Mid EMA Period [21-55, step=1]
+input int EmaSlowPeriod = 37;        // Slow EMA Period [34-89, step=1]
 
 input group "=== MACD Parameters ==="
-input int MacdFastPeriod = 33;       // MACD Fast Length [12-34, step=2]
-input int MacdSlowPeriod = 21;       // MACD Slow Length [21-55, step=1]
+input int MacdFastPeriod = 25;       // MACD Fast Length [12-34, step=2]
+input int MacdSlowPeriod = 23;       // MACD Slow Length [21-55, step=1]
 input int MacdSignalPeriod = 9;     // MACD Signal Length [9-21, step=2]
 
 input group "=== ATR Settings ==="
-input int ATRPeriod = 20;            // ATR Period [10-30, step=2]
+input int ATRPeriod = 10;            // ATR Period [10-30, step=2]
 input double SLMultiplier = 5;     // SL Multiplier [5.0-12.0, step=0.5]
-input double TPMultiplier = 7.0;     // TP Multiplier [4.0-12.0, step=0.5]
-input double SLBufferPips = 3.5;     // SL Buffer in Pips [2.0-8.0, step=0.5]
+input double TPMultiplier = 10.5;     // TP Multiplier [4.0-12.0, step=0.5]
+input double SLBufferPips = 6.5;     // SL Buffer in Pips [2.0-8.0, step=0.5]
 
 input group "=== Trailing Stop Settings ==="
 input double MinimumProfitToTrail = 3.0;  // Minimum profit (ATR) before trailing [0.5-3.0, step=0.25]
-input double TrailMultiplier = 2;       // Trail distance as ATR multiplier [1.0-3.0, step=0.25]
-input bool UseFixedTrailStep = true;     // Use fixed step for trailing
-input double TrailStepPips = 15.0;        // Fixed trail step in pips [10.0-50.0, step=5.0]
+input double TrailMultiplier = 2.25;       // Trail distance as ATR multiplier [1.0-3.0, step=0.25]
+input bool UseFixedTrailStep = false;     // Use fixed step for trailing
+input double TrailStepPips = 10.0;        // Fixed trail step in pips [10.0-50.0, step=5.0]
 
 input group "=== Risk Management ==="
 input double RiskPercentage = 5.0;   // Risk per trade (%) [0.5-5.0, step=0.5]
+
+input group "=== Step-Out Stop Loss Settings ==="
+input bool UseStepOutSL = false;        // Enable Step-Out Stop Loss
+input double StepOutATRMultiplier = 0.5;  // Step-Out SL ATR Multiplier [0.3-1.0, step=0.1]
+input int StepOutBarsCount = 2;        // Bars below threshold before step-out [1-5, step=1]
+input double StepOutClosePercent = 100.0; // Percentage of position to close [25-100, step=25]
+
+// Add position tracking struct
+struct PositionInfo {
+    ulong ticket;
+    datetime openTime;
+    double openPrice;
+    ENUM_POSITION_TYPE type;
+    int barsUnderThreshold;
+};
+
+// Global variables
+PositionInfo g_positions[];
+int g_positionCount = 0;
 
 //--- Global Variables
 int MagicNumber = 123456;            // Unique identifier for EA's trades
@@ -115,7 +134,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 //| Get entry signal                                                    |
 //+------------------------------------------------------------------+
-bool GetEntrySignal(bool isBuy)
+bool GetEntrySignal(bool isBuy, string &signalReason)
 {
     // Get current indicator values
     double emaFast = GetIndicatorValue(handleEmaFast, 0);
@@ -128,16 +147,29 @@ bool GetEntrySignal(bool isBuy)
     {
         // Buy signal: EMA crossover (Fast crosses Mid) AND Fast > Slow AND MACD conditions
         bool emaCrossover = emaFast > emaMid && emaFast > emaSlow;
-        bool macdSignal = macdMain > macdSignal || macdMain > 0;
-        return emaCrossover && macdSignal;
+        bool macdCondition = macdMain > macdSignal || macdMain > 0;
+        
+        if(emaCrossover && macdCondition)
+        {
+            signalReason = StringFormat("📈 EMAs Aligned (Fast: %.2f > Mid: %.2f > Slow: %.2f) | MACD(%.2f > %.2f)", 
+                                      emaFast, emaMid, emaSlow, macdMain, macdSignal);
+            return true;
+        }
     }
     else
     {
         // Sell signal: EMA crossunder (Fast crosses Mid) AND Fast < Slow AND MACD conditions
         bool emaCrossunder = emaFast < emaMid && emaFast < emaSlow;
-        bool macdSignal = macdMain < macdSignal || macdMain < 0;
-        return emaCrossunder && macdSignal;
+        bool macdCondition = macdMain < macdSignal || macdMain < 0;
+        
+        if(emaCrossunder && macdCondition)
+        {
+            signalReason = StringFormat("📉 EMAs Aligned (Fast: %.2f < Mid: %.2f < Slow: %.2f) | MACD(%.2f < %.2f)", 
+                                      emaFast, emaMid, emaSlow, macdMain, macdSignal);
+            return true;
+        }
     }
+    return false;
 }
 
 //+------------------------------------------------------------------+
@@ -181,6 +213,12 @@ void OnTick()
         
     lastBarTime = currentBar;
     
+    // Update position tracking on each new bar
+    UpdatePositionTracking();
+    
+    // Check step-out conditions on each new bar
+    CheckStepOutSL();
+    
     // Update SL/TP for existing positions on each new bar
     if(tradeDirection != 0)
     {
@@ -195,8 +233,9 @@ void OnTick()
     else // Have position
     {
         // Check for exit signal
-        bool buySignal = GetEntrySignal(true);
-        bool sellSignal = GetEntrySignal(false);
+        string signalReason;  // Add temporary string for signal reason
+        bool buySignal = GetEntrySignal(true, signalReason);
+        bool sellSignal = GetEntrySignal(false, signalReason);
         
         if((tradeDirection == 1 && sellSignal) ||
            (tradeDirection == -1 && buySignal))
@@ -226,6 +265,10 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OpenNewPosition(bool isBuy)
 {
+    string signalReason;
+    if(!GetEntrySignal(isBuy, signalReason))
+        return;
+        
     double sl, tp;
     GetDynamicSLTP(isBuy, sl, tp);
     
@@ -234,7 +277,7 @@ void OpenNewPosition(bool isBuy)
     
     if(lotSize == 0)
     {
-        Print("Error: Invalid lot size calculated");
+        Print("❌ Error: Invalid lot size calculated");
         return;
     }
     
@@ -245,7 +288,9 @@ void OpenNewPosition(bool isBuy)
         if(success)
         {
             tradeDirection = 1;
-            Print("Buy Signal | Price: ", entryPrice, " | SL: ", sl, " | TP: ", tp, " | Lots: ", lotSize);
+            Print("🔵 LONG Entry | ", signalReason);
+            Print("💰 Price: ", entryPrice, " | SL: ", sl, " (", NormalizeDouble(MathAbs(entryPrice-sl)/Point(),1), " pips) | ",
+                  "TP: ", tp, " (", NormalizeDouble(MathAbs(tp-entryPrice)/Point(),1), " pips) | Lots: ", lotSize);
         }
     }
     else
@@ -254,13 +299,15 @@ void OpenNewPosition(bool isBuy)
         if(success)
         {
             tradeDirection = -1;
-            Print("Sell Signal | Price: ", entryPrice, " | SL: ", sl, " | TP: ", tp, " | Lots: ", lotSize);
+            Print("🔴 SHORT Entry | ", signalReason);
+            Print("💰 Price: ", entryPrice, " | SL: ", sl, " (", NormalizeDouble(MathAbs(entryPrice-sl)/Point(),1), " pips) | ",
+                  "TP: ", tp, " (", NormalizeDouble(MathAbs(tp-entryPrice)/Point(),1), " pips) | Lots: ", lotSize);
         }
     }
     
     if(!success)
     {
-        Print((isBuy ? "Buy" : "Sell"), " order failed. Error: ", GetLastError());
+        Print("❌ ", (isBuy ? "Buy" : "Sell"), " order failed. Error: ", GetLastError());
     }
 }
 
@@ -269,11 +316,12 @@ void OpenNewPosition(bool isBuy)
 //+------------------------------------------------------------------+
 void OpenPositionOnSignal()
 {
-    if(GetEntrySignal(true))
+    string signalReason;  // Add temporary string for signal reason
+    if(GetEntrySignal(true, signalReason))
     {
         OpenNewPosition(true);
     }
-    else if(GetEntrySignal(false))
+    else if(GetEntrySignal(false, signalReason))
     {
         OpenNewPosition(false);
     }
@@ -335,10 +383,21 @@ bool CloseAllPositions()
         
         if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
         {
+            bool isLong = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+            double closePrice = isLong ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            
             if(!trade.PositionClose(ticket))
             {
-                Print("Failed to close position #", ticket, ". Error: ", GetLastError());
+                Print("❌ Failed to close position #", ticket, ". Error: ", GetLastError());
                 success = false;
+            }
+            else
+            {
+                Print((isLong ? "🔵" : "🔴"), " Closed ", (isLong ? "LONG" : "SHORT"), " #", ticket,
+                      " | Profit: $", NormalizeDouble(profit, 2),
+                      " (", NormalizeDouble(MathAbs(closePrice-openPrice)/Point(),1), " pips)");
             }
         }
     }
@@ -389,26 +448,138 @@ void UpdatePositionSLTP()
             
             if(isLong)
             {
-                // For longs: Calculate trailing stop below current price
                 newSL = currentPrice - trailDistance - buffer;
-                // Only modify if new SL is higher than current SL and we have minimum profit
                 if(newSL > currentSL)
                 {
-                    trade.PositionModify(ticket, newSL, currentTP);  // Keep original TP
-                    Print("Updated Long Position #", ticket, " - New SL: ", newSL, " (Profit ATR: ", NormalizeDouble(profitInATR, 2), ")");
+                    trade.PositionModify(ticket, newSL, currentTP);
+                    Print("📍 Trail Long #", ticket, " | Profit: ", NormalizeDouble(profitInATR, 2), " ATR | New SL: ", 
+                          newSL, " (", NormalizeDouble(MathAbs(currentPrice-newSL)/Point(),1), " pips from price)");
                 }
             }
             else
             {
-                // For shorts: Calculate trailing stop above current price
                 newSL = currentPrice + trailDistance + buffer;
-                // Only modify if new SL is lower than current SL and we have minimum profit
                 if(newSL < currentSL || currentSL == 0)
                 {
-                    trade.PositionModify(ticket, newSL, currentTP);  // Keep original TP
-                    Print("Updated Short Position #", ticket, " - New SL: ", newSL, " (Profit ATR: ", NormalizeDouble(profitInATR, 2), ")");
+                    trade.PositionModify(ticket, newSL, currentTP);
+                    Print("📍 Trail Short #", ticket, " | Profit: ", NormalizeDouble(profitInATR, 2), " ATR | New SL: ", 
+                          newSL, " (", NormalizeDouble(MathAbs(currentPrice-newSL)/Point(),1), " pips from price)");
                 }
             }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check for step-out stop loss conditions                            |
+//+------------------------------------------------------------------+
+void CheckStepOutSL()
+{
+    if(!UseStepOutSL) return;
+    
+    double atr = GetIndicatorValue(handleATR, 0);
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    double stepOutThreshold = atr * StepOutATRMultiplier;
+    
+    for(int i = g_positionCount - 1; i >= 0; i--)
+    {
+        if(g_positions[i].ticket <= 0) continue;
+        
+        // Verify position still exists and get current price
+        if(!PositionSelectByTicket(g_positions[i].ticket)) continue;
+        
+        bool isLong = (g_positions[i].type == POSITION_TYPE_BUY);
+        double currentPrice = isLong ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+        double profitInPrice = isLong ? (currentPrice - g_positions[i].openPrice) : (g_positions[i].openPrice - currentPrice);
+        
+        // Check if position is below step-out threshold
+        if(profitInPrice < -stepOutThreshold)
+        {
+            g_positions[i].barsUnderThreshold++;
+            
+            if(g_positions[i].barsUnderThreshold >= StepOutBarsCount)
+            {
+                double closeVolume = PositionGetDouble(POSITION_VOLUME) * (StepOutClosePercent / 100.0);
+                
+                Print("=== STEP-OUT STOP LOSS TRIGGERED ===");
+                Print("Position Type: ", EnumToString(g_positions[i].type));
+                Print("Entry Price: ", g_positions[i].openPrice);
+                Print("Current Price: ", currentPrice);
+                Print("Loss in ATR: ", MathAbs(profitInPrice/atr));
+                Print("Bars under threshold: ", g_positions[i].barsUnderThreshold);
+                Print("Closing ", StepOutClosePercent, "% of position");
+                
+                if(trade.PositionClosePartial(g_positions[i].ticket, closeVolume))
+                {
+                    Print("Successfully executed step-out for position #", g_positions[i].ticket);
+                    
+                    // If closing entire position, update tracking
+                    if(StepOutClosePercent >= 100.0)
+                    {
+                        UpdatePositionTracking();
+                        
+                        // Check if this was the last position
+                        if(g_positionCount == 0)
+                        {
+                            tradeDirection = 0;
+                            Print("=== TRADE DIRECTION RESET ===");
+                            Print("Reason: All positions closed after step-out stop loss");
+                        }
+                    }
+                }
+            }
+            else
+            {
+                Print("Position #", g_positions[i].ticket, " below step-out threshold for ", 
+                      g_positions[i].barsUnderThreshold, "/", StepOutBarsCount, " bars");
+            }
+        }
+        else
+        {
+            // Reset counter if position moves back above threshold
+            g_positions[i].barsUnderThreshold = 0;
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Update tracked positions                                           |
+//+------------------------------------------------------------------+
+void UpdatePositionTracking()
+{
+    // Store existing bars under threshold for positions that still exist
+    int oldPositionCount = g_positionCount;
+    PositionInfo oldPositions[];
+    ArrayCopy(oldPositions, g_positions);
+    
+    // Reset position array
+    ArrayResize(g_positions, 0);
+    g_positionCount = 0;
+    
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        {
+            ArrayResize(g_positions, g_positionCount + 1);
+            g_positions[g_positionCount].ticket = ticket;
+            g_positions[g_positionCount].openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            g_positions[g_positionCount].openTime = (datetime)PositionGetInteger(POSITION_TIME);
+            g_positions[g_positionCount].type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            
+            // Preserve bars under threshold count for existing positions
+            for(int j = 0; j < oldPositionCount; j++)
+            {
+                if(oldPositions[j].ticket == ticket)
+                {
+                    g_positions[g_positionCount].barsUnderThreshold = oldPositions[j].barsUnderThreshold;
+                    break;
+                }
+            }
+            
+            g_positionCount++;
         }
     }
 }
