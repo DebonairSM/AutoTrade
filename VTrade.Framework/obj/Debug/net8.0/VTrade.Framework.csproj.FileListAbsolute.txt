@@ -11,3 +11,16 @@ C:\repos\debonairsm\AutoTrade\VTrade.Framework\VTrade.Framework\obj\Debug\net8.0
 C:\repos\debonairsm\AutoTrade\VTrade.Framework\VTrade.Framework\obj\Debug\net8.0\refint\VTrade.Framework.dll
 C:\repos\debonairsm\AutoTrade\VTrade.Framework\VTrade.Framework\obj\Debug\net8.0\VTrade.Framework.pdb
 C:\repos\debonairsm\AutoTrade\VTrade.Framework\VTrade.Framework\obj\Debug\net8.0\ref\VTrade.Framework.dll
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\bin\Debug\net8.0\VTrade.Framework.deps.json
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\bin\Debug\net8.0\VTrade.Framework.dll
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\bin\Debug\net8.0\VTrade.Framework.pdb
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\obj\Debug\net8.0\VTrade.Framework.csproj.AssemblyReference.cache
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\obj\Debug\net8.0\VTrade.Framework.GeneratedMSBuildEditorConfig.editorconfig
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\obj\Debug\net8.0\VTrade.Framework.AssemblyInfoInputs.cache
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\obj\Debug\net8.0\VTrade.Framework.AssemblyInfo.cs
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\obj\Debug\net8.0\VTrade.Framework.csproj.CoreCompileInputs.cache
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\obj\Debug\net8.0\VTrade.Framework.sourcelink.json
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\obj\Debug\net8.0\VTrade.Framework.dll
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\obj\Debug\net8.0\refint\VTrade.Framework.dll
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\obj\Debug\net8.0\VTrade.Framework.pdb
+C:\repos\debonairsm\AutoTrade\VTrade.Framework\obj\Debug\net8.0\ref\VTrade.Framework.dll

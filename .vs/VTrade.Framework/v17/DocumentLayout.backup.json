@@ -1,38 +1,10 @@
 {
   "Version": 1,
-  "WorkspaceRootPath": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\",
+  "WorkspaceRootPath": "C:\\repos\\debonairsm\\AutoTrade\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|c:\\repos\\debonairsm\\autotrade\\vtrade.framework\\vtrade.framework\\utilities\\errorhandler.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|solutionrelative:vtrade.framework\\utilities\\errorhandler.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|c:\\repos\\debonairsm\\autotrade\\vtrade.framework\\vtrade.framework\\core\\interfaces\\iorderhandler.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|solutionrelative:vtrade.framework\\core\\interfaces\\iorderhandler.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|c:\\repos\\debonairsm\\autotrade\\vtrade.framework\\vtrade.framework\\configuration\\mt5configuration.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|solutionrelative:vtrade.framework\\configuration\\mt5configuration.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|c:\\repos\\debonairsm\\autotrade\\vtrade.framework\\vtrade.framework\\applications\\experts\\expertadvisorbase.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|solutionrelative:vtrade.framework\\applications\\experts\\expertadvisorbase.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|c:\\repos\\debonairsm\\autotrade\\vtrade.framework\\vtrade.framework\\applications\\services\\marketdataservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|solutionrelative:vtrade.framework\\applications\\services\\marketdataservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|c:\\repos\\debonairsm\\autotrade\\vtrade.framework\\vtrade.framework\\applications\\services\\tradingservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|solutionrelative:vtrade.framework\\applications\\services\\tradingservice.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|c:\\repos\\debonairsm\\autotrade\\vtrade.framework\\vtrade.framework\\applications\\experts\\macrossea.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{D3CC3A14-CB8C-4916-B4A2-5F036B937090}|VTrade.Framework\\VTrade.Framework.csproj|solutionrelative:vtrade.framework\\applications\\experts\\macrossea.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Core\\VTrade.Framework.csproj||{FA3CD31E-987B-443A-9B81-186104E8DAC1}|",
-      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:VTrade.Core\\VTrade.Framework.csproj||{FA3CD31E-987B-443A-9B81-186104E8DAC1}|"
+      "AbsoluteMoniker": "D:0:0:{47C10A1D-115B-476D-8B3D-15731BD204F0}|VTrade.Tests\\VTrade.Tests.csproj|c:\\repos\\debonairsm\\autotrade\\vtrade.tests\\mstestsettings.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{47C10A1D-115B-476D-8B3D-15731BD204F0}|VTrade.Tests\\VTrade.Tests.csproj|solutionrelative:vtrade.tests\\mstestsettings.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     }
   ],
   "DocumentGroupContainers": [
@@ -47,98 +19,15 @@
             {
               "$type": "Document",
               "DocumentIndex": 0,
-              "Title": "ErrorHandler.cs",
-              "DocumentMoniker": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Utilities\\ErrorHandler.cs",
-              "RelativeDocumentMoniker": "VTrade.Framework\\Utilities\\ErrorHandler.cs",
-              "ToolTip": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Utilities\\ErrorHandler.cs",
-              "RelativeToolTip": "VTrade.Framework\\Utilities\\ErrorHandler.cs",
-              "ViewState": "AgIAABEAAAAAAAAAAAAAABAAAAAAAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-01-18T13:13:05.124Z",
-              "EditorCaption": ""
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 1,
-              "Title": "IOrderHandler.cs",
-              "DocumentMoniker": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Core\\Interfaces\\IOrderHandler.cs",
-              "RelativeDocumentMoniker": "VTrade.Framework\\Core\\Interfaces\\IOrderHandler.cs",
-              "ToolTip": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Core\\Interfaces\\IOrderHandler.cs",
-              "RelativeToolTip": "VTrade.Framework\\Core\\Interfaces\\IOrderHandler.cs",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAQAAAAaAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-01-18T13:12:51.714Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 2,
-              "Title": "MT5Configuration.cs",
-              "DocumentMoniker": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Configuration\\MT5Configuration.cs",
-              "RelativeDocumentMoniker": "VTrade.Framework\\Configuration\\MT5Configuration.cs",
-              "ToolTip": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Configuration\\MT5Configuration.cs",
-              "RelativeToolTip": "VTrade.Framework\\Configuration\\MT5Configuration.cs",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAuwAAAAAAAAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-01-18T00:03:29.012Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 3,
-              "Title": "ExpertAdvisorBase.cs",
-              "DocumentMoniker": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Applications\\Experts\\ExpertAdvisorBase.cs",
-              "RelativeDocumentMoniker": "VTrade.Framework\\Applications\\Experts\\ExpertAdvisorBase.cs",
-              "ToolTip": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Applications\\Experts\\ExpertAdvisorBase.cs",
-              "RelativeToolTip": "VTrade.Framework\\Applications\\Experts\\ExpertAdvisorBase.cs",
-              "ViewState": "AgIAAA4AAAAAAAAAAAAAwB4AAAANAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-01-17T23:48:58.897Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 4,
-              "Title": "MarketDataService.cs",
-              "DocumentMoniker": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Applications\\Services\\MarketDataService.cs",
-              "RelativeDocumentMoniker": "VTrade.Framework\\Applications\\Services\\MarketDataService.cs",
-              "ToolTip": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Applications\\Services\\MarketDataService.cs",
-              "RelativeToolTip": "VTrade.Framework\\Applications\\Services\\MarketDataService.cs",
+              "Title": "MSTestSettings.cs",
+              "DocumentMoniker": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Tests\\MSTestSettings.cs",
+              "RelativeDocumentMoniker": "VTrade.Tests\\MSTestSettings.cs",
+              "ToolTip": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Tests\\MSTestSettings.cs",
+              "RelativeToolTip": "VTrade.Tests\\MSTestSettings.cs",
               "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-01-17T23:48:46.481Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 5,
-              "Title": "TradingService.cs",
-              "DocumentMoniker": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Applications\\Services\\TradingService.cs",
-              "RelativeDocumentMoniker": "VTrade.Framework\\Applications\\Services\\TradingService.cs",
-              "ToolTip": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Applications\\Services\\TradingService.cs",
-              "RelativeToolTip": "VTrade.Framework\\Applications\\Services\\TradingService.cs",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAACUAAAA1AAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-01-17T23:47:00.779Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 6,
-              "Title": "MACrossEA.cs",
-              "DocumentMoniker": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Applications\\Experts\\MACrossEA.cs",
-              "RelativeDocumentMoniker": "VTrade.Framework\\Applications\\Experts\\MACrossEA.cs",
-              "ToolTip": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Framework\\Applications\\Experts\\MACrossEA.cs",
-              "RelativeToolTip": "VTrade.Framework\\Applications\\Experts\\MACrossEA.cs",
-              "ViewState": "AgIAABEAAAAAAAAAAAAAwCoAAAA2AAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-01-17T23:45:31.425Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 7,
-              "Title": "VTrade.Framework.csproj",
-              "DocumentMoniker": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Core\\VTrade.Framework.csproj",
-              "RelativeDocumentMoniker": "VTrade.Core\\VTrade.Framework.csproj",
-              "ToolTip": "C:\\repos\\debonairsm\\AutoTrade\\VTrade.Framework\\VTrade.Core\\VTrade.Framework.csproj",
-              "RelativeToolTip": "VTrade.Core\\VTrade.Framework.csproj",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000758|",
-              "WhenOpened": "2025-01-17T23:40:01.77Z"
+              "WhenOpened": "2025-01-18T14:11:15.902Z",
+              "EditorCaption": ""
             }
           ]
         }
