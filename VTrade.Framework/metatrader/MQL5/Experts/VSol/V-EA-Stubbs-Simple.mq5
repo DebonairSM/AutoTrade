@@ -18,35 +18,35 @@ input group "=== Timeframe Settings ==="
 input ENUM_TIMEFRAMES MainTimeframe = PERIOD_H2;  // Main Trading Timeframe [H1,H2,H4,D1]
 
 input group "=== EMA Parameters ==="
-input int EmaFastPeriod = 15;        // Fast EMA Period [8-21, step=1]
-input int EmaMidPeriod = 23;         // Mid EMA Period [21-55, step=1]
-input int EmaSlowPeriod = 37;        // Slow EMA Period [34-89, step=1]
+input int EmaFastPeriod = 9;        // Fast EMA Period [8-21, step=1]
+input int EmaMidPeriod = 55;         // Mid EMA Period [21-55, step=1]
+input int EmaSlowPeriod = 77;        // Slow EMA Period [34-89, step=1]
 
 input group "=== MACD Parameters ==="
-input int MacdFastPeriod = 25;       // MACD Fast Length [12-34, step=2]
-input int MacdSlowPeriod = 23;       // MACD Slow Length [21-55, step=1]
-input int MacdSignalPeriod = 9;     // MACD Signal Length [9-21, step=2]
+input int MacdFastPeriod = 34;       // MACD Fast Length [12-34, step=2]
+input int MacdSlowPeriod = 24;       // MACD Slow Length [21-55, step=1]
+input int MacdSignalPeriod = 12;     // MACD Signal Length [9-21, step=2]
 
 input group "=== ATR Settings ==="
 input int ATRPeriod = 10;            // ATR Period [10-30, step=2]
-input double SLMultiplier = 5;     // SL Multiplier [5.0-12.0, step=0.5]
-input double TPMultiplier = 10.5;     // TP Multiplier [4.0-12.0, step=0.5]
-input double SLBufferPips = 6.5;     // SL Buffer in Pips [2.0-8.0, step=0.5]
+input double SLMultiplier = 5.0;     // SL Multiplier [5.0-12.0, step=0.5]
+input double TPMultiplier = 5.0;     // TP Multiplier [4.0-12.0, step=0.5]
+input double SLBufferPips = 2.0;     // SL Buffer in Pips [2.0-8.0, step=0.5]
 
 input group "=== Trailing Stop Settings ==="
-input double MinimumProfitToTrail = 3.0;  // Minimum profit (ATR) before trailing [0.5-3.0, step=0.25]
-input double TrailMultiplier = 2.25;       // Trail distance as ATR multiplier [1.0-3.0, step=0.25]
+input double MinimumProfitToTrail = 2.25;  // Minimum profit (ATR) before trailing [0.5-3.0, step=0.25]
+input double TrailMultiplier = 3.00;       // Trail distance as ATR multiplier [1.0-3.0, step=0.25]
 input bool UseFixedTrailStep = false;     // Use fixed step for trailing
-input double TrailStepPips = 10.0;        // Fixed trail step in pips [10.0-50.0, step=5.0]
+input double TrailStepPips = 35.0;        // Fixed trail step in pips [10.0-50.0, step=5.0]
 
 input group "=== Risk Management ==="
 input double RiskPercentage = 5.0;   // Risk per trade (%) [0.5-5.0, step=0.5]
 
 input group "=== Step-Out Stop Loss Settings ==="
 input bool UseStepOutSL = false;        // Enable Step-Out Stop Loss
-input double StepOutATRMultiplier = 0.5;  // Step-Out SL ATR Multiplier [0.3-1.0, step=0.1]
-input int StepOutBarsCount = 2;        // Bars below threshold before step-out [1-5, step=1]
-input double StepOutClosePercent = 100.0; // Percentage of position to close [25-100, step=25]
+input double StepOutATRMultiplier = 0.79;  // Step-Out SL ATR Multiplier [0.3-1.0, step=0.1]
+input int StepOutBarsCount = 5;        // Bars below threshold before step-out [1-5, step=1]
+input double StepOutClosePercent = 25.0; // Percentage of position to close [25-100, step=25]
 
 // Add position tracking struct
 struct PositionInfo {

@@ -2,20 +2,20 @@
 indicator("Stubbs EA Monitor with Enhanced Visibility", overlay=true)
 
 // Inputs for EMA settings
-emaFastLength = input.int(13, title="Fast EMA Length")   // Default: 13
-emaMidLength = input.int(32, title="Mid EMA Length")     // Default: 32
-emaSlowLength = input.int(37, title="Slow EMA Length")   // Default: 37
+emaFastLength = input.int(9, title="Fast EMA Length")   // Default: 9
+emaMidLength = input.int(55, title="Mid EMA Length")     // Default: 55
+emaSlowLength = input.int(77, title="Slow EMA Length")   // Default: 77
 
 // Inputs for MACD settings
-macdFast = input.int(24, title="MACD Fast Length")       // Default: 24
-macdSlow = input.int(26, title="MACD Slow Length")       // Default: 26
-macdSignal = input.int(15, title="MACD Signal Length")   // Default: 15
+macdFast = input.int(34, title="MACD Fast Length")       // Default: 34
+macdSlow = input.int(24, title="MACD Slow Length")       // Default: 24
+macdSignal = input.int(12, title="MACD Signal Length")    // Default: 12
 
 // ATR settings
-atrLength = input.int(14, title="ATR Length")            // ATR Period
-slMultiplier = input.float(8.5, title="SL Multiplier")   // Stop Loss Multiplier
-tpMultiplier = input.float(8.0, title="TP Multiplier")   // Take Profit Multiplier
-slBufferPips = input.float(4.5, title="SL Buffer (Pips)")// SL Buffer in pips
+atrLength = input.int(10, title="ATR Length")            // ATR Period
+slMultiplier = input.float(5.0, title="SL Multiplier")   // Stop Loss Multiplier
+tpMultiplier = input.float(5.0, title="TP Multiplier")   // Take Profit Multiplier
+slBufferPips = input.float(2.0, title="SL Buffer (Pips)")// SL Buffer in pips
 
 // Fixed H2 timeframe
 tf = "120"
