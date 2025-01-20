@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("VTrade.Framework")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+937933aa0fecf561133a8be8310fc50d41cc44fb")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5ac2cc0a26eeca35dfbddab021906b6bdc2657b8")]
 [assembly: System.Reflection.AssemblyProductAttribute("VTrade.Framework")]
 [assembly: System.Reflection.AssemblyTitleAttribute("VTrade.Framework")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

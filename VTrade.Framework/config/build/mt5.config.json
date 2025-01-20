@@ -1,0 +1,9 @@
+{
+    "mt5": {
+        "terminal_data_path": "C:\\Users\\Usuario\\AppData\\Roaming\\MetaQuotes\\Terminal\\D0E8209F77C8CF37AD8BF550E51FF075",
+        "libraries_relative_path": "MQL5\\Libraries",
+        "experts_relative_path": "MQL5\\Experts\\VSol",
+        "dll_name": "VTrade.Framework.dll",
+        "meta_editor_path": "C:\\Program Files\\MetaTrader 5\\metaeditor64.exe"
+    }
+} 

@@ -1,69 +1,142 @@
-# Trading Framework
+# VTrade Framework
 
-A comprehensive MQL4/MQL5 trading framework for developing and managing trading strategies.
+A comprehensive algorithmic trading framework supporting both MetaTrader 5 and MetaTrader 4 platforms.
 
-## Directory Structure
+## Project Structure
 
 ```
-├── src/                        # Shared framework code
-│   ├── experts/
-│   │   └── base/              # Base classes for Expert Advisors
-│   ├── indicators/
-│   │   └── base/              # Base classes for Custom Indicators
-│   ├── scripts/
-│   │   └── base/              # Base classes for Scripts
-│   ├── include/               # Common include files
-│   │   ├── utils/             # Utility functions
-│   │   ├── constants/         # Constants and enums
-│   │   └── interfaces/        # Interfaces/abstract classes
-│   └── libraries/             # Reusable libraries
-│
-├── applications/
-│   ├── experts/
-│   │   ├── mql5/             # Primary MQL5 expert advisors
+VTrade.Framework/
+├── applications/            # Trading logic implementations
+│   ├── experts/            # Trading strategies
+│   │   ├── mql5/          # MT5 expert advisors
 │   │   │   ├── trend_following/
+│   │   │   ├── mean_reversion/
 │   │   │   ├── scalping/
-│   │   │   └── mean_reversion/
-│   │   │
-│   │   └── mql4/             # MQL4 expert advisors
-│   │       └── legacy_expert/ 
-│   │
-│   ├── indicators/           # MQL5 indicators
-│   │   ├── trend/
-│   │   ├── momentum/
-│   │   └── volatility/
-│   │
-│   └── scripts/             # MQL5 utility scripts
-│
-├── tests/                   # Test framework
-│   └── include/            # Test utilities
-│
-└── docs/                   # Documentation
-    ├── api/
-    └── examples/
+│   │   │   └── shared/    # Reusable trading logic
+│   │   └── mt4/           # MT4 expert advisors
+│   ├── indicators/        # Custom indicators
+│   └── scripts/          # Utility scripts
+│       ├── backtesting/
+│       ├── data_export/
+│       └── utilities/
+├── src/                  # Core framework logic
+│   ├── core/            # Main computational modules
+│   ├── analytics/       # Market analysis tools
+│   ├── patterns/        # Pattern recognition
+│   ├── risk_management/ # Risk management tools
+│   ├── utils/          # Helper utilities
+│   ├── backtesting/    # Backtesting engine and data providers
+│   └── live_trading/   # Live market connectivity and execution
+├── tests/              # Testing suite
+│   ├── unit/
+│   ├── integration/
+│   └── performance/
+├── metatrader/        # Platform-specific data
+│   ├── mt5/
+│   │   ├── data/
+│   │   └── logs/
+│   └── mt4/
+│       ├── data/
+│       └── logs/
+└── config/           # Configuration files
 ```
 
-## Overview
+## Features
 
-This trading framework provides a structured approach to developing trading solutions in both MQL4 and MQL5. It separates core functionality from specific implementations and promotes code reuse through a modular design.
+### Backtesting
+- Historical data simulation
+- Performance analysis
+- Strategy optimization
+- Risk metrics calculation
 
-### Key Components
+### Live Trading
+- Real-time market execution
+- Broker integration (MT4/MT5)
+- Risk management
+- Performance monitoring
 
-- **src/**: Contains all shared framework code and base classes
-- **applications/**: Houses the actual trading solutions (EAs, indicators, scripts)
-- **tests/**: Framework for testing trading strategies
-- **docs/**: Framework documentation and examples
+### Analysis Tools
+- Technical indicators
+- Pattern recognition
+- Market analytics
+- Risk assessment
 
 ## Getting Started
 
-1. Clone this repository
-2. Set up your development environment with MetaTrader 4/5
-3. Link the framework to your MetaTrader data folder
-4. Start developing your trading solutions in the appropriate directories
+1. Clone the repository
+2. Configure your MetaTrader paths in `config/app_settings.json`
+3. Build the project using Visual Studio or .NET CLI
+4. Follow the setup guide in `docs/guides/setup.md`
 
-## Best Practices
+## Documentation
 
-- Inherit from base classes when creating new Expert Advisors
-- Keep common utilities in the utils directory
-- Document your code and maintain examples
-- Use the testing framework for strategy validation 
+- Architecture overview: `docs/architecture/`
+- API documentation: `docs/api/`
+- Tutorials: `docs/tutorials/`
+- Usage guides: `docs/guides/`
+
+## Development
+
+### Prerequisites
+- .NET 8.0 or later
+- MetaTrader 5 (required for MT5 features)
+- MetaTrader 4 (optional for MT4 features)
+
+### Building
+```powershell
+dotnet build
+```
+
+### Testing
+```powershell
+dotnet test
+```
+
+### Example: Running a Backtest
+
+```csharp
+// Initialize strategy and data provider
+var strategy = new TrendFollowingStrategy();
+var dataProvider = new MT5DataProvider();
+var engine = new BacktestEngine(dataProvider);
+
+// Run backtest
+var results = await engine.RunBacktest(
+    strategy,
+    "EURUSD",
+    new DateTime(2024, 1, 1),
+    new DateTime(2024, 1, 31),
+    TimeFrame.H1
+);
+
+// Analyze results
+var performance = new PerformanceAnalyzer(results);
+Console.WriteLine($"Net Profit: {performance.NetProfit}");
+```
+
+### Example: Live Trading
+
+```csharp
+// Set up live trading
+var broker = new MT5Broker(config);
+var trader = new LiveTrader(broker, strategy);
+
+// Start trading with risk management
+await trader.Start(new TradingParameters
+{
+    Symbol = "EURUSD",
+    RiskPerTrade = 1.0
+});
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details. 

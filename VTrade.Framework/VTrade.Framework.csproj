@@ -5,6 +5,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
+    <Platform>x64</Platform>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <OutputType>Library</OutputType>
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
+    <EnableComHosting>true</EnableComHosting>
+    <EnableUnmanagedDebugging>true</EnableUnmanagedDebugging>
   </PropertyGroup>
 
   <ItemGroup>
@@ -30,5 +40,31 @@
     <Folder Include="src\libraries\" />
     <Folder Include="src\scripts\base\" />
   </ItemGroup>
+
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <PropertyGroup>
+      <MT5Config>$([System.IO.File]::ReadAllText('$(ProjectDir)config/build/mt5.config.json'))</MT5Config>
+      <MT5TerminalPath>$([System.Text.RegularExpressions.Regex]::Match('$(MT5Config)', '(?&lt;="terminal_data_path":\s*")[^"]*'))</MT5TerminalPath>
+      <MT5LibrariesPath>$([System.Text.RegularExpressions.Regex]::Match('$(MT5Config)', '(?&lt;="libraries_relative_path":\s*")[^"]*'))</MT5LibrariesPath>
+      <MT5ExpertsPath>$([System.Text.RegularExpressions.Regex]::Match('$(MT5Config)', '(?&lt;="experts_relative_path":\s*")[^"]*'))</MT5ExpertsPath>
+      <MT5MetaEditorPath>$([System.Text.RegularExpressions.Regex]::Match('$(MT5Config)', '(?&lt;="meta_editor_path":\s*")[^"]*'))</MT5MetaEditorPath>
+      <DLLName>$([System.Text.RegularExpressions.Regex]::Match('$(MT5Config)', '(?&lt;="dll_name":\s*")[^"]*'))</DLLName>
+    </PropertyGroup>
+    
+    <Message Text="Copying $(DLLName) to MT5 Libraries directory..." Importance="high" />
+    <Copy SourceFiles="$(ProjectDir)bin\x64\Release\net8.0\$(DLLName)" DestinationFolder="$(MT5TerminalPath)\$(MT5LibrariesPath)" />
+    <Message Text="DLL copied successfully to: $(MT5TerminalPath)\$(MT5LibrariesPath)" Importance="high" />
+    
+    <Message Text="Copying EA files to MT5 Experts directory..." Importance="high" />
+    <ItemGroup>
+      <EAFiles Include="$(ProjectDir)applications\mql5\Experts\VSol\**\*.mq5" />
+    </ItemGroup>
+    <Copy SourceFiles="@(EAFiles)" DestinationFiles="@(EAFiles->'$(MT5TerminalPath)\$(MT5ExpertsPath)\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Message Text="EA files copied successfully to: $(MT5TerminalPath)\$(MT5ExpertsPath)" Importance="high" />
+    
+    <Message Text="Compiling MQL5 files..." Importance="high" />
+    <Exec Command="for %%f in (&quot;$(MT5TerminalPath)\$(MT5ExpertsPath)\*.mq5&quot;) do &quot;$(MT5MetaEditorPath)&quot; /compile:&quot;%%f&quot; /log" />
+    <Message Text="MQL5 compilation completed" Importance="high" />
+  </Target>
 
 </Project> 

@@ -1,0 +1,77 @@
+{
+  "framework": {
+    "version": "1.0.0",
+    "environment": "development"
+  },
+  "metatrader": {
+    "mt5": {
+      "terminal_path": "",
+      "data_folder": "metatrader/mt5/data",
+      "logs_folder": "metatrader/mt5/logs",
+      "api_settings": {
+        "server": "localhost",
+        "port": 8228,
+        "timeout_ms": 5000
+      }
+    },
+    "mt4": {
+      "terminal_path": "",
+      "data_folder": "metatrader/mt4/data",
+      "logs_folder": "metatrader/mt4/logs"
+    }
+  },
+  "backtesting": {
+    "data_provider": {
+      "type": "mt5",
+      "cache_enabled": true,
+      "cache_expiration_hours": 24,
+      "data_directory": "metatrader/mt5/data/history"
+    },
+    "engine": {
+      "tick_by_tick": false,
+      "commission_per_lot": 7.0,
+      "spread_points": 2,
+      "initial_balance": 10000,
+      "leverage": 100,
+      "currency": "USD"
+    },
+    "reporting": {
+      "save_trades": true,
+      "save_equity_curve": true,
+      "output_directory": "reports/backtests"
+    }
+  },
+  "live_trading": {
+    "broker": {
+      "type": "mt5",
+      "is_demo": true,
+      "account_id": "",
+      "auto_connect": true,
+      "reconnect_interval_ms": 5000
+    },
+    "risk_management": {
+      "max_drawdown_percent": 20.0,
+      "daily_loss_limit_percent": 5.0,
+      "position_size_limit_percent": 5.0,
+      "max_positions_per_symbol": 3,
+      "max_total_positions": 10
+    },
+    "monitoring": {
+      "enable_alerts": true,
+      "alert_channels": ["email", "telegram"],
+      "performance_update_interval_ms": 60000
+    }
+  },
+  "trading": {
+    "default_risk_percent": 1.0,
+    "max_positions": 10,
+    "allowed_symbols": ["EURUSD", "GBPUSD", "USDJPY"]
+  },
+  "logging": {
+    "level": "INFO",
+    "file_path": "logs/vtrade.log",
+    "enable_console": true,
+    "log_trade_details": true,
+    "log_market_data": false
+  }
+} 
