@@ -18,27 +18,25 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="applications\experts\**" />
+    <Compile Remove="applications\indicators\**" />
+    <Compile Remove="applications\scripts\**" />
+    <EmbeddedResource Remove="applications\experts\**" />
+    <EmbeddedResource Remove="applications\indicators\**" />
+    <EmbeddedResource Remove="applications\scripts\**" />
+    <None Remove="applications\experts\**" />
+    <None Remove="applications\indicators\**" />
+    <None Remove="applications\scripts\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="applications\experts\mql5\mean_reversion\" />
-    <Folder Include="applications\experts\mql5\scalping\" />
-    <Folder Include="applications\experts\mql5\trend_following\" />
-    <Folder Include="applications\indicators\momentum\" />
-    <Folder Include="applications\indicators\trend\" />
-    <Folder Include="applications\indicators\volatility\" />
-    <Folder Include="applications\scripts\" />
     <Folder Include="docs\api\" />
     <Folder Include="docs\examples\" />
-    <Folder Include="src\experts\base\" />
-    <Folder Include="src\include\constants\" />
-    <Folder Include="src\include\interfaces\" />
-    <Folder Include="src\include\utils\" />
-    <Folder Include="src\indicators\base\" />
-    <Folder Include="src\libraries\" />
-    <Folder Include="src\scripts\base\" />
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">

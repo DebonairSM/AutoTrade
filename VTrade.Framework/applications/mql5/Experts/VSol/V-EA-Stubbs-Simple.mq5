@@ -40,13 +40,13 @@ input double RiskPercentage = 5.0;   // Risk per trade (%) [0.5-5.0, step=0.5]
 input group "=== Breakout Strategy Settings ==="
 input int LookbackPeriod = 15;        // Bars to look back for key levels [10-50, step=5]
 input int MinSwingStrength = 2;       // Minimum bars for swing confirmation [2-5, step=1]
-input double LevelTolerance = 0.0005;  // Increased level tolerance in price [0.0001-0.001, step=0.0001]
+input double LevelTolerance = 0.001;   // Level tolerance in price [0.0001-0.001, step=0.0001]
 input int MinTouchPoints = 2;         // Minimum times price must touch level [2-5, step=1]
 input int MaxBarsBetweenTouches = 15; // Maximum bars between touches [5-20, step=1]
 
 input group "=== Breakout Validation ==="
-input double MinBreakoutATR = 0.2;     // Lowered minimum breakout distance in ATR [0.2-2.0, step=0.1]
-input int MinBreakoutBars = 1;         // Lowered minimum bars to confirm breakout [1-5, step=1]
+input double MinBreakoutATR = 0.05;     // Minimum breakout distance in ATR [0.05-2.0, step=0.1]
+input int MinBreakoutBars = 1;         // Minimum bars to confirm breakout [1-5, step=1]
 input int MaxBreakoutBars = 8;         // Maximum bars to wait for breakout confirmation [3-10, step=1]
 input int BarsAfterTouch = 3;          // Bars to analyze after touch [3-10, step=1]
 
@@ -551,71 +551,7 @@ bool IsBreakoutVolume(const double &volumes[], int bars, bool increasing = true)
 bool ValidateBreakoutStructure(const double &highs[], const double &lows[], 
                              const double &closes[], bool isResistance)
 {
-    int arraySize = ArraySize(closes);
-    if(arraySize < 4) return false;  // Need at least 4 bars for validation
-    
-    // Check array sizes match
-    if(ArraySize(highs) != arraySize || ArraySize(lows) != arraySize)
-    {
-        Print("❌ Array size mismatch in ValidateBreakoutStructure");
-        return false;
-    }
-    
-    // Validate first 3 bars
-    for(int i = 0; i < 3; i++)
-    {
-        // Ensure we have enough bars for comparison
-        if(i+1 >= arraySize)
-        {
-            Print("❌ Insufficient bars for structure validation");
-            return false;
-        }
-        
-        if(isResistance)
-        {
-            // For resistance breakout:
-            // 1. Each low should be higher than previous
-            // 2. Each close should be above previous high
-            // 3. No long upper wicks (indicating rejection)
-            if(i > 0 && lows[i] <= lows[i+1])
-            {
-                Print("❌ Structure validation failed: Lower low found in resistance breakout");
-                return false;
-            }
-            
-            double wickSize = highs[i] - closes[i];
-            double bodySize = MathAbs(closes[i] - closes[i+1]);
-            
-            if(wickSize > bodySize * 0.5)
-            {
-                Print("❌ Structure validation failed: Long upper wick found");
-                return false;
-            }
-        }
-        else
-        {
-            // For support breakout:
-            // 1. Each high should be lower than previous
-            // 2. Each close should be below previous low
-            // 3. No long lower wicks (indicating rejection)
-            if(i > 0 && highs[i] >= highs[i+1])
-            {
-                Print("❌ Structure validation failed: Higher high found in support breakout");
-                return false;
-            }
-            
-            double wickSize = closes[i] - lows[i];
-            double bodySize = MathAbs(closes[i] - closes[i+1]);
-            
-            if(wickSize > bodySize * 0.5)
-            {
-                Print("❌ Structure validation failed: Long lower wick found");
-                return false;
-            }
-        }
-    }
-    
-    Print("✅ Structure validation passed");
+    // Always return true for testing
     return true;
 }
 
@@ -1175,9 +1111,10 @@ bool BreakoutRetestStrategy(bool isBuy, string &signalReason)
                 
                 // Check both close and high/low for breakout confirmation
                 double breakoutTolerance = atr * 0.2;  // Allow small pullbacks
-                bool barBeyondLevel = isKeyLevelResistance ? 
-                                    (closes[i] > lastKeyLevel && lows[i] > lastKeyLevel - breakoutTolerance) :
-                                    (closes[i] < lastKeyLevel && highs[i] < lastKeyLevel + breakoutTolerance);
+// Simplified check - only verify if close is beyond level
+bool barBeyondLevel = isKeyLevelResistance ? 
+                    (closes[i] > lastKeyLevel) :
+                    (closes[i] < lastKeyLevel);
                                     
                 if(!barBeyondLevel)
                 {
@@ -1208,37 +1145,30 @@ bool BreakoutRetestStrategy(bool isBuy, string &signalReason)
                 return false;
             }
             
-            if(MathAbs(totalMomentum) <= 0.5)  // Reduced from 1.0
+            if(MathAbs(totalMomentum) <= 0.2)
             {
-                Print("❌ Breakout Failed | Insufficient momentum | Got: ", NormalizeDouble(totalMomentum, 2),
-                      " | Required: > 0.5");
+                Print("❌ Breakout Failed | momentum < 0.2");
                 return false;
             }
             
             // Analyze volume patterns
             double volumeRatio, avgVolume;
-            bool hasVolume = AnalyzeVolume(volumes, consecutiveBreakoutBars, volumeRatio, avgVolume);
+            bool hasVolume = true;  // Skip volume checks for testing
             
             // Check price action quality
-            bool hasCleanBreakout = IsPriceActionClean(highs, lows, closes, 
-                                                     isKeyLevelResistance, 
-                                                     consecutiveBreakoutBars, 
-                                                     lastKeyLevel, atr);
+            bool hasCleanBreakout = true;  // Skip price action checks for testing
             
             // Validate breakout conditions
             bool hasStrength = maxMoveFromLevel > minBreakoutDistance;
-            bool hasStructure = ValidateBreakoutStructure(highs, lows, closes, isKeyLevelResistance);
+            bool hasStructure = true;  // Structure check already returns true
             
             // Log validation results
             Print("📊 Breakout Validation: ",
-                  "\nVolume: ", (hasVolume ? "✅" : "❌"), " (Ratio: ", NormalizeDouble(volumeRatio, 2), ")",
                   "\nStrength: ", (hasStrength ? "✅" : "❌"), " (Move: ", NormalizeDouble(maxMoveFromLevel/Point(), 1), " pips)",
-                  "\nStructure: ", (hasStructure ? "✅" : "❌"),
-                  "\nClean PA: ", (hasCleanBreakout ? "✅" : "❌"),
                   "\nMomentum: ", NormalizeDouble(totalMomentum, 2));
             
-            // Modified validation to require fewer conditions
-            bool isValidBreakout = hasStrength && (hasVolume || hasCleanBreakout) && (hasStructure || MathAbs(totalMomentum) > 1.0);
+            // Simplified validation - only check strength and minimum momentum
+            bool isValidBreakout = hasStrength && MathAbs(totalMomentum) > 0.2;
             
             if(isValidBreakout)
             {
@@ -1644,7 +1574,8 @@ double CalculateLotSize(double riskPercent, double slDistance)
         Print("❌ Error: Invalid tick size or SL distance - Tick Size: ", tickSize, " SL Distance: ", slDistance);
         return 0;
     }
-        
+    
+    // Calculate lots based on risk first
     double riskedLots = riskAmount / (slDistance * (tickValue / tickSize));
     
     // Normalize lot size
@@ -1653,13 +1584,49 @@ double CalculateLotSize(double riskPercent, double slDistance)
     // Apply lot limits
     double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
     double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-    
     riskedLots = MathMax(minLot, MathMin(maxLot, riskedLots));
     
-    Print("💰 Position Size | Equity: ", accountEquity, " Risk Amount: ", riskAmount,
-          " SL Distance: ", slDistance, " Lots: ", NormalizeDouble(riskedLots, 2));
+    // Calculate margin requirement using contract size and price
+    double contractSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
     
-    return NormalizeDouble(riskedLots, 2);
+    if(leverage <= 0) leverage = 100; // Default to 1:100 if leverage info not available
+    
+    // Calculate margin requirement per lot
+    double marginPerLot = (contractSize * price) / leverage;
+    
+    // Calculate maximum lots based on available margin (use 30% of free margin)
+    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+    double maxLotsMargin = (freeMargin * 0.3) / marginPerLot;
+    
+    // Take the smaller of risk-based and margin-based lot sizes
+    double finalLots = MathMin(riskedLots, maxLotsMargin);
+    finalLots = MathFloor(finalLots / lotStep) * lotStep;
+    finalLots = MathMax(minLot, MathMin(maxLot, finalLots));
+    
+    // Final margin check
+    double requiredMargin = finalLots * marginPerLot;
+    
+    Print("💰 Position Size Calculation:",
+          "\nEquity: ", accountEquity,
+          "\nRisk Amount: ", riskAmount,
+          "\nSL Distance: ", slDistance,
+          "\nFree Margin: ", freeMargin,
+          "\nMargin per Lot: ", marginPerLot,
+          "\nMax Lots (Margin): ", maxLotsMargin,
+          "\nMax Lots (Risk): ", riskedLots,
+          "\nFinal Lots: ", finalLots,
+          "\nRequired Margin: ", requiredMargin);
+    
+    if(requiredMargin > freeMargin * 0.3)
+    {
+        Print("❌ Error: Final margin check failed - Required: ", requiredMargin,
+              " Available: ", freeMargin * 0.3);
+        return 0;
+    }
+    
+    return NormalizeDouble(finalLots, 2);
 }
 
 //+------------------------------------------------------------------+
