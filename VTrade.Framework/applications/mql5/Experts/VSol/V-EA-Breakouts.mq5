@@ -393,8 +393,7 @@ bool DetectBreakoutRetest(double &outBreakoutLevel, bool &outBullish)
    ArraySetAsSeries(closePrices, true);
    ArraySetAsSeries(volumes, true);
 
-   int bars_to_copy = (int)BreakoutLookback + 1;
-
+   int bars_to_copy = (int)BreakoutLookback + 2; // +2 so we have closePrices[1]
    if(CopyHigh(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, highPrices) <= 0 ||
       CopyLow(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, lowPrices) <= 0 ||
       CopyClose(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, closePrices) <= 0 ||
@@ -404,21 +403,20 @@ bool DetectBreakoutRetest(double &outBreakoutLevel, bool &outBullish)
       return false;
    }
 
-   double currentClose = closePrices[0];
-   double pipPoint     = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   // We use the last closed candle to confirm the breakout
+   double lastClose  = closePrices[1];        // Fully closed candle
+   double pipPoint   = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   bool   volumeOK   = DoesVolumeMeetRequirement(volumes, (int)BreakoutLookback);
 
-   // Check volume requirements
-   bool volumeOK = DoesVolumeMeetRequirement(volumes, (int)BreakoutLookback);
+   // Check if lastClose is above/below key level
+   bool bullishBreak = (lastClose > (strongestLevel.price + pipPoint));
+   bool bearishBreak = (lastClose < (strongestLevel.price - pipPoint));
 
-   // Evaluate breakout based on key level
-   bool bullishBreak = (currentClose > (strongestLevel.price + pipPoint));
-   bool bearishBreak = (currentClose < (strongestLevel.price - pipPoint));
-
-   // Debug logs
    if(ShowDebugPrints)
    {
       Print("=== DetectBreakoutRetest Debug ===");
-      Print("Close=", currentClose, " | Key Level=", strongestLevel.price, 
+      Print("LastClosedCandleClose=", lastClose,
+            " | Key Level=", strongestLevel.price,
             " | Type=", (strongestLevel.isResistance ? "Resistance" : "Support"),
             " | Strength=", strongestLevel.strength);
       Print("UseVolumeFilter=", UseVolumeFilter, ", VolumeOK=", volumeOK);
@@ -428,28 +426,24 @@ bool DetectBreakoutRetest(double &outBreakoutLevel, bool &outBullish)
    }
 
    // Bullish breakout
-   if(bullishBreak && volumeOK && IsATRDistanceMet(currentClose, strongestLevel.price))
+   if(bullishBreak && volumeOK && IsATRDistanceMet(lastClose, strongestLevel.price))
    {
       outBreakoutLevel = strongestLevel.price;
       outBullish       = true;
 
       // Combine skip logic with the retest result
       bool retestPassed = CheckRetestIfNeeded();
-      if(retestPassed)
-         return true;
-      return false;
+      return retestPassed;
    }
 
    // Bearish breakout
-   if(bearishBreak && volumeOK && IsATRDistanceMet(strongestLevel.price, currentClose))
+   if(bearishBreak && volumeOK && IsATRDistanceMet(strongestLevel.price, lastClose))
    {
       outBreakoutLevel = strongestLevel.price;
       outBullish       = false;
 
       bool retestPassed = CheckRetestIfNeeded();
-      if(retestPassed)
-         return true;
-      return false;
+      return retestPassed;
    }
 
    // Not a breakout
