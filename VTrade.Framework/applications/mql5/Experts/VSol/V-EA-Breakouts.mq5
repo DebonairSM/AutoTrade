@@ -404,11 +404,13 @@ bool DetectBreakoutRetest(double &outBreakoutLevel, bool &outBullish)
    }
 
    // We use the last closed candle to confirm the breakout
-   double lastClose  = closePrices[1];        // Fully closed candle
+   double lastClose  = closePrices[1];
    double pipPoint   = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   bool   volumeOK   = DoesVolumeMeetRequirement(volumes, (int)BreakoutLookback);
 
-   // Check if lastClose is above/below key level
+   // Volume confirmation check
+   bool volumeOK = DoesVolumeMeetRequirement(volumes, (int)BreakoutLookback);
+
+   // Check if lastClose is above/below key level (so we have a genuine candle close)
    bool bullishBreak = (lastClose > (strongestLevel.price + pipPoint));
    bool bearishBreak = (lastClose < (strongestLevel.price - pipPoint));
 
@@ -431,7 +433,7 @@ bool DetectBreakoutRetest(double &outBreakoutLevel, bool &outBullish)
       outBreakoutLevel = strongestLevel.price;
       outBullish       = true;
 
-      // Combine skip logic with the retest result
+      // Retest logic check—will return false unless the retest is satisfied or skipped
       bool retestPassed = CheckRetestIfNeeded();
       return retestPassed;
    }
