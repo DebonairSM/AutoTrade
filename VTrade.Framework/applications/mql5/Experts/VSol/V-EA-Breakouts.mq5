@@ -25,8 +25,9 @@ enum ENUM_STRATEGY_TYPE
 input ENUM_STRATEGY_TYPE StrategyType = STRAT_BREAKOUT_RETEST;
 input bool   UseVolumeFilter       = true;    // If true, require volume filter
 input bool   UseMinATRDistance     = true;    // If true, require minimum ATR breakout distance
-input bool   UseRetest             = false;   // If true, enforce a retest before confirming breakout
+input bool   UseRetest             = true;   // If true, enforce a retest before confirming breakout
 input bool   ShowDebugPrints       = true;    // If true, print debug logs
+input bool   UseCandlestickConfirmation = false; // Set to true if you want to use the engulfing pattern check
 
 // Breakout parameters
 input int    BreakoutLookback      = 15;      // Bars to look back for highest/lowest
@@ -64,6 +65,10 @@ input double DurationWeight       = 0.2;     // Weight for duration of level val
 // Level validation
 input int    MinLevelDurationHours = 24;     // Minimum hours between first and last touch [12,96,12]
 input double MinStrengthThreshold  = 0.6;    // Minimum strength to consider level valid [0.4,0.8,0.1]
+
+// Example input for retest check threshold (in pips) & timeframe for candlestick pattern
+input double RetestPipsThreshold = 10;           // Distance from breakout level to consider as a "retest"
+input ENUM_TIMEFRAMES RetestTimeframe = PERIOD_M15; // Timeframe to check retest candlestick pattern
 
 //==================================================================
 // MODULE 2: GLOBAL STATE MANAGEMENT
@@ -109,66 +114,10 @@ const double BO_ATR_MULT     = 0.3;
 const double RT_ATR_MULT     = 0.2;  
 
 //==================================================================
-// [Optional] Breakout Logic Support Functions
+// MODULE 5: BREAKOUT VALIDATION AND DETECTION
 //==================================================================
 
-// Check volume filter requirement
-bool DoesVolumeMeetRequirement(const long &volumes[], const int lookback)
-{
-   if(!UseVolumeFilter) 
-      return true;
-
-   long sumVol = 0;
-   for(int i = 1; i <= lookback; i++)
-      sumVol += volumes[i];
-      
-   double avgVol = (double)sumVol / (double)lookback;
-   double currVol = (double)volumes[0];
-
-   return (currVol >= avgVol * VolumeFactor);
-}
-
-// Check ATR-based distance requirement
-bool IsATRDistanceMet(const double currentClose, const double breakoutLevel)
-{
-   // If user does not want ATR distance check, skip
-   if(!UseMinATRDistance)
-      return true;
-
-   double atrBuf[];
-   ArraySetAsSeries(atrBuf, true);
-   double handle = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
-   if(CopyBuffer(handle, 0, 0, 1, atrBuf) <= 0)
-   {
-      Print("Warning: ATR copy failed. Bypassing distance check.");
-      return true;
-   }
-   double currentATR    = atrBuf[0];
-   double minBreakoutDist= currentATR * ATRMultiplier;
-
-   // For bullish breakout: (currentClose - highestHigh)
-   // For bearish breakout: (lowestLow - currentClose)
-   double distance = MathAbs(currentClose - breakoutLevel);
-   return (distance >= minBreakoutDist);
-}
-
-// Optional stub for retest check
-bool CheckRetestIfNeeded()
-{
-   // If user does not want retest logic, return true (i.e., skip retest completely)
-   if(!UseRetest)
-      return true;
-
-   // Otherwise, put your actual retest checks here
-   // For demonstration, it still returns false (no successful retest).
-   return false;
-}
-
-//==================================================================
-// Key Level Detection Functions
-//==================================================================
-
-// Check if a price point is near an existing key level
+// MODULE 5.1: Key level proximity check for breakout levels
 bool IsNearExistingLevel(const double price, const SKeyLevel &levels[], const int count)
 {
    for(int i = 0; i < count; i++)
@@ -179,7 +128,7 @@ bool IsNearExistingLevel(const double price, const SKeyLevel &levels[], const in
    return false;
 }
 
-// Calculate level strength based on touches and recency
+// MODULE 5.2: Key level strength calculation for breakout levels
 double CalculateLevelStrength(const int touchCount, const datetime firstTouch, const datetime lastTouch)
 {
    double touchScore = (double)touchCount / MinTouchCount;
@@ -196,13 +145,13 @@ double CalculateLevelStrength(const int touchCount, const datetime firstTouch, c
    return (touchScore * TouchScoreWeight + recencyScore * RecencyWeight + durationScore * DurationWeight);
 }
 
-// Find and update key price levels
+// MODULE 5.3: Key level detection for breakout analysis
 bool FindKeyLevels(SKeyLevel &outStrongestLevel)
 {
    // Validate weights sum to 1.0
    if(MathAbs(TouchScoreWeight + RecencyWeight + DurationWeight - 1.0) > 0.001)
    {
-      Print("ERROR: Strength weights must sum to 1.0. Current sum: ",
+      Print("[M5.3.a Key Level Detection] ERROR: Strength weights must sum to 1.0. Current sum: ",
             TouchScoreWeight + RecencyWeight + DurationWeight);
       return false;
    }
@@ -216,10 +165,9 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
    ArraySetAsSeries(times, true);
 
    // Edge case: KeyLevelLookback might be < 3
-   // If so, consider skipping or adjusting the logic to avoid out-of-bounds.
    if(KeyLevelLookback < 3)
    {
-      Print(__FUNCTION__, ": KeyLevelLookback too small (", KeyLevelLookback,
+      Print("[M5.3.a Key Level Detection] KeyLevelLookback too small (", KeyLevelLookback,
             "). No key levels will be found.");
       return false;
    }
@@ -229,7 +177,7 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
       CopyClose(_Symbol, PERIOD_CURRENT, 0, KeyLevelLookback, closePrices) <= 0 ||
       CopyTime(_Symbol, PERIOD_CURRENT, 0, KeyLevelLookback, times) <= 0)
    {
-      Print(__FUNCTION__, ": Failed to copy price data. Error=", GetLastError());
+      Print("[M5.3.b Key Level Detection] Failed to copy price data. Error=", GetLastError());
       return false;
    }
 
@@ -351,12 +299,13 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
       
       if(ShowDebugPrints)
       {
-         Print("Found ", levelCount, " key levels. Strongest level: ",
-               "Price=", outStrongestLevel.price,
-               ", Type=", (outStrongestLevel.isResistance ? "Resistance" : "Support"),
-               ", Touches=", outStrongestLevel.touchCount,
-               ", Strength=", outStrongestLevel.strength,
-               ", Duration=", (double)(outStrongestLevel.lastTouch - outStrongestLevel.firstTouch) / 3600.0, " hours");
+         //rbandeira
+         //Print("[M5.3 Key Level Detection] Found ", levelCount, " key levels. Strongest level: ",
+         //      "Price=", outStrongestLevel.price,
+         //      ", Type=", (outStrongestLevel.isResistance ? "Resistance" : "Support"),
+         //      ", Touches=", outStrongestLevel.touchCount,
+         //      ", Strength=", outStrongestLevel.strength,
+         //      ", Duration=", (double)(outStrongestLevel.lastTouch - outStrongestLevel.firstTouch) / 3600.0, " hours");
       }
       
       return true;
@@ -365,22 +314,53 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
    return false;
 }
 
-//==================================================================
-// MODULE 5: BREAKOUT DETECTION
-//==================================================================
-double s_testSLdistance = 0.001;  
-double s_testTPdistance = 0.001;  
+// MODULE 5.4: Volume filter check for breakout validation
+bool DoesVolumeMeetRequirement(const long &volumes[], const int lookback)
+{
+   if(!UseVolumeFilter) 
+      return true;
 
-bool DetectBreakoutRetest(double &outBreakoutLevel, bool &outBullish)
+   long sumVol = 0;
+   for(int i = 1; i <= lookback; i++)
+      sumVol += volumes[i];
+      
+   double avgVol = (double)sumVol / (double)lookback;
+   double currVol = (double)volumes[0];
+
+   return (currVol >= avgVol * VolumeFactor);
+}
+
+// MODULE 5.5: ATR distance check for breakout validation
+bool IsATRDistanceMet(const double currentClose, const double breakoutLevel)
+{
+   // If user does not want ATR distance check, skip
+   if(!UseMinATRDistance)
+      return true;
+
+   double atrBuf[];
+   ArraySetAsSeries(atrBuf, true);
+   double handle = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
+   if(CopyBuffer(handle, 0, 0, 1, atrBuf) <= 0)
+   {
+      Print("[M5.5 ATR Distance Check] Warning: ATR copy failed. Bypassing distance check.");
+      return true;
+   }
+   double currentATR    = atrBuf[0];
+   double minBreakoutDist= currentATR * ATRMultiplier;
+
+   // For bullish breakout: (currentClose - highestHigh)
+   // For bearish breakout: (lowestLow - currentClose)
+   double distance = MathAbs(currentClose - breakoutLevel);
+   return (distance >= minBreakoutDist);
+}
+
+// MODULE 5.6: Main breakout detection and state initialization
+bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
 {
    // Find key levels first
    SKeyLevel strongestLevel;
    if(!FindKeyLevels(strongestLevel))
-   {
-      if(ShowDebugPrints)
-         Print("No strong key levels found. Skipping breakout detection.");
       return false;
-   }
 
    // Prepare data arrays
    double highPrices[];
@@ -388,43 +368,36 @@ bool DetectBreakoutRetest(double &outBreakoutLevel, bool &outBullish)
    double closePrices[];
    long   volumes[];
 
-   ArraySetAsSeries(highPrices, true);
-   ArraySetAsSeries(lowPrices, true);
-   ArraySetAsSeries(closePrices, true);
-   ArraySetAsSeries(volumes, true);
+   ArraySetAsSeries(highPrices,true);
+   ArraySetAsSeries(lowPrices,true);
+   ArraySetAsSeries(closePrices,true);
+   ArraySetAsSeries(volumes,true);
 
-   int bars_to_copy = (int)BreakoutLookback + 2; // +2 so we have closePrices[1]
+   int bars_to_copy = BreakoutLookback + 2; 
    if(CopyHigh(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, highPrices) <= 0 ||
       CopyLow(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, lowPrices) <= 0 ||
       CopyClose(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, closePrices) <= 0 ||
       CopyTickVolume(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, volumes) <= 0)
    {
-      Print(__FUNCTION__,": Failed to copy price or volume data. Err=", GetLastError());
+      Print("[M5.6.a Breakout Detection] Failed to copy price or volume data. Err=", GetLastError());
       return false;
    }
 
-   // We use the last closed candle to confirm the breakout
-   double lastClose  = closePrices[1];
-   double pipPoint   = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   // Use last closed candle to confirm the breakout
+   double lastClose = closePrices[1];
+   double pipPoint  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
 
-   // Volume confirmation check
-   bool volumeOK = DoesVolumeMeetRequirement(volumes, (int)BreakoutLookback);
-
-   // Check if lastClose is above/below key level (so we have a genuine candle close)
+   bool volumeOK     = DoesVolumeMeetRequirement(volumes, BreakoutLookback);
    bool bullishBreak = (lastClose > (strongestLevel.price + pipPoint));
    bool bearishBreak = (lastClose < (strongestLevel.price - pipPoint));
 
    if(ShowDebugPrints)
    {
-      Print("=== DetectBreakoutRetest Debug ===");
-      Print("LastClosedCandleClose=", lastClose,
-            " | Key Level=", strongestLevel.price,
-            " | Type=", (strongestLevel.isResistance ? "Resistance" : "Support"),
-            " | Strength=", strongestLevel.strength);
-      Print("UseVolumeFilter=", UseVolumeFilter, ", VolumeOK=", volumeOK);
-      Print("UseMinATRDistance=", UseMinATRDistance, ", ATRMult=", ATRMultiplier);
-      Print("UseRetest=", UseRetest, ", RetestATRMult=", RetestATRMultiplier);
-      Print("BullishBreak=", bullishBreak, " | BearishBreak=", bearishBreak);
+      Print("[M5.6.a Breakout Detection] LastClose=", lastClose,
+            " | KeyLevel=", strongestLevel.price,
+            " | VolumeOK=", volumeOK,
+            " | BullishBreak=", bullishBreak,
+            " | BearishBreak=", bearishBreak);
    }
 
    // Bullish breakout
@@ -433,9 +406,21 @@ bool DetectBreakoutRetest(double &outBreakoutLevel, bool &outBullish)
       outBreakoutLevel = strongestLevel.price;
       outBullish       = true;
 
-      // Retest logic check—will return false unless the retest is satisfied or skipped
-      bool retestPassed = CheckRetestIfNeeded();
-      return retestPassed;
+      // If retest is toggled on, set global breakoutState, then return false
+      if(UseRetest)
+      {
+         g_breakoutState.breakoutTime   = TimeCurrent();
+         g_breakoutState.breakoutLevel  = strongestLevel.price;
+         g_breakoutState.isBullish      = true;
+         g_breakoutState.awaitingRetest = true;
+         g_breakoutState.barsWaiting    = 0;
+         if(ShowDebugPrints)
+            Print("[M5.6.b Breakout Detection] Bullish breakout found; awaiting retest.");
+         return false;  
+      }
+
+      // Return true only if no retest required => safe to place trade
+      return true;
    }
 
    // Bearish breakout
@@ -444,29 +429,182 @@ bool DetectBreakoutRetest(double &outBreakoutLevel, bool &outBullish)
       outBreakoutLevel = strongestLevel.price;
       outBullish       = false;
 
-      bool retestPassed = CheckRetestIfNeeded();
-      return retestPassed;
+      if(UseRetest)
+      {
+         g_breakoutState.breakoutTime   = TimeCurrent();
+         g_breakoutState.breakoutLevel  = strongestLevel.price;
+         g_breakoutState.isBullish      = false;
+         g_breakoutState.awaitingRetest = true;
+         g_breakoutState.barsWaiting    = 0;
+         if(ShowDebugPrints)
+            Print("[M5.6.c Breakout Detection] Bearish breakout found; awaiting retest.");
+         return false;  
+      }
+
+      return true;
    }
 
-   // Not a breakout
+   // No breakout
    return false;
 }
 
 //==================================================================
-// MODULE 6: RISK MANAGEMENT
+// MODULE 6: RETEST VALIDATION
 //==================================================================
+
+// MODULE 6.3: Candlestick pattern check for retest validation
+bool CheckEngulfingPattern(const bool bullish)
+{
+   // We'll copy two candles from the specified retest timeframe
+   MqlRates rates[2];
+   ArraySetAsSeries(rates, true);
+
+   if(CopyRates(_Symbol, RetestTimeframe, 0, 2, rates) < 2)
+   {
+      Print("[M6.3.a Pattern Check] Failed fetching candlestick data for retest timeframe. Err=", GetLastError());
+      return false;
+   }
+
+   // Candle indices: rates[0] is the current not-yet-closed candle, rates[1] is the fully closed candle before it.
+   // For an engulfing pattern, we need 2 fully closed candles. So normally we'd look at rates[1] and rates[2].
+   // But for simplicity, let's assume the last two fully closed candles are rates[1] and rates[2].
+   // We'll shift references accordingly if needed.
+
+   // Minimal approach: treat rates[1] as the last closed candle and rates[2] as the one before that.
+   // Adjust our copy logic to grab 3 bars so we can see them:
+   MqlRates lastTwo[3];
+   ArraySetAsSeries(lastTwo, true);
+   if(CopyRates(_Symbol, RetestTimeframe, 0, 3, lastTwo) < 3)
+      return false;
+
+   // Renaming for clarity
+   double open1  = lastTwo[2].open;  // older candle
+   double close1 = lastTwo[2].close;
+   double open2  = lastTwo[1].open;  // most recent fully closed candle
+   double close2 = lastTwo[1].close;
+
+   if(bullish)
+   {
+      // Check if first candle is bearish and second candle is bullish
+      bool candle1Bearish = (close1 < open1);
+      bool candle2Bullish = (close2 > open2);
+
+      // Check if Candle2 fully engulfs Candle1 body
+      // i.e., Candle2's body covers Candle1's open-to-close range
+      bool bodyEngulf = (close2 > open1 && open2 < close1);
+
+      if(candle1Bearish && candle2Bullish && bodyEngulf)
+         return true;
+   }
+   else
+   {
+      // Bearish engulfing
+      bool candle1Bullish = (close1 > open1);
+      bool candle2Bearish = (close2 < open2);
+
+      bool bodyEngulf = (close2 < open1 && open2 > close1);
+
+      if(candle1Bullish && candle2Bearish && bodyEngulf)
+         return true;
+   }
+
+   return false;
+}
+
+// MODULE 6.2: Retest validation and tracking
+bool ValidateRetestConditions()
+{
+   // If user does not want retest, skip it entirely
+   if(!UseRetest)
+      return true;
+
+   // If there's no breakout awaiting a retest, nothing to do
+   if(!g_breakoutState.awaitingRetest)
+   {
+      Print("[M6.2.a Retest Validation] No breakout awaiting retest");
+      return true;
+   }
+
+   // Check for time-based or bar-count timeout
+   double minutesSinceBreakout = (double)(TimeCurrent() - g_breakoutState.breakoutTime) / 60.0;
+   if(minutesSinceBreakout > MaxRetestMinutes || g_breakoutState.barsWaiting > MaxRetestBars)
+   {
+      Print("[M6.2.b Retest Validation] Retest timed out after ", minutesSinceBreakout, " minutes and ", 
+            g_breakoutState.barsWaiting, " bars. Canceling retest.");
+      g_breakoutState.awaitingRetest = false;
+      return false;
+   }
+
+   // On each new bar, we can increment g_breakoutState.barsWaiting
+   g_breakoutState.barsWaiting++;
+
+   // Distance threshold in points
+   double pointSize      = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double retestDistance = RetestPipsThreshold * pointSize;
+
+   // For a bullish breakout, let's watch the bid price retest the breakout level
+   // For a bearish breakout, watch the ask price retest the breakout level
+   double currentPrice = g_breakoutState.isBullish
+                      ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                      : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   // Check if current price is within the retest zone
+   double diff         = MathAbs(currentPrice - g_breakoutState.breakoutLevel);
+   bool   inRetestZone = (diff <= retestDistance);
+
+   if(ShowDebugPrints)
+      Print("[M6.2.c Retest Validation] Checking retest | Direction: ", (g_breakoutState.isBullish ? "Bullish" : "Bearish"),
+            " | Distance from level: ", NormalizeDouble(diff/pointSize, 1), " pips",
+            " | Required: ", NormalizeDouble(retestDistance/pointSize, 1), " pips",
+            " | In zone: ", (inRetestZone ? "Yes" : "No"));
+
+   if(inRetestZone)
+   {
+      // Only check the engulfing pattern if user wants it
+      if(UseCandlestickConfirmation)
+      {
+         bool isPatternValid = CheckEngulfingPattern(g_breakoutState.isBullish);
+         if(isPatternValid)
+         {
+            g_breakoutState.awaitingRetest = false;
+            if(ShowDebugPrints)
+               Print("[M6.2.d Retest Validation] ✅ Retest confirmed via candlestick pattern.");
+            return true;
+         }
+         else if(ShowDebugPrints)
+            Print("[M6.2.e Retest Validation] In retest zone, but no valid candlestick pattern yet.");
+      }
+      else
+      {
+         // If optional candlestick confirmation is disabled, confirm retest immediately
+         g_breakoutState.awaitingRetest = false;
+         if(ShowDebugPrints)
+            Print("[M6.2.d Retest Validation] Retest confirmed with no candlestick check (disabled).");
+         return true;
+      }
+   }
+
+   // Not yet confirmed
+   return false;
+}
+
+//==================================================================
+// MODULE 7: RISK MANAGEMENT
+//==================================================================
+
+// MODULE 7.1: Position sizing calculation
 double CalculateLotSize(double stopLossDistancePoints)
 {
    if(stopLossDistancePoints <= 0.0)
    {
-      Print("Invalid stop loss distance. Using minimum lot size.");
+      Print("[M7.1.a Position Sizing] Invalid stop loss distance. Using minimum lot size.");
       return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    }
 
    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    if(accountEquity <= 0.0)
    {
-      Print("Invalid account equity. Using minimum lot size.");
+      Print("[M7.1.b Position Sizing] Invalid account equity. Using minimum lot size.");
       return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    }
 
@@ -477,7 +615,7 @@ double CalculateLotSize(double stopLossDistancePoints)
 
    if(tickSize <= 0.0 || tickValue <= 0.0)
    {
-      Print("Invalid tick size / value. Using minimum lot size.");
+      Print("[M7.1.c Position Sizing] Invalid tick size / value. Using minimum lot size.");
       return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    }
 
@@ -497,68 +635,79 @@ double CalculateLotSize(double stopLossDistancePoints)
 
    lotSize = NormalizeDouble(lotSize, 2);
    if(ShowDebugPrints)
-      Print("Calculated lot size: ", lotSize);
+      Print("[M7.1.d Position Sizing] Calculated lot size: ", lotSize);
    return lotSize;
 }
 
 //==================================================================
-// MODULE 7: ORDER MANAGEMENT
+// MODULE 8: ORDER MANAGEMENT
 //==================================================================
+
+// MODULE 8.1: Trade execution and order management
 bool PlaceTrade(bool isBuy, double entryPrice, double slPrice, double tpPrice, double lots)
 {
    trade.SetExpertMagicNumber(g_magicNumber);
-   double point       = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   int    digits      = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-   double minStopDist = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
 
+   double point                = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   int    digits               = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double minStopDistPoints    = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
+   double fallbackStopDistance = 5 * minStopDistPoints; // or some multiplier
+
+   // Normalize
    entryPrice = NormalizeDouble(entryPrice, digits);
-   slPrice    = NormalizeDouble(slPrice,    digits);
-   tpPrice    = NormalizeDouble(tpPrice,    digits);
+   slPrice    = NormalizeDouble(slPrice, digits);
+   tpPrice    = NormalizeDouble(tpPrice, digits);
 
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-
+   // For a buy, SL must be below entry and above zero
    if(isBuy)
    {
-      double slDistance = entryPrice - slPrice;
-      double tpDistance = tpPrice - entryPrice;
-      if(slDistance < minStopDist)
+      // 1) If SL >= entryPrice, clamp or skip
+      if(slPrice >= entryPrice)
       {
-         slPrice = entryPrice - minStopDist;
-         Print("Warning: SL adjusted for minimum stop distance");
+         Print("[M8.1.a Order Management] SL is not below entry. Clamping or skipping.");
+         slPrice = entryPrice - fallbackStopDistance; // clamp approach
       }
-      if(tpDistance < minStopDist)
+
+      // 2) If SL < some tiny positive threshold, clamp or skip
+      if(slPrice <= point)
       {
-         tpPrice = entryPrice + minStopDist;
-         Print("Warning: TP adjusted for minimum stop distance");
+         // Attempt to clamp once more using fallbackStopDistance
+         slPrice = entryPrice - fallbackStopDistance;
+         if(slPrice <= point)
+         {
+            // If still invalid, skip trade
+            Print("[M8.1.a Order Management] SL is invalid (negative or zero) after clamp. Skipping trade.");
+            return false;
+         }
       }
    }
-   else
+   else // Sell
    {
-      double slDistance = slPrice - entryPrice;
-      double tpDistance = entryPrice - tpPrice;
-      if(slDistance < minStopDist)
+      // 1) If SL <= entryPrice, clamp or skip
+      if(slPrice <= entryPrice)
       {
-         slPrice = entryPrice + minStopDist;
-         Print("Warning: SL adjusted for minimum stop distance");
+         Print("[M8.1.a Order Management] SL is not above entry for a Sell. Clamping or skipping.");
+         slPrice = entryPrice + fallbackStopDistance; // clamp approach
       }
-      if(tpDistance < minStopDist)
+
+      // 2) If SL < point, skip
+      if(slPrice <= point)
       {
-         tpPrice = entryPrice - minStopDist;
-         Print("Warning: TP adjusted for minimum stop distance");
+         Print("[M8.1.a Order Management] SL is invalid (negative or zero) for a Sell. Skipping trade.");
+         return false;
       }
    }
 
+   // Re-normalize after any clamps
    slPrice = NormalizeDouble(slPrice, digits);
    tpPrice = NormalizeDouble(tpPrice, digits);
 
-#ifdef _DEBUG
-   Print("PlaceTrade - ", (isBuy?"Buy":"Sell"),
+   // Final logging
+   Print("[M8.1.a Order Management] PlaceTrade - ", (isBuy ? "Buy" : "Sell"),
          " | lots=", lots,
          " | entry=", entryPrice,
          " | SL=", slPrice,
          " | TP=", tpPrice);
-#endif
 
    bool result = isBuy 
                ? trade.Buy(lots, _Symbol, 0, slPrice, tpPrice, "Breakout-Buy")
@@ -566,132 +715,179 @@ bool PlaceTrade(bool isBuy, double entryPrice, double slPrice, double tpPrice, d
 
    if(!result)
    {
-      Print(__FUNCTION__,"(): ❌ Order failed. Error=", GetLastError());
+      Print("[M8.1.a Order Management] ❌ Order failed. Error=", GetLastError());
       return false;
    }
-   Print(__FUNCTION__,"(): ✅ Order placed at price=", trade.ResultPrice());
+
+   Print("[M8.1.a Order Management] ✅ Order placed at price=", trade.ResultPrice());
    return true;
 }
 
 //==================================================================
-// MODULE 8: STRATEGY EXECUTION
+// MODULE 9: STRATEGY EXECUTION
 //==================================================================
-void ExecuteBreakoutRetestStrategy()
-{
-   double foundBreakoutLevel = 0.0;
-   bool   isBullish          = false;
 
-   // 1) Check for a valid breakout
-   bool foundBreakout = DetectBreakoutRetest(foundBreakoutLevel, isBullish);
-   if(!foundBreakout)
+//------------------------------------------------------------------//
+// 1) Calculate daily pivot points
+//------------------------------------------------------------------//
+void CalculateDailyPivots(string symbol, 
+                          double &pivotPoint, 
+                          double &r1, double &r2, 
+                          double &s1, double &s2)
+{
+   MqlRates dailyData[];
+   // We'll look at the previous daily bar (index=1).
+   if(CopyRates(symbol, PERIOD_D1, 1, 2, dailyData) < 2)
    {
-      if(ShowDebugPrints) Print("No breakout. Skipping entry logic.");
+      Print("[PivotCalculation] Can't fetch daily bar data. Using fallback values.");
+      pivotPoint = 0.0;
+      r1 = r2 = s1 = s2 = 0.0;
       return;
    }
 
-   // 2) Compute SL / TP from ATR
-   double theATR = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
-   if(theATR <= 0.0)
-   {
-      Print("No valid ATR. Using default distances.");
-      theATR = 0.001; 
-   }
-   double slDistance = SLMultiplier * theATR;
-   double tpDistance = TPMultiplier * theATR;
+   double highVal  = dailyData[1].high;
+   double lowVal   = dailyData[1].low;
+   double closeVal = dailyData[1].close;
 
-   // 3) Grab current price depending on direction
-   double currentPrice = isBullish
-                       ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
-                       : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-
-   // 4) SL and TP
-   double slPrice = isBullish ? (currentPrice - slDistance) : (currentPrice + slDistance);
-   double tpPrice = isBullish ? (currentPrice + tpDistance) : (currentPrice - tpDistance);
-
-   // 5) Calculate lots based on SL distance
-   double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   if(pointSize <= 0.0)
-   {
-      Print("Invalid point size. Using fallback.");
-      pointSize = 0.00001; 
-   }
-   double slDistancePoints = MathAbs(currentPrice - slPrice) / pointSize;
-   double lotSize = CalculateLotSize(slDistancePoints);
-   if(lotSize <= 0.0)
-   {
-      Print("Failed lot size. No trade taken.");
-      return;
-   }
-
-   // 6) Place trade
-   if(PlaceTrade(isBullish, currentPrice, slPrice, tpPrice, lotSize))
-      Print("Trade placed - Type=", (isBullish ? "Buy" : "Sell"));
-   else
-      Print("Trade failed to place.");
+   // Classic pivot formula
+   pivotPoint = (highVal + lowVal + closeVal) / 3.0;
+   r1 = 2.0 * pivotPoint - lowVal;         // Resistance 1
+   s1 = 2.0 * pivotPoint - highVal;        // Support 1
+   r2 = pivotPoint + (r1 - s1);            // Resistance 2
+   s2 = pivotPoint - (r1 - s1);            // Support 2
 }
 
-//==================================================================
-// MODULE 9: EA LIFECYCLE
-//==================================================================
-int OnInit()
+//------------------------------------------------------------------//
+// 2) Set pivot-based SL/TP
+//------------------------------------------------------------------//
+void SetPivotSLTP(bool isBuy, double currentPrice, double &slPrice, double &tpPrice)
 {
-#ifdef _DEBUG
-   Print("OnInit: EA started in DEBUG mode. Sessions bypassed.");
-#endif
-   return(INIT_SUCCEEDED);
-}
-
-void OnDeinit(const int reason)
-{
-   Print("== V-EA-Breakouts: Deinit. Reason=", reason);
-}
-
-void OnTick()
-{
-#ifdef _DEBUG
-   Print("OnTick: Tick at ", TimeToString(TimeCurrent()));
-#endif
-
-   // Example usage in a live environment:
-   // You might call your full strategy from OnTick or OnTimer, etc.
-   // For demonstration, we detect breakouts every tick:
-   double breakoutLevel = 0.0;
-   bool   isBullish     = false;
-   bool   foundBreakout = DetectBreakoutRetest(breakoutLevel, isBullish);
-
-   if(foundBreakout)
+   double pivot, r1, r2, s1, s2;
+   CalculateDailyPivots(_Symbol, pivot, r1, r2, s1, s2);
+   
+   // If we fail to get pivot data or pivot == 0, skip or fallback
+   if(pivot <= 0.0)
    {
-#ifdef _DEBUG
-      Print("OnTick: Found a breakout at level=", breakoutLevel, 
-            " direction=", (isBullish?"Bullish":"Bearish"));
-#endif
-      // For debugging, place small test trade
-      double slPrice, tpPrice;
-      int    digits   = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-      double pipPoint = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-
-      if(isBullish)
+      Print("[SetPivotSLTP] Invalid pivot data. Setting default fallback SL/TP.");
+      // Fallback: 30 pips away each, for instance
+      double fallbackDist = 30.0 * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      if(isBuy)
       {
-         slPrice = breakoutLevel - s_testSLdistance;
-         tpPrice = breakoutLevel + s_testTPdistance;
-         slPrice = NormalizeDouble(slPrice, digits);
-         tpPrice = NormalizeDouble(tpPrice, digits);
-         trade.Buy(0.01, _Symbol, 0, slPrice, tpPrice);
+         slPrice = currentPrice - fallbackDist;
+         tpPrice = currentPrice + fallbackDist;
       }
       else
       {
-         slPrice = breakoutLevel + s_testSLdistance;
-         tpPrice = breakoutLevel - s_testTPdistance;
-         slPrice = NormalizeDouble(slPrice, digits);
-         tpPrice = NormalizeDouble(tpPrice, digits);
-         trade.Sell(0.01, _Symbol, 0, slPrice, tpPrice);
+         slPrice = currentPrice + fallbackDist;
+         tpPrice = currentPrice - fallbackDist;
+      }
+      return;
+   }
+
+   // For a bullish breakout
+   if(isBuy)
+   {
+      // Example: place SL at min(pivot, s1) and TP at r1
+      slPrice = MathMin(pivot, s1);
+      tpPrice = r1;  // or r2 if you want a larger target
+      // If pivot < s1, you might pick pivot anyway, or adapt logic
+   }
+   else
+   {
+      // For a bearish breakout
+      // Example: place SL at max(pivot, r1) and TP at s1
+      slPrice = MathMax(pivot, r1);
+      tpPrice = s1;  // or s2
+   }
+   
+   // Defensive check: if we ended up with negative or near-zero SL/TP, clamp or log
+   if(slPrice <= 0.0)
+   {
+      Print("[SetPivotSLTP] SL is invalid or <= 0.0. Clamping to currentPrice.");
+      slPrice = currentPrice;
+   }
+   if(tpPrice <= 0.0)
+   {
+      Print("[SetPivotSLTP] TP is invalid or <= 0.0. Clamping to currentPrice.");
+      tpPrice = currentPrice;
+   }
+}
+
+//------------------------------------------------------------------//
+// 3) Revised ExecuteBreakoutRetestStrategy using pivot SL/TP
+//------------------------------------------------------------------//
+void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
+{
+   // 1) Current price
+   double currentPrice = isBullish 
+                       ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                       : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   // 2) Calculate pivot-based SL / TP
+   double slPrice, tpPrice;
+   SetPivotSLTP(isBullish, currentPrice, slPrice, tpPrice);
+
+   // 3) Calculate lot size the same as before (or however you prefer)
+   //    e.g., your existing "CalculateLotSize" logic
+   double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(pointSize <= 0.0) { pointSize = 0.00001; }
+   // Hard-coded example, or your existing calculation:
+   double lotSize = 0.01; 
+
+   // 4) Place the trade (reusing your 'PlaceTrade' logic)
+   //    Make sure 'PlaceTrade' does any final broker-distance checks
+   //    or clamping as needed.
+   if(PlaceTrade(isBullish, currentPrice, slPrice, tpPrice, lotSize))
+      Print("[M9.1 Strategy Execution - Pivot] Trade placed - ",
+            (isBullish ? "Buy" : "Sell"), " at ", currentPrice,
+            " SL=", slPrice, " TP=", tpPrice);
+   else
+      Print("[M9.1 Strategy Execution - Pivot] Trade placement failed.");
+}
+
+//==================================================================
+// MODULE 10: EA LIFECYCLE
+//==================================================================
+
+// MODULE 10.1: EA initialization
+int OnInit()
+{
+   Print("[M10.1.a Initialization] EA started in DEBUG mode. Sessions bypassed.");
+   return(INIT_SUCCEEDED);
+}
+
+// MODULE 10.2: EA deinitialization
+void OnDeinit(const int reason)
+{
+   Print("[M10.2.a Deinitialization] EA Deinit. Reason=", reason);
+}
+
+// MODULE 10.3: Main EA tick
+void OnTick()
+{
+   // 1) If retest is in progress, see if it is confirmed
+   if(g_breakoutState.awaitingRetest)
+   {
+      bool retestConfirmed = ValidateRetestConditions();
+      if(retestConfirmed)
+      {
+         // Retest confirmed; place trade based on stored breakout state
+         ExecuteBreakoutRetestStrategy(g_breakoutState.isBullish,
+                                       g_breakoutState.breakoutLevel);
       }
    }
    else
    {
-#ifdef _DEBUG
-      Print("OnTick: No breakout this tick.");
-#endif
+      // 2) Look for a new breakout
+      double breakoutLevel = 0.0;
+      bool   isBullish     = false;
+
+      bool breakoutConfirmed = DetectBreakoutAndInitRetest(breakoutLevel, isBullish);
+
+      // If breakoutConfirmed == true, that means retest is not required, so go ahead with trade
+      if(breakoutConfirmed)
+         ExecuteBreakoutRetestStrategy(isBullish, breakoutLevel);
+      // If breakoutConfirmed == false, either no breakout or retest is now pending
    }
 }
 //+------------------------------------------------------------------+
