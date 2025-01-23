@@ -23,52 +23,52 @@ enum ENUM_STRATEGY_TYPE
 
 // Core strategy inputs
 input ENUM_STRATEGY_TYPE StrategyType = STRAT_BREAKOUT_RETEST;
-input bool   UseVolumeFilter       = true;    // If true, require volume filter
-input bool   UseMinATRDistance     = true;    // If true, require minimum ATR breakout distance
-input bool   UseRetest             = true;   // If true, enforce a retest before confirming breakout
-input bool   ShowDebugPrints       = true;    // If true, print debug logs
-input bool   UseCandlestickConfirmation = false; // Set to true if you want to use the engulfing pattern check
+input bool   UseVolumeFilter        = true;    // Enable volume confirmation for breakouts 
+input bool   UseMinATRDistance      = true;    // Use ATR for minimum breakout distance 
+input bool   UseRetest             = true;   // Wait for price to retest breakout level 
+input bool   ShowDebugPrints       = true;    // Show detailed debug information 
+input bool   UseCandlestickConfirmation = false; // Use candlestick patterns for retest confirmation 
 
 // Breakout parameters
-input int    BreakoutLookback      = 15;      // Bars to look back for highest/lowest
-input int    ATRPeriod             = 10;      // Default ATR period for breakout
-input double VolumeFactor          = 1.2;     // e.g., 1.2 means current volume >= 120% of average
-input double ATRMultiplier         = 0.3;     // Distance multiple for breakout
-input double RetestATRMultiplier   = 0.2;     // Distance multiple for retest
-input int    MaxRetestBars         = 10;      // Max bars to wait for retest
-input int    MaxRetestMinutes      = 240;     // Max minutes to wait for retest
+input int    BreakoutLookback       = 15;      // Number of bars to look back for breakout [start=10 step=5 stop=50]
+input int    ATRPeriod              = 13;      // Period for ATR calculation [start=5 step=1 stop=30]
+input double VolumeFactor           = 2.0;     // Required volume multiple vs average [start=1.0 step=0.1 stop=2.0]
+input double ATRMultiplier          = 0.1;     // ATR multiplier for breakout distance [start=0.1 step=0.1 stop=1.0]
+input double RetestATRMultiplier    = 0.4;     // ATR multiplier for retest zone [start=0.1 step=0.1 stop=0.5]
+input int    MaxRetestBars          = 5;       // Maximum bars to wait for retest [start=3 step=1 stop=20]
+input int    MaxRetestMinutes       = 180;     // Maximum minutes to wait for retest [start=60 step=60 stop=480]
 
 // Risk management
-input double SLMultiplier          = 5.0;     // Stop loss ATR multiplier
-input double TPMultiplier          = 5.0;     // Take profit ATR multiplier
-input double RiskPercentage        = 5.0;     // Risk per trade (%)
+input double SLMultiplier           = 2.5;     // Stop loss multiplier vs ATR [start=1.0 step=0.5 stop=6.0]
+input double TPMultiplier           = 6;     // Take profit multiplier vs ATR [start=1.0 step=0.5 stop=6.0]
+input double RiskPercentage         = 5.0;     // Account risk per trade in percent [start=1.0 step=1.0 stop=5.0]
 
 // Session control
-input bool   RestrictTradingHours  = true;    // Whether to restrict to sessions
-input int    LondonOpenHour        = 3;       // London session open (broker time)
-input int    LondonCloseHour       = 11;      // London session close (broker time)
-input int    NewYorkOpenHour       = 8;       // NY session open (broker time)
-input int    NewYorkCloseHour      = 17;      // NY session close (broker time)
-input int    BrokerToLocalOffsetHours = 7;    // Offset hours from broker to local time
+input bool   RestrictTradingHours   = true;   // Enable trading hour restrictions 
+input int    LondonOpenHour         = 2;       // London session open hour (broker time) [start=0 step=1 stop=5]
+input int    LondonCloseHour        = 10;      // London session close hour (broker time) [start=6 step=1 stop=14]
+input int    NewYorkOpenHour        = 7;       // New York session open hour (broker time) [start=7 step=1 stop=10]
+input int    NewYorkCloseHour       = 16;      // New York session close hour (broker time) [start=13 step=1 stop=18]
+input int    BrokerToLocalOffsetHours = 7;     // Hours to add to local time for broker time [start=0 step=1 stop=12]
 
 // Key level detection parameters
-input int    KeyLevelLookback     = 100;     // Bars to look back for key levels [50,300,50]
-input int    MinTouchCount        = 3;       // Minimum touches to qualify as key level [2,6,1]
-input double TouchZoneSize        = 0.0002;  // Size of zone to consider as "touch" (in price) [0.0001,0.001,0.0001]
-input double KeyLevelMinDistance  = 0.0005;  // Minimum distance between key levels [0.0002,0.002,0.0002]
+input int    KeyLevelLookback       = 260;      // Bars to analyze for key levels [start=50 step=10 stop=300]
+input int    MinTouchCount          = 5;        // Minimum touches for key level validation [start=2 step=1 stop=6]
+input double TouchZoneSize          = 0.0002;   // Size of zone around key level in price units [start=0.0001 step=0.0001 stop=0.001]
+input double KeyLevelMinDistance    = 0.0019;   // Minimum distance between key levels [start=0.0002 step=0.0001 stop=0.002]
 
 // Strength calculation weights (must sum to 1.0)
-input double TouchScoreWeight     = 0.5;     // Weight for number of touches [0.3,0.7,0.1]
-input double RecencyWeight        = 0.3;     // Weight for recency of touches [0.2,0.4,0.1]
-input double DurationWeight       = 0.2;     // Weight for duration of level validity [0.1,0.3,0.1]
+input double TouchScoreWeight       = 0.4;      // Weight for number of touches in strength calc [start=0.3 step=0.1 stop=0.7]
+input double RecencyWeight            = 0.2;      // Weight for recency of touches in strength calc [start=0.2 step=0.1 stop=0.5]
+input double DurationWeight           = 0.4;      // Weight for level duration in strength calc [start=0.1 step=0.1 stop=0.4]
 
 // Level validation
-input int    MinLevelDurationHours = 24;     // Minimum hours between first and last touch [12,96,12]
-input double MinStrengthThreshold  = 0.6;    // Minimum strength to consider level valid [0.4,0.8,0.1]
+input int    MinLevelDurationHours    = 48;       // Minimum hours a level must exist [start=12 step=12 stop=96]
+input double MinStrengthThreshold       = 0.7;      // Minimum strength score for valid level [start=0.4 step=0.1 stop=0.8]
 
 // Example input for retest check threshold (in pips) & timeframe for candlestick pattern
-input double RetestPipsThreshold = 10;           // Distance from breakout level to consider as a "retest"
-input ENUM_TIMEFRAMES RetestTimeframe = PERIOD_M15; // Timeframe to check retest candlestick pattern
+input double RetestPipsThreshold        = 15;       // Distance in pips to consider price in retest zone [start=5 step=5 stop=30]
+input ENUM_TIMEFRAMES RetestTimeframe = PERIOD_M15; // Timeframe for candlestick pattern analysis
 
 //==================================================================
 // MODULE 2: GLOBAL STATE MANAGEMENT
@@ -81,6 +81,19 @@ int           g_magicNumber      = 12345;
 double        g_breakoutLevel    = 0.0;
 bool          g_isBullishBreak   = false;
 
+// Add global ATR handle
+int           g_handleATR        = INVALID_HANDLE;
+
+// Multi-entry filter state
+datetime      g_lastTradeTime    = 0;     // Time of last trade placement
+datetime      g_lastTradeBarTime = 0;     // Opening time of the bar where last trade occurred
+int           g_lastTradeBar     = 0;     // Bar index of last trade
+
+// Breakout zone lockout state
+double        g_activeBreakoutZonePrice = 0.0;  // Price level of the active breakout zone
+bool          g_activeBreakoutDirection = false; // Direction of active breakout (true=bullish)
+bool          g_inLockout = false;              // Whether we have an active breakout zone lockout
+
 struct SBreakoutState
 {
    datetime breakoutTime;  
@@ -88,8 +101,10 @@ struct SBreakoutState
    bool     isBullish;     
    bool     awaitingRetest; 
    int      barsWaiting;   
+   datetime retestStartTime; // store exact time of breakout or retest init
+   int      retestStartBar;  // store bar index at breakout or retest init
 };
-SBreakoutState g_breakoutState = {0,0.0,false,false,0};
+SBreakoutState g_breakoutState = {0,0.0,false,false,0,0,0};
 
 // Structure to store key level information
 struct SKeyLevel
@@ -106,12 +121,58 @@ struct SKeyLevel
 SKeyLevel g_keyLevels[];  // Array to store detected key levels
 int g_lastKeyLevelUpdate = 0;  // Bar index of last key level update
 
+// Add global variable for tracking last debug message time
+datetime g_lastSessionDebugTime = 0;
+
+// Add these with the other global variables at the top
+datetime g_lastLockoutDebugTime = 0;
+double g_lastReportedDistance = 0.0;
+
 //==================================================================
 // MODULE 3: STRATEGY CONSTANTS
 //==================================================================
 const double VOLUME_THRESH   = 1.1;  
 const double BO_ATR_MULT     = 0.3;  
 const double RT_ATR_MULT     = 0.2;  
+
+//==================================================================
+// MODULE 4: SESSION CONTROL
+//==================================================================
+
+// MODULE 4.1: Check if trading is allowed in current session
+bool IsTradeAllowedInSession()
+{
+   // If trading hours are not restricted, always allow trading
+   if(!RestrictTradingHours)
+      return true;
+      
+   // Get current broker time
+   datetime now = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(now, dt);
+   
+   int currentHour = dt.hour;
+   
+   // Check if we're in London session
+   bool inLondonSession = (currentHour >= LondonOpenHour && currentHour < LondonCloseHour);
+   
+   // Check if we're in New York session
+   bool inNewYorkSession = (currentHour >= NewYorkOpenHour && currentHour < NewYorkCloseHour);
+   
+   // Trading is allowed if we're in either session
+   bool isAllowed = inLondonSession || inNewYorkSession;
+   
+   // Only show debug message once per hour
+   if(ShowDebugPrints && !isAllowed && (now - g_lastSessionDebugTime >= 3600))
+   {
+      Print("❌ [Session Control] Trading not allowed at hour ", currentHour,
+            " | London: ", LondonOpenHour, "-", LondonCloseHour,
+            " | NY: ", NewYorkOpenHour, "-", NewYorkCloseHour);
+      g_lastSessionDebugTime = now;
+   }
+   
+   return isAllowed;
+}
 
 //==================================================================
 // MODULE 5: BREAKOUT VALIDATION AND DETECTION
@@ -151,8 +212,9 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
    // Validate weights sum to 1.0
    if(MathAbs(TouchScoreWeight + RecencyWeight + DurationWeight - 1.0) > 0.001)
    {
-      Print("[M5.3.a Key Level Detection] ERROR: Strength weights must sum to 1.0. Current sum: ",
-            TouchScoreWeight + RecencyWeight + DurationWeight);
+      if(ShowDebugPrints)
+         Print("❌ [M5.3.a Key Level Detection] ERROR: Strength weights must sum to 1.0. Current sum: ",
+               TouchScoreWeight + RecencyWeight + DurationWeight);
       return false;
    }
 
@@ -167,8 +229,9 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
    // Edge case: KeyLevelLookback might be < 3
    if(KeyLevelLookback < 3)
    {
-      Print("[M5.3.a Key Level Detection] KeyLevelLookback too small (", KeyLevelLookback,
-            "). No key levels will be found.");
+      if(ShowDebugPrints)
+         Print("❌ [M5.3.a Key Level Detection] KeyLevelLookback too small (", KeyLevelLookback,
+               "). No key levels will be found.");
       return false;
    }
 
@@ -177,7 +240,8 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
       CopyClose(_Symbol, PERIOD_CURRENT, 0, KeyLevelLookback, closePrices) <= 0 ||
       CopyTime(_Symbol, PERIOD_CURRENT, 0, KeyLevelLookback, times) <= 0)
    {
-      Print("[M5.3.b Key Level Detection] Failed to copy price data. Error=", GetLastError());
+      if(ShowDebugPrints)
+         Print("❌ [M5.3.b Key Level Detection] Failed to copy price data. Error=", GetLastError());
       return false;
    }
 
@@ -339,10 +403,19 @@ bool IsATRDistanceMet(const double currentClose, const double breakoutLevel)
 
    double atrBuf[];
    ArraySetAsSeries(atrBuf, true);
-   double handle = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
-   if(CopyBuffer(handle, 0, 0, 1, atrBuf) <= 0)
+   
+   // Use global ATR handle instead of creating new one
+   if(g_handleATR == INVALID_HANDLE)
    {
-      Print("[M5.5 ATR Distance Check] Warning: ATR copy failed. Bypassing distance check.");
+      if(ShowDebugPrints)
+         Print("⚠️ [M5.5 ATR Distance Check] Warning: Invalid ATR handle. Bypassing distance check.");
+      return true;
+   }
+
+   if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) <= 0)
+   {
+      if(ShowDebugPrints)
+         Print("⚠️ [M5.5 ATR Distance Check] Warning: ATR copy failed. Bypassing distance check.");
       return true;
    }
    double currentATR    = atrBuf[0];
@@ -357,6 +430,71 @@ bool IsATRDistanceMet(const double currentClose, const double breakoutLevel)
 // MODULE 5.6: Main breakout detection and state initialization
 bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
 {
+   // CRITICAL: First check if we already have a position - if so, skip breakout detection entirely
+   if(PositionsTotal() > 0)
+   {
+      for(int i = 0; i < PositionsTotal(); i++)
+      {
+         if(PositionGetSymbol(i) == _Symbol && 
+            PositionGetInteger(POSITION_MAGIC) == g_magicNumber)
+         {
+            return false;  // Skip breakout detection if we have a position
+         }
+      }
+   }
+
+   // If we're in a lockout, check if price has truly formed a new breakout
+   if(g_inLockout)
+   {
+      int currentBar = Bars(_Symbol, PERIOD_CURRENT) - 1;
+      double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);  // Using bid for general price reference
+      double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      
+      // Calculate ATR-based threshold for minimum distance
+      double atrBuf[];
+      ArraySetAsSeries(atrBuf, true);
+      double handle = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
+      double threshold = 50 * pointSize;  // Default to 50 pips if ATR fails
+      
+      if(CopyBuffer(handle, 0, 0, 1, atrBuf) > 0)
+      {
+         threshold = MathMax(atrBuf[0] * 2, 50 * pointSize);  // Use max of 2x ATR or 50 pips
+      }
+      
+      // Check distance from last breakout zone
+      double distanceFromLastBreak = MathAbs(currentPrice - g_activeBreakoutZonePrice);
+      double distanceInPips = distanceFromLastBreak/pointSize;
+      
+      // Reset lockout if we're on a new bar AND have moved far enough from the zone
+      if(currentBar > g_lastTradeBar && distanceFromLastBreak >= threshold)
+      {
+         if(ShowDebugPrints)
+            Print("✅ [M5.6.a Breakout Detection] Resetting lockout. Distance from zone: ", 
+                  NormalizeDouble(distanceFromLastBreak/pointSize, 1), " pips",
+                  " (required ", NormalizeDouble(threshold/pointSize, 1), " pips)");
+         g_inLockout = false;
+         g_activeBreakoutZonePrice = 0.0;  // Clear the active zone
+      }
+      else
+      {
+         datetime now = TimeCurrent();
+         // Only show debug message if:
+         // 1. Distance has changed by at least 50 pips from last report, OR
+         // 2. At least 1 hour has passed since last debug message
+         if(ShowDebugPrints && 
+            (MathAbs(distanceInPips - g_lastReportedDistance) >= 50.0 || 
+             now - g_lastLockoutDebugTime >= 3600))
+         {
+            Print("❌ [M5.6.a Breakout Detection] Still within lockout zone. Distance: ", 
+                  NormalizeDouble(distanceInPips, 1), " pips",
+                  " (need ", NormalizeDouble(threshold/pointSize, 1), " pips)");
+            g_lastLockoutDebugTime = now;
+            g_lastReportedDistance = distanceInPips;
+         }
+         return false;
+      }
+   }
+
    // Find key levels first
    SKeyLevel strongestLevel;
    if(!FindKeyLevels(strongestLevel))
@@ -379,7 +517,8 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
       CopyClose(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, closePrices) <= 0 ||
       CopyTickVolume(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, volumes) <= 0)
    {
-      Print("[M5.6.a Breakout Detection] Failed to copy price or volume data. Err=", GetLastError());
+      if(ShowDebugPrints)
+         Print("❌ [M5.6.a Breakout Detection] Failed to copy price or volume data. Err=", GetLastError());
       return false;
    }
 
@@ -393,11 +532,12 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
 
    if(ShowDebugPrints)
    {
-      Print("[M5.6.a Breakout Detection] LastClose=", lastClose,
-            " | KeyLevel=", strongestLevel.price,
-            " | VolumeOK=", volumeOK,
-            " | BullishBreak=", bullishBreak,
-            " | BearishBreak=", bearishBreak);
+      //rbandeira
+      //Print("[M5.6.a Breakout Detection] LastClose=", lastClose,
+      //      " | KeyLevel=", strongestLevel.price,
+      //      " | VolumeOK=", volumeOK,
+      //      " | BullishBreak=", bullishBreak,
+      //      " | BearishBreak=", bearishBreak);
    }
 
    // Bullish breakout
@@ -414,8 +554,19 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
          g_breakoutState.isBullish      = true;
          g_breakoutState.awaitingRetest = true;
          g_breakoutState.barsWaiting    = 0;
+         g_breakoutState.retestStartTime = TimeCurrent();
+         g_breakoutState.retestStartBar = iBarShift(_Symbol, _Period, TimeCurrent(), false);
          if(ShowDebugPrints)
-            Print("[M5.6.b Breakout Detection] Bullish breakout found; awaiting retest.");
+         {
+            static datetime lastBreakoutMsg = 0;
+            datetime now = TimeCurrent();
+            // Only show message once per minute
+            if(now - lastBreakoutMsg >= 60)
+            {
+               Print("✅ [M5.6.b Breakout Detection] Bullish breakout found; awaiting retest.");
+               lastBreakoutMsg = now;
+            }
+         }
          return false;  
       }
 
@@ -436,8 +587,19 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
          g_breakoutState.isBullish      = false;
          g_breakoutState.awaitingRetest = true;
          g_breakoutState.barsWaiting    = 0;
+         g_breakoutState.retestStartTime = TimeCurrent();
+         g_breakoutState.retestStartBar = iBarShift(_Symbol, _Period, TimeCurrent(), false);
          if(ShowDebugPrints)
-            Print("[M5.6.c Breakout Detection] Bearish breakout found; awaiting retest.");
+         {
+            static datetime lastBreakoutMsg = 0;
+            datetime now = TimeCurrent();
+            // Only show message once per minute
+            if(now - lastBreakoutMsg >= 60)
+            {
+               Print("✅ [M5.6.c Breakout Detection] Bearish breakout found; awaiting retest.");
+               lastBreakoutMsg = now;
+            }
+         }
          return false;  
       }
 
@@ -452,7 +614,7 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
 // MODULE 6: RETEST VALIDATION
 //==================================================================
 
-// MODULE 6.3: Candlestick pattern check for retest validation
+// MODULE 6.1: Candlestick pattern check for retest validation
 bool CheckEngulfingPattern(const bool bullish)
 {
    // We'll copy two candles from the specified retest timeframe
@@ -461,7 +623,8 @@ bool CheckEngulfingPattern(const bool bullish)
 
    if(CopyRates(_Symbol, RetestTimeframe, 0, 2, rates) < 2)
    {
-      Print("[M6.3.a Pattern Check] Failed fetching candlestick data for retest timeframe. Err=", GetLastError());
+      if(ShowDebugPrints)
+         Print("❌ [M6.1.a Pattern Check] Failed fetching candlestick data for retest timeframe. Err=", GetLastError());
       return false;
    }
 
@@ -511,6 +674,52 @@ bool CheckEngulfingPattern(const bool bullish)
    return false;
 }
 
+// MODULE 6.2.1: Check if price is in retest zone
+bool IsPriceInRetestZone()
+{
+   if(!g_breakoutState.awaitingRetest)
+      return false;
+      
+   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);  // Use bid for general price reference
+   double atrBuf[];
+   ArraySetAsSeries(atrBuf, true);
+   
+   if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) <= 0)
+   {
+      if(ShowDebugPrints)
+         Print("⚠️ [IsPriceInRetestZone] Failed to get ATR value. Using default zone size.");
+      return false;
+   }
+   
+   double zoneSize = atrBuf[0] * RetestATRMultiplier;
+   double breakoutLevel = g_breakoutState.breakoutLevel;
+   
+   // For bullish breakout, price should come down to test the breakout level from above
+   if(g_breakoutState.isBullish)
+   {
+      bool inZone = (currentPrice >= breakoutLevel - zoneSize && 
+                     currentPrice <= breakoutLevel + zoneSize);
+                     
+      if(ShowDebugPrints && inZone)
+         Print("✅ [IsPriceInRetestZone] Price in bullish retest zone. Price=", currentPrice,
+               " Zone=", breakoutLevel-zoneSize, " to ", breakoutLevel+zoneSize);
+               
+      return inZone;
+   }
+   // For bearish breakout, price should come up to test the breakout level from below
+   else
+   {
+      bool inZone = (currentPrice >= breakoutLevel - zoneSize && 
+                     currentPrice <= breakoutLevel + zoneSize);
+                     
+      if(ShowDebugPrints && inZone)
+         Print("✅ [IsPriceInRetestZone] Price in bearish retest zone. Price=", currentPrice,
+               " Zone=", breakoutLevel-zoneSize, " to ", breakoutLevel+zoneSize);
+               
+      return inZone;
+   }
+}
+
 // MODULE 6.2: Retest validation and tracking
 bool ValidateRetestConditions()
 {
@@ -521,70 +730,57 @@ bool ValidateRetestConditions()
    // If there's no breakout awaiting a retest, nothing to do
    if(!g_breakoutState.awaitingRetest)
    {
-      Print("[M6.2.a Retest Validation] No breakout awaiting retest");
+      if(ShowDebugPrints)
+         Print("✅ [M6.2.a Retest Validation] No breakout awaiting retest");
       return true;
    }
 
-   // Check for time-based or bar-count timeout
-   double minutesSinceBreakout = (double)(TimeCurrent() - g_breakoutState.breakoutTime) / 60.0;
-   if(minutesSinceBreakout > MaxRetestMinutes || g_breakoutState.barsWaiting > MaxRetestBars)
+   // CRITICAL: Check if we already have an open position
+   if(PositionsTotal() > 0)
    {
-      Print("[M6.2.b Retest Validation] Retest timed out after ", minutesSinceBreakout, " minutes and ", 
-            g_breakoutState.barsWaiting, " bars. Canceling retest.");
+      for(int i = 0; i < PositionsTotal(); i++)
+      {
+         if(PositionGetSymbol(i) == _Symbol && 
+            PositionGetInteger(POSITION_MAGIC) == g_magicNumber)
+         {
+            if(ShowDebugPrints)
+               Print("❌ [M6.2.a Retest Validation] Position already exists for this symbol and magic number");
+            g_breakoutState.awaitingRetest = false;  // Reset retest state
+            return false;
+         }
+      }
+   }
+
+   // 1) Compute how many minutes have passed since we started awaiting the retest
+   double elapsedSeconds = (TimeCurrent() - g_breakoutState.retestStartTime);
+   double elapsedMinutes = elapsedSeconds / 60.0;
+
+   // 2) Determine how many bars have elapsed
+   int currentBar      = iBarShift(_Symbol, _Period, TimeCurrent(), false);
+   int retestStartBar  = g_breakoutState.retestStartBar;
+   int barsElapsed     = retestStartBar - currentBar;
+
+   // Check if the bar count or time limit has been exceeded
+   if(elapsedMinutes >= MaxRetestMinutes || barsElapsed >= MaxRetestBars)
+   {
+      PrintFormat("❌ [M6.2.b Retest Validation] Retest timed out after %.2f minutes and %d bars. Canceling retest.",
+                  elapsedMinutes, barsElapsed);
       g_breakoutState.awaitingRetest = false;
       return false;
    }
 
-   // On each new bar, we can increment g_breakoutState.barsWaiting
-   g_breakoutState.barsWaiting++;
-
-   // Distance threshold in points
-   double pointSize      = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   double retestDistance = RetestPipsThreshold * pointSize;
-
-   // For a bullish breakout, let's watch the bid price retest the breakout level
-   // For a bearish breakout, watch the ask price retest the breakout level
-   double currentPrice = g_breakoutState.isBullish
-                      ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
-                      : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-
-   // Check if current price is within the retest zone
-   double diff         = MathAbs(currentPrice - g_breakoutState.breakoutLevel);
-   bool   inRetestZone = (diff <= retestDistance);
-
-   if(ShowDebugPrints)
-      Print("[M6.2.c Retest Validation] Checking retest | Direction: ", (g_breakoutState.isBullish ? "Bullish" : "Bearish"),
-            " | Distance from level: ", NormalizeDouble(diff/pointSize, 1), " pips",
-            " | Required: ", NormalizeDouble(retestDistance/pointSize, 1), " pips",
-            " | In zone: ", (inRetestZone ? "Yes" : "No"));
-
+   // 3) Check if the price is "in zone"
+   bool inRetestZone = IsPriceInRetestZone();
    if(inRetestZone)
    {
-      // Only check the engulfing pattern if user wants it
-      if(UseCandlestickConfirmation)
-      {
-         bool isPatternValid = CheckEngulfingPattern(g_breakoutState.isBullish);
-         if(isPatternValid)
-         {
-            g_breakoutState.awaitingRetest = false;
-            if(ShowDebugPrints)
-               Print("[M6.2.d Retest Validation] ✅ Retest confirmed via candlestick pattern.");
-            return true;
-         }
-         else if(ShowDebugPrints)
-            Print("[M6.2.e Retest Validation] In retest zone, but no valid candlestick pattern yet.");
-      }
-      else
-      {
-         // If optional candlestick confirmation is disabled, confirm retest immediately
-         g_breakoutState.awaitingRetest = false;
-         if(ShowDebugPrints)
-            Print("[M6.2.d Retest Validation] Retest confirmed with no candlestick check (disabled).");
-         return true;
-      }
+      PrintFormat(
+         "✅ [M6.2.c Retest Validation] Price in retest zone | Direction: %s",
+         g_breakoutState.isBullish ? "Bullish" : "Bearish"
+      );
+      return true;
    }
 
-   // Not yet confirmed
+   // 4) Retest so far not timed out and not confirmed
    return false;
 }
 
@@ -593,18 +789,20 @@ bool ValidateRetestConditions()
 //==================================================================
 
 // MODULE 7.1: Position sizing calculation
-double CalculateLotSize(double stopLossDistancePoints)
+double CalculateLotSize(double stopLossPoints)
 {
-   if(stopLossDistancePoints <= 0.0)
+   if(stopLossPoints <= 0.0)
    {
-      Print("[M7.1.a Position Sizing] Invalid stop loss distance. Using minimum lot size.");
+      if(ShowDebugPrints)
+         Print("⚠️ [M7.1.a Position Sizing] Invalid stop loss distance. Using minimum lot size.");
       return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    }
 
    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    if(accountEquity <= 0.0)
    {
-      Print("[M7.1.b Position Sizing] Invalid account equity. Using minimum lot size.");
+      if(ShowDebugPrints)
+         Print("⚠️ [M7.1.b Position Sizing] Invalid account equity. Using minimum lot size.");
       return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    }
 
@@ -615,11 +813,12 @@ double CalculateLotSize(double stopLossDistancePoints)
 
    if(tickSize <= 0.0 || tickValue <= 0.0)
    {
-      Print("[M7.1.c Position Sizing] Invalid tick size / value. Using minimum lot size.");
+      if(ShowDebugPrints)
+         Print("⚠️ [M7.1.c Position Sizing] Invalid tick size / value. Using minimum lot size.");
       return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    }
 
-   double ticksCount = stopLossDistancePoints / tickSize;
+   double ticksCount = stopLossPoints / tickSize;
    double lotSize    = riskAmount / (ticksCount * tickValue);
 
    // Broker constraints
@@ -635,7 +834,7 @@ double CalculateLotSize(double stopLossDistancePoints)
 
    lotSize = NormalizeDouble(lotSize, 2);
    if(ShowDebugPrints)
-      Print("[M7.1.d Position Sizing] Calculated lot size: ", lotSize);
+      Print("✅ [M7.1.d Position Sizing] Calculated lot size: ", lotSize);
    return lotSize;
 }
 
@@ -664,7 +863,8 @@ bool PlaceTrade(bool isBuy, double entryPrice, double slPrice, double tpPrice, d
       // 1) If SL >= entryPrice, clamp or skip
       if(slPrice >= entryPrice)
       {
-         Print("[M8.1.a Order Management] SL is not below entry. Clamping or skipping.");
+         if(ShowDebugPrints)
+            Print("⚠️ [M8.1.a Order Management] SL is not below entry. Clamping or skipping.");
          slPrice = entryPrice - fallbackStopDistance; // clamp approach
       }
 
@@ -676,7 +876,8 @@ bool PlaceTrade(bool isBuy, double entryPrice, double slPrice, double tpPrice, d
          if(slPrice <= point)
          {
             // If still invalid, skip trade
-            Print("[M8.1.a Order Management] SL is invalid (negative or zero) after clamp. Skipping trade.");
+            if(ShowDebugPrints)
+               Print("❌ [M8.1.a Order Management] SL is invalid (negative or zero) after clamp. Skipping trade.");
             return false;
          }
       }
@@ -686,14 +887,16 @@ bool PlaceTrade(bool isBuy, double entryPrice, double slPrice, double tpPrice, d
       // 1) If SL <= entryPrice, clamp or skip
       if(slPrice <= entryPrice)
       {
-         Print("[M8.1.a Order Management] SL is not above entry for a Sell. Clamping or skipping.");
+         if(ShowDebugPrints)
+            Print("⚠️ [M8.1.a Order Management] SL is not above entry for a Sell. Clamping or skipping.");
          slPrice = entryPrice + fallbackStopDistance; // clamp approach
       }
 
       // 2) If SL < point, skip
       if(slPrice <= point)
       {
-         Print("[M8.1.a Order Management] SL is invalid (negative or zero) for a Sell. Skipping trade.");
+         if(ShowDebugPrints)
+            Print("❌ [M8.1.a Order Management] SL is invalid (negative or zero) for a Sell. Skipping trade.");
          return false;
       }
    }
@@ -703,11 +906,12 @@ bool PlaceTrade(bool isBuy, double entryPrice, double slPrice, double tpPrice, d
    tpPrice = NormalizeDouble(tpPrice, digits);
 
    // Final logging
-   Print("[M8.1.a Order Management] PlaceTrade - ", (isBuy ? "Buy" : "Sell"),
-         " | lots=", lots,
-         " | entry=", entryPrice,
-         " | SL=", slPrice,
-         " | TP=", tpPrice);
+   if(ShowDebugPrints)
+      Print("✅ [M8.1.a Order Management] PlaceTrade - ", (isBuy ? "Buy" : "Sell"),
+            " | lots=", lots,
+            " | entry=", entryPrice,
+            " | SL=", slPrice,
+            " | TP=", tpPrice);
 
    bool result = isBuy 
                ? trade.Buy(lots, _Symbol, 0, slPrice, tpPrice, "Breakout-Buy")
@@ -715,11 +919,27 @@ bool PlaceTrade(bool isBuy, double entryPrice, double slPrice, double tpPrice, d
 
    if(!result)
    {
-      Print("[M8.1.a Order Management] ❌ Order failed. Error=", GetLastError());
+      if(ShowDebugPrints)
+         Print("❌ [M8.1.a Order Management] ❌ Order failed. Error=", GetLastError());
       return false;
    }
 
-   Print("[M8.1.a Order Management] ✅ Order placed at price=", trade.ResultPrice());
+   // Update multi-entry filter state after successful trade
+   g_lastTradeTime = TimeCurrent();
+   g_lastTradeBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);  // Record the opening time of the current bar
+   g_lastTradeBar = Bars(_Symbol, PERIOD_CURRENT) - 1;  // Current bar index
+   g_activeBreakoutZonePrice = entryPrice;
+   g_activeBreakoutDirection = isBuy;
+   g_inLockout = true;
+
+   if(ShowDebugPrints)
+      Print("✅ [M8.1.b Order Management] Multi-entry filter state updated: Bar=", g_lastTradeBar,
+            " BarTime=", TimeToString(g_lastTradeBarTime, TIME_DATE|TIME_MINUTES),
+            " Level=", g_activeBreakoutZonePrice,
+            " Direction=", (isBuy ? "Buy" : "Sell"));
+
+   if(ShowDebugPrints)
+      Print("✅ [M8.1.a Order Management] ✅ Order placed at price=", trade.ResultPrice());
    return true;
 }
 
@@ -727,9 +947,7 @@ bool PlaceTrade(bool isBuy, double entryPrice, double slPrice, double tpPrice, d
 // MODULE 9: STRATEGY EXECUTION
 //==================================================================
 
-//------------------------------------------------------------------//
-// 1) Calculate daily pivot points
-//------------------------------------------------------------------//
+// MODULE 9.1: Calculate daily pivot points
 void CalculateDailyPivots(string symbol, 
                           double &pivotPoint, 
                           double &r1, double &r2, 
@@ -739,7 +957,8 @@ void CalculateDailyPivots(string symbol,
    // We'll look at the previous daily bar (index=1).
    if(CopyRates(symbol, PERIOD_D1, 1, 2, dailyData) < 2)
    {
-      Print("[PivotCalculation] Can't fetch daily bar data. Using fallback values.");
+      if(ShowDebugPrints)
+         Print("⚠️ [PivotCalculation] Can't fetch daily bar data. Using fallback values.");
       pivotPoint = 0.0;
       r1 = r2 = s1 = s2 = 0.0;
       return;
@@ -757,9 +976,7 @@ void CalculateDailyPivots(string symbol,
    s2 = pivotPoint - (r1 - s1);            // Support 2
 }
 
-//------------------------------------------------------------------//
-// 2) Set pivot-based SL/TP
-//------------------------------------------------------------------//
+// MODULE 9.2: Set pivot-based SL/TP
 void SetPivotSLTP(bool isBuy, double currentPrice, double &slPrice, double &tpPrice)
 {
    double pivot, r1, r2, s1, s2;
@@ -768,9 +985,22 @@ void SetPivotSLTP(bool isBuy, double currentPrice, double &slPrice, double &tpPr
    // If we fail to get pivot data or pivot == 0, skip or fallback
    if(pivot <= 0.0)
    {
-      Print("[SetPivotSLTP] Invalid pivot data. Setting default fallback SL/TP.");
-      // Fallback: 30 pips away each, for instance
-      double fallbackDist = 30.0 * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      if(ShowDebugPrints)
+         Print("⚠️ [SetPivotSLTP] Invalid pivot data. Setting default fallback SL/TP.");
+      
+      // Use ATR-based fallback if available
+      double fallbackDist = 30.0 * SymbolInfoDouble(_Symbol, SYMBOL_POINT); // Default fallback
+      
+      if(g_handleATR != INVALID_HANDLE)
+      {
+         double atrBuf[];
+         ArraySetAsSeries(atrBuf, true);
+         if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) > 0)
+         {
+            fallbackDist = atrBuf[0] * ATRMultiplier;
+         }
+      }
+      
       if(isBuy)
       {
          slPrice = currentPrice - fallbackDist;
@@ -803,21 +1033,45 @@ void SetPivotSLTP(bool isBuy, double currentPrice, double &slPrice, double &tpPr
    // Defensive check: if we ended up with negative or near-zero SL/TP, clamp or log
    if(slPrice <= 0.0)
    {
-      Print("[SetPivotSLTP] SL is invalid or <= 0.0. Clamping to currentPrice.");
+      if(ShowDebugPrints)
+         Print("⚠️ [SetPivotSLTP] SL is invalid or <= 0.0. Clamping to currentPrice.");
       slPrice = currentPrice;
    }
    if(tpPrice <= 0.0)
    {
-      Print("[SetPivotSLTP] TP is invalid or <= 0.0. Clamping to currentPrice.");
+      if(ShowDebugPrints)
+         Print("⚠️ [SetPivotSLTP] TP is invalid or <= 0.0. Clamping to currentPrice.");
       tpPrice = currentPrice;
    }
 }
 
-//------------------------------------------------------------------//
-// 3) Revised ExecuteBreakoutRetestStrategy using pivot SL/TP
-//------------------------------------------------------------------//
+// MODULE 9.3: Execute breakout-retest strategy
 void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
 {
+   // CRITICAL: Check for existing positions and enforce cooldown
+   if(PositionsTotal() > 0)
+   {
+      for(int i = 0; i < PositionsTotal(); i++)
+      {
+         if(PositionGetSymbol(i) == _Symbol && 
+            PositionGetInteger(POSITION_MAGIC) == g_magicNumber)
+         {
+            if(ShowDebugPrints)
+               Print("❌ [M9.3 Strategy Execution] Position already exists for this symbol and magic number");
+            return;
+         }
+      }
+   }
+
+   // Enforce minimum time between trades (5 minutes cooldown)
+   datetime currentTime = TimeCurrent();
+   if(currentTime - g_lastTradeTime < 300)  // 300 seconds = 5 minutes
+   {
+      if(ShowDebugPrints)
+         Print("❌ [M9.3 Strategy Execution] Trade cooldown period still active. Waiting...");
+      return;
+   }
+
    // 1) Current price
    double currentPrice = isBullish 
                        ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
@@ -838,11 +1092,26 @@ void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
    //    Make sure 'PlaceTrade' does any final broker-distance checks
    //    or clamping as needed.
    if(PlaceTrade(isBullish, currentPrice, slPrice, tpPrice, lotSize))
-      Print("[M9.1 Strategy Execution - Pivot] Trade placed - ",
-            (isBullish ? "Buy" : "Sell"), " at ", currentPrice,
-            " SL=", slPrice, " TP=", tpPrice);
+   {
+      if(ShowDebugPrints)
+         Print("✅ [M9.3 Strategy Execution - Pivot] Trade placed - ",
+               (isBullish ? "Buy" : "Sell"), " at ", currentPrice,
+               " SL=", slPrice, " TP=", tpPrice);
+
+      // Set breakout zone lockout after successful trade
+      g_activeBreakoutZonePrice = breakoutLevel;  
+      g_activeBreakoutDirection = isBullish;
+      g_inLockout = true;
+
+      if(ShowDebugPrints)
+         Print("✅ [M9.3 Strategy Execution] Breakout zone lockout set: Level=", breakoutLevel,
+               " Direction=", (isBullish ? "Bullish" : "Bearish"));
+   }
    else
-      Print("[M9.1 Strategy Execution - Pivot] Trade placement failed.");
+   {
+      if(ShowDebugPrints)
+         Print("❌ [M9.3 Strategy Execution] Trade placement failed.");
+   }
 }
 
 //==================================================================
@@ -852,19 +1121,38 @@ void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
 // MODULE 10.1: EA initialization
 int OnInit()
 {
-   Print("[M10.1.a Initialization] EA started in DEBUG mode. Sessions bypassed.");
+   // Initialize ATR indicator handle
+   g_handleATR = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
+   if(g_handleATR == INVALID_HANDLE)
+   {
+      if(ShowDebugPrints)
+         Print("❌ [M10.1.a Initialization] Failed to create ATR indicator handle");
+      return INIT_FAILED;
+   }
+
+   if(ShowDebugPrints)
+      Print("ℹ️ [M10.1.a Initialization] EA started. Session trading restrictions are ", (RestrictTradingHours ? "enabled" : "disabled"), ".");
    return(INIT_SUCCEEDED);
 }
 
 // MODULE 10.2: EA deinitialization
 void OnDeinit(const int reason)
 {
-   Print("[M10.2.a Deinitialization] EA Deinit. Reason=", reason);
+   // Clean up indicator handle
+   if(g_handleATR != INVALID_HANDLE)
+      IndicatorRelease(g_handleATR);
+
+   if(ShowDebugPrints)
+      Print("ℹ️ [M10.2.a Deinitialization] EA Deinit. Reason=", reason);
 }
 
 // MODULE 10.3: Main EA tick
 void OnTick()
 {
+   // Check if trading is allowed in current session
+   if(!IsTradeAllowedInSession())
+      return;
+
    // 1) If retest is in progress, see if it is confirmed
    if(g_breakoutState.awaitingRetest)
    {
