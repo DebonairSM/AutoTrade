@@ -10,6 +10,107 @@
 #include <Trade\Trade.mqh>
 CTrade trade;
 
+// -------------------------------------------------------------------
+// DAILY PIVOT LOGIC
+// -------------------------------------------------------------------
+/*
+   These two helper functions retrieve the last closed daily bar
+   to compute pivot points, then apply them as SL/TP in your
+   order-management logic (M8.1.a, etc.).
+*/
+
+// 1) Helper function: GetDailyPivotPoints()
+bool GetDailyPivotPoints(double &pivot, double &r1, double &r2, double &s1, double &s2)
+{
+   // Make sure we have enough data
+   MqlRates dailyRates[];
+   ArraySetAsSeries(dailyRates, true);
+
+   // We copy 2 bars from the daily timeframe: [0] is current day, [1] is the last closed day
+   if(CopyRates(_Symbol, PERIOD_D1, 0, 2, dailyRates) < 2)
+   {
+      Print("❌ [GetDailyPivotPoints] Unable to copy daily bars. Error=", GetLastError());
+      return false;
+   }
+
+   // The bar at index [1] is the most recently closed daily bar
+   double prevDayHigh  = dailyRates[1].high;
+   double prevDayLow   = dailyRates[1].low;
+   double prevDayClose = dailyRates[1].close;
+
+   // Standard pivot point formulas:
+   pivot = (prevDayHigh + prevDayLow + prevDayClose) / 3.0;
+   r1    = 2.0 * pivot - prevDayLow;
+   s1    = 2.0 * pivot - prevDayHigh;
+   r2    = pivot + (r1 - s1);
+   s2    = pivot - (r1 - s1);
+
+   return true;
+}
+
+// 2) Main function to apply pivot points for SL/TP
+bool ApplyDailyPivotSLTP(bool isBullish, double &priceEntry, double &priceSL, double &priceTP)
+{
+   double pivot=0, r1=0, r2=0, s1=0, s2=0;
+   if(!GetDailyPivotPoints(pivot, r1, r2, s1, s2))
+   {
+      Print("❌ [ApplyDailyPivotSLTP] Unable to compute daily pivots. Using defaults.");
+      return false;
+   }
+
+   // Decide which pivot levels to use
+   bool useWiderLevels = IsHighVolatilityOrBusySession(); // from Step 2
+
+   if(isBullish)
+   {
+      if(useWiderLevels)
+      {
+         // Wider stops in high-volatility sessions
+         priceSL = MathMin(s1, s2); // Could use s2 if you prefer the very wide level
+         priceTP = r2;             // Target r2 for bigger reward
+      }
+      else
+      {
+         // Normal or quieter session
+         priceSL = s1;            
+         priceTP = r1;            
+      }
+   }
+   else // Bearish
+   {
+      if(useWiderLevels)
+      {
+         priceSL = MathMax(r1, r2);
+         priceTP = s2;
+      }
+      else
+      {
+         priceSL = r1;
+         priceTP = s1;
+      }
+   }
+
+   // Safety checks
+   double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
+   if(isBullish)
+   {
+      if(priceSL >= priceEntry)
+         priceSL = priceEntry - (50 * pointSize);
+      if(priceTP <= priceEntry)
+         priceTP = priceEntry + (100 * pointSize);
+   }
+   else
+   {
+      if(priceSL <= priceEntry)
+         priceSL = priceEntry + (50 * pointSize);
+      if(priceTP >= priceEntry)
+         priceTP = priceEntry - (100 * pointSize);
+   }
+
+   return true;
+}
+
 //==================================================================
 // MODULE 1: CONFIGURATION AND INPUTS
 //==================================================================
@@ -69,6 +170,12 @@ input double MinStrengthThreshold       = 0.7;      // Minimum strength score fo
 // Example input for retest check threshold (in pips) & timeframe for candlestick pattern
 input double RetestPipsThreshold        = 15;       // Distance in pips to consider price in retest zone [start=5 step=5 stop=30]
 input ENUM_TIMEFRAMES RetestTimeframe = PERIOD_M15; // Timeframe for candlestick pattern analysis
+
+// Volatility threshold (e.g., ATR above this means "high-volatility")
+input double ATRVolatilityThreshold = 0.0010;
+// Or, a time-based threshold for day/evening sessions
+input int HighVolatilityStartHour = 7;
+input int HighVolatilityEndHour   = 16;
 
 //==================================================================
 // MODULE 2: GLOBAL STATE MANAGEMENT
@@ -789,53 +896,40 @@ bool ValidateRetestConditions()
 //==================================================================
 
 // MODULE 7.1: Position sizing calculation
-double CalculateLotSize(double stopLossPoints)
+double CalculateLotSize(double stopLossPrice, double entryPrice, double riskPercent)
 {
-   if(stopLossPoints <= 0.0)
-   {
-      if(ShowDebugPrints)
-         Print("⚠️ [M7.1.a Position Sizing] Invalid stop loss distance. Using minimum lot size.");
-      return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   }
+   // 1. Determine the account balance and risk in currency terms.
+   double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double riskAmount     = accountBalance * (riskPercent / 100.0); // e.g. 5% of balance
 
-   double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(accountEquity <= 0.0)
-   {
-      if(ShowDebugPrints)
-         Print("⚠️ [M7.1.b Position Sizing] Invalid account equity. Using minimum lot size.");
-      return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   }
+   // 2. How many pips away is the SL? (Simplified for 5-digit brokers.)
+   double pipValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double stopDistancePoints = MathAbs(entryPrice - stopLossPrice) / _Point; // in points
+   // For a 5-digit pair, 1 pip = 10 points
 
-   // Basic risk calculation
-   double riskAmount = accountEquity * (RiskPercentage / 100.0);
-   double tickSize   = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-   double tickValue  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   // 3. If the trade goes straight to SL, how much we lose per lot?
+   //    lossPerLot = stopDistanceInPoints * pointValueFor1Lot
+   //    pointValueFor1Lot = pipValue * (1 lot = 100,000 for Forex) / (_Point * 10) if needed
+   // But in MQL5, pipValue typically includes the standard-lot factor, so let's keep it simpler:
+   double potentialLossPerLot = stopDistancePoints * pipValue;
 
-   if(tickSize <= 0.0 || tickValue <= 0.0)
-   {
-      if(ShowDebugPrints)
-         Print("⚠️ [M7.1.c Position Sizing] Invalid tick size / value. Using minimum lot size.");
-      return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   }
+   // 4. Calculate how many lots correspond to the maximum risk.
+   //    riskAmount / potentialLossPerLot = approximate number of full lots
+   double lots = riskAmount / potentialLossPerLot;
 
-   double ticksCount = stopLossPoints / tickSize;
-   double lotSize    = riskAmount / (ticksCount * tickValue);
-
-   // Broker constraints
+   // 5. Adjust for broker's min/max lot constraints and step.
    double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
-   if(lotSize < minLot) lotSize = minLot;
-   if(lotSize > maxLot) lotSize = maxLot;
+   // Enforce boundaries
+   if(lots < minLot) lots = minLot;
+   if(lots > maxLot) lots = maxLot;
 
-   lotSize = MathFloor(lotSize / lotStep) * lotStep;
-   if(lotSize < minLot) lotSize = minLot;
+   // Round to the nearest valid step
+   lots = MathFloor(lots / lotStep) * lotStep;
 
-   lotSize = NormalizeDouble(lotSize, 2);
-   if(ShowDebugPrints)
-      Print("✅ [M7.1.d Position Sizing] Calculated lot size: ", lotSize);
-   return lotSize;
+   return lots;
 }
 
 //==================================================================
@@ -843,7 +937,7 @@ double CalculateLotSize(double stopLossPoints)
 //==================================================================
 
 // MODULE 8.1: Trade execution and order management
-bool PlaceTrade(bool isBuy, double entryPrice, double slPrice, double tpPrice, double lots)
+bool PlaceTrade(bool isBullish, double entryPrice, double slPrice, double tpPrice, double lots)
 {
    trade.SetExpertMagicNumber(g_magicNumber);
 
@@ -852,75 +946,87 @@ bool PlaceTrade(bool isBuy, double entryPrice, double slPrice, double tpPrice, d
    double minStopDistPoints    = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
    double fallbackStopDistance = 5 * minStopDistPoints; // or some multiplier
 
-   // Normalize
+   // Normalize prices
    entryPrice = NormalizeDouble(entryPrice, digits);
    slPrice    = NormalizeDouble(slPrice, digits);
    tpPrice    = NormalizeDouble(tpPrice, digits);
 
    // For a buy, SL must be below entry and above zero
-   if(isBuy)
+   if(isBullish)
    {
-      // 1) If SL >= entryPrice, clamp or skip
+      // 1) If SL >= entryPrice, try to get a new pivot-based SL
       if(slPrice >= entryPrice)
       {
-         if(ShowDebugPrints)
-            Print("⚠️ [M8.1.a Order Management] SL is not below entry. Clamping or skipping.");
-         slPrice = entryPrice - fallbackStopDistance; // clamp approach
+         double pivot, r1, r2, s1, s2;
+         if(GetDailyPivotPoints(pivot, r1, r2, s1, s2))
+         {
+            // Try to use S1 as SL for a buy
+            slPrice = MathMin(s1, entryPrice - fallbackStopDistance);
+         }
+         else
+         {
+            if(ShowDebugPrints)
+               Print("⚠️ [PlaceTrade] SL invalid and pivot calculation failed. Using fallback distance.");
+            slPrice = entryPrice - fallbackStopDistance;
+         }
       }
 
-      // 2) If SL < some tiny positive threshold, clamp or skip
-      if(slPrice <= point)
+      // 2) If SL still invalid, use fallback
+      if(slPrice <= point || slPrice >= entryPrice)
       {
-         // Attempt to clamp once more using fallbackStopDistance
+         if(ShowDebugPrints)
+            Print("⚠️ [PlaceTrade] Invalid SL for Buy. Using fallback distance.");
          slPrice = entryPrice - fallbackStopDistance;
-         if(slPrice <= point)
-         {
-            // If still invalid, skip trade
-            if(ShowDebugPrints)
-               Print("❌ [M8.1.a Order Management] SL is invalid (negative or zero) after clamp. Skipping trade.");
-            return false;
-         }
       }
    }
    else // Sell
    {
-      // 1) If SL <= entryPrice, clamp or skip
+      // 1) If SL <= entryPrice, try to get a new pivot-based SL
       if(slPrice <= entryPrice)
       {
-         if(ShowDebugPrints)
-            Print("⚠️ [M8.1.a Order Management] SL is not above entry for a Sell. Clamping or skipping.");
-         slPrice = entryPrice + fallbackStopDistance; // clamp approach
+         double pivot, r1, r2, s1, s2;
+         if(GetDailyPivotPoints(pivot, r1, r2, s1, s2))
+         {
+            // Try to use R1 as SL for a sell
+            slPrice = MathMax(r1, entryPrice + fallbackStopDistance);
+         }
+         else
+         {
+            if(ShowDebugPrints)
+               Print("⚠️ [PlaceTrade] SL invalid and pivot calculation failed. Using fallback distance.");
+            slPrice = entryPrice + fallbackStopDistance;
+         }
       }
 
-      // 2) If SL < point, skip
-      if(slPrice <= point)
+      // 2) If SL still invalid, use fallback
+      if(slPrice <= point || slPrice <= entryPrice)
       {
          if(ShowDebugPrints)
-            Print("❌ [M8.1.a Order Management] SL is invalid (negative or zero) for a Sell. Skipping trade.");
-         return false;
+            Print("⚠️ [PlaceTrade] Invalid SL for Sell. Using fallback distance.");
+         slPrice = entryPrice + fallbackStopDistance;
       }
    }
 
-   // Re-normalize after any clamps
+   // Re-normalize after any adjustments
    slPrice = NormalizeDouble(slPrice, digits);
    tpPrice = NormalizeDouble(tpPrice, digits);
 
    // Final logging
    if(ShowDebugPrints)
-      Print("✅ [M8.1.a Order Management] PlaceTrade - ", (isBuy ? "Buy" : "Sell"),
+      Print("✅ [PlaceTrade] Placing ", (isBullish ? "Buy" : "Sell"),
             " | lots=", lots,
             " | entry=", entryPrice,
             " | SL=", slPrice,
             " | TP=", tpPrice);
 
-   bool result = isBuy 
+   bool result = isBullish 
                ? trade.Buy(lots, _Symbol, 0, slPrice, tpPrice, "Breakout-Buy")
                : trade.Sell(lots, _Symbol, 0, slPrice, tpPrice, "Breakout-Sell");
 
    if(!result)
    {
       if(ShowDebugPrints)
-         Print("❌ [M8.1.a Order Management] ❌ Order failed. Error=", GetLastError());
+         Print("❌ [PlaceTrade] Order failed. Error=", GetLastError());
       return false;
    }
 
@@ -929,17 +1035,17 @@ bool PlaceTrade(bool isBuy, double entryPrice, double slPrice, double tpPrice, d
    g_lastTradeBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);  // Record the opening time of the current bar
    g_lastTradeBar = Bars(_Symbol, PERIOD_CURRENT) - 1;  // Current bar index
    g_activeBreakoutZonePrice = entryPrice;
-   g_activeBreakoutDirection = isBuy;
+   g_activeBreakoutDirection = isBullish;
    g_inLockout = true;
 
    if(ShowDebugPrints)
-      Print("✅ [M8.1.b Order Management] Multi-entry filter state updated: Bar=", g_lastTradeBar,
+      Print("✅ [PlaceTrade] Multi-entry filter state updated: Bar=", g_lastTradeBar,
             " BarTime=", TimeToString(g_lastTradeBarTime, TIME_DATE|TIME_MINUTES),
             " Level=", g_activeBreakoutZonePrice,
-            " Direction=", (isBuy ? "Buy" : "Sell"));
+            " Direction=", (isBullish ? "Buy" : "Sell"));
 
    if(ShowDebugPrints)
-      Print("✅ [M8.1.a Order Management] ✅ Order placed at price=", trade.ResultPrice());
+      Print("✅ [PlaceTrade] Order placed at price=", trade.ResultPrice());
    return true;
 }
 
@@ -1017,17 +1123,59 @@ void SetPivotSLTP(bool isBuy, double currentPrice, double &slPrice, double &tpPr
    // For a bullish breakout
    if(isBuy)
    {
-      // Example: place SL at min(pivot, s1) and TP at r1
-      slPrice = MathMin(pivot, s1);
-      tpPrice = r1;  // or r2 if you want a larger target
-      // If pivot < s1, you might pick pivot anyway, or adapt logic
+      // For bullish trades:
+      // - SL: Use closer of S1 or (current price - ATR)
+      // - TP: Use further of R2 or (current price + 2*ATR)
+      double atrStop = 0.0;
+      if(g_handleATR != INVALID_HANDLE)
+      {
+         double atrBuf[];
+         ArraySetAsSeries(atrBuf, true);
+         if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) > 0)
+         {
+            atrStop = atrBuf[0];
+         }
+      }
+      
+      // If ATR is available, use it to potentially tighten the stop
+      if(atrStop > 0)
+      {
+         slPrice = MathMax(MathMin(pivot, s1), currentPrice - atrStop);
+         tpPrice = MathMax(r2, currentPrice + (2 * atrStop));  // 1:2 minimum risk:reward
+      }
+      else
+      {
+         slPrice = MathMin(pivot, s1);
+         tpPrice = r2;
+      }
    }
    else
    {
-      // For a bearish breakout
-      // Example: place SL at max(pivot, r1) and TP at s1
-      slPrice = MathMax(pivot, r1);
-      tpPrice = s1;  // or s2
+      // For bearish trades:
+      // - SL: Use closer of R1 or (current price + ATR)
+      // - TP: Use further of S2 or (current price - 2*ATR)
+      double atrStop = 0.0;
+      if(g_handleATR != INVALID_HANDLE)
+      {
+         double atrBuf[];
+         ArraySetAsSeries(atrBuf, true);
+         if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) > 0)
+         {
+            atrStop = atrBuf[0];
+         }
+      }
+      
+      // If ATR is available, use it to potentially tighten the stop
+      if(atrStop > 0)
+      {
+         slPrice = MathMin(MathMax(pivot, r1), currentPrice + atrStop);
+         tpPrice = MathMin(s2, currentPrice - (2 * atrStop));  // 1:2 minimum risk:reward
+      }
+      else
+      {
+         slPrice = MathMax(pivot, r1);
+         tpPrice = s2;
+      }
    }
    
    // Defensive check: if we ended up with negative or near-zero SL/TP, clamp or log
@@ -1077,20 +1225,25 @@ void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
                        ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
                        : SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-   // 2) Calculate pivot-based SL / TP
-   double slPrice, tpPrice;
-   SetPivotSLTP(isBullish, currentPrice, slPrice, tpPrice);
+   // 2) Calculate SL/TP using pivot points
+   double slPrice = 0, tpPrice = 0;
+   if(!ApplyDailyPivotSLTP(isBullish, currentPrice, slPrice, tpPrice))
+   {
+      if(ShowDebugPrints)
+         Print("❌ [M9.3 Strategy Execution] Failed to calculate pivot-based SL/TP");
+      return;
+   }
 
-   // 3) Calculate lot size the same as before (or however you prefer)
-   //    e.g., your existing "CalculateLotSize" logic
-   double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   if(pointSize <= 0.0) { pointSize = 0.00001; }
-   // Hard-coded example, or your existing calculation:
-   double lotSize = 0.01; 
+   // 3) Calculate position size based on risk
+   double lotSize = CalculateLotSize(slPrice, currentPrice, RiskPercentage);
+   if(lotSize <= 0)
+   {
+      if(ShowDebugPrints)
+         Print("❌ [M9.3 Strategy Execution] Invalid lot size calculated");
+      return;
+   }
 
-   // 4) Place the trade (reusing your 'PlaceTrade' logic)
-   //    Make sure 'PlaceTrade' does any final broker-distance checks
-   //    or clamping as needed.
+   // 4) Place the trade with pivot-based SL/TP
    if(PlaceTrade(isBullish, currentPrice, slPrice, tpPrice, lotSize))
    {
       if(ShowDebugPrints)
@@ -1177,5 +1330,35 @@ void OnTick()
          ExecuteBreakoutRetestStrategy(isBullish, breakoutLevel);
       // If breakoutConfirmed == false, either no breakout or retest is now pending
    }
+}
+
+bool IsHighVolatilityOrBusySession()
+{
+   // Get current time using MQL5's datetime structure
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   int hourNow = dt.hour;
+
+   // Check time-of-day window
+   bool isBusyTime = (hourNow >= HighVolatilityStartHour && hourNow < HighVolatilityEndHour);
+
+   // Check ATR for volatility
+   double atrBuf[];
+   ArraySetAsSeries(atrBuf, true);
+   
+   // Use the global ATR handle we already have
+   if(g_handleATR != INVALID_HANDLE)
+   {
+      if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) > 0)
+      {
+         bool isHighATR = (atrBuf[0] >= ATRVolatilityThreshold);
+         
+         // Return true if either time is busy or volatility is high
+         return (isBusyTime || isHighATR);
+      }
+   }
+   
+   // If we can't get ATR, just use time-based decision
+   return isBusyTime;
 }
 //+------------------------------------------------------------------+
