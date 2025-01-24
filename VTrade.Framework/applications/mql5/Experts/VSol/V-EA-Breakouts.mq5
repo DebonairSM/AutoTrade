@@ -53,26 +53,26 @@ input double RiskPercentage         = 5.0;     // [start=0.5 step=0.5 stop=5.0] 
 
 // Session control
 input bool   RestrictTradingHours   = true;    // Enable trading hour restrictions 
-input int    LondonOpenHour         = 2;       // [start=0 step=1 stop=5] London session open hour (broker time)
-input int    LondonCloseHour        = 10;      // [start=6 step=1 stop=14] London session close hour (broker time)
-input int    NewYorkOpenHour        = 7;       // [start=7 step=1 stop=10] New York session open hour (broker time)
-input int    NewYorkCloseHour       = 16;      // [start=13 step=1 stop=18] New York session close hour (broker time)
+input int    LondonOpenHour         = 3;       // [start=2 step=1 stop=5] London session open hour (Eastern time)
+input int    LondonCloseHour        = 11;      // [start=8 step=1 stop=12] London session close hour (Eastern time)
+input int    NewYorkOpenHour        = 9;       // [start=8 step=1 stop=10] New York session open hour (Eastern time)
+input int    NewYorkCloseHour       = 16;      // [start=15 step=1 stop=17] New York session close hour (Eastern time)
 input int    BrokerToLocalOffsetHours = 7;     // [start=0 step=1 stop=12] Hours to add to local time for broker time
 
 // Key level detection parameters
 input int    KeyLevelLookback       = 260;     // [start=100 step=20 stop=500] Bars to analyze for key levels
-input int    MinTouchCount          = 5;       // [start=3 step=1 stop=8] Minimum touches for key level validation
+input int    MinTouchCount          = 3;       // [start=3 step=1 stop=8] Minimum touches for key level validation
 input double TouchZoneSize          = 0.0002;  // [start=0.0001 step=0.0001 stop=0.001] Size of zone around key level in price units
 input double KeyLevelMinDistance    = 0.0019;  // [start=0.0005 step=0.0002 stop=0.003] Minimum distance between key levels
 
 // Strength calculation weights (must sum to 1.0)
-input double TouchScoreWeight       = 0.4;     // [start=0.2 step=0.1 stop=0.6] Weight for number of touches in strength calc
-input double RecencyWeight          = 0.2;     // [start=0.1 step=0.1 stop=0.4] Weight for recency of touches in strength calc
-input double DurationWeight         = 0.4;     // [start=0.2 step=0.1 stop=0.6] Weight for level duration in strength calc
+input double TouchScoreWeight       = 0.5;     // [start=0.2 step=0.1 stop=0.6] Weight for number of touches in strength calc
+input double RecencyWeight          = 0.3;     // [start=0.1 step=0.1 stop=0.4] Weight for recency of touches in strength calc
+input double DurationWeight         = 0.2;     // [start=0.2 step=0.1 stop=0.6] Weight for level duration in strength calc
 
 // Level validation
-input int    MinLevelDurationHours  = 48;      // [start=24 step=12 stop=120] Minimum hours a level must exist
-input double MinStrengthThreshold   = 0.7;     // [start=0.5 step=0.1 stop=0.9] Minimum strength score for valid level
+input int    MinLevelDurationHours  = 24;      // [start=24 step=12 stop=120] Minimum hours a level must exist
+input double MinStrengthThreshold   = 0.6;     // [start=0.5 step=0.1 stop=0.9] Minimum strength score for valid level
 
 // Retest parameters
 input double RetestPipsThreshold    = 15;      // [start=5 step=5 stop=50] Distance in pips to consider price in retest zone
@@ -124,17 +124,26 @@ struct SBreakoutState
    datetime retestStartTime; // store exact time of breakout or retest init
    int      retestStartBar;  // store bar index at breakout or retest init
 };
-SBreakoutState g_breakoutState = {0,0.0,false,false,0,0,0};
+SBreakoutState g_breakoutState = {0,0.0,false,false,0,0};
 
-// Structure to store key level information
+// Define structs at the top of the file, after the input parameters
+struct STouch
+{
+   datetime time;       // When the touch occurred
+   double   price;     // Exact price of the touch
+   double   strength;  // How close to the exact level (0.0-1.0)
+   bool     isValid;   // Whether this is a valid touch or just a spike
+};
+
 struct SKeyLevel
 {
-   double price;           // The price level
-   int    touchCount;      // Number of times price touched this level
-   bool   isResistance;    // Whether this is resistance (true) or support (false)
-   datetime firstTouch;    // Time of first touch
-   datetime lastTouch;     // Time of last touch
-   double  strength;       // Relative strength of the level (based on touches and recency)
+   double    price;           // The price level
+   int       touchCount;      // Number of times price touched this level
+   bool      isResistance;    // Whether this is resistance (true) or support (false)
+   datetime  firstTouch;      // Time of first touch
+   datetime  lastTouch;       // Time of last touch
+   double    strength;        // Relative strength of the level
+   STouch    touches[];      // Dynamic array of touches
 };
 
 // Global variables for key level tracking
@@ -164,18 +173,19 @@ bool IsTradeAllowedInSession()
    if(!RestrictTradingHours)
       return true;
       
-   // Get current broker time
+   // Get current broker time and convert to Eastern time
    datetime now = TimeCurrent();
    MqlDateTime dt;
    TimeToStruct(now, dt);
    
-   int currentHour = dt.hour;
+   // Convert broker time to Eastern time by subtracting the offset
+   int currentHourET = (dt.hour - BrokerToLocalOffsetHours + 24) % 24;
    
-   // Check if we're in London session
-   bool inLondonSession = (currentHour >= LondonOpenHour && currentHour < LondonCloseHour);
+   // Check if we're in London session (using Eastern time)
+   bool inLondonSession = (currentHourET >= LondonOpenHour && currentHourET < LondonCloseHour);
    
-   // Check if we're in New York session
-   bool inNewYorkSession = (currentHour >= NewYorkOpenHour && currentHour < NewYorkCloseHour);
+   // Check if we're in New York session (using Eastern time)
+   bool inNewYorkSession = (currentHourET >= NewYorkOpenHour && currentHourET < NewYorkCloseHour);
    
    // Trading is allowed if we're in either session
    bool isAllowed = inLondonSession || inNewYorkSession;
@@ -183,9 +193,13 @@ bool IsTradeAllowedInSession()
    // Only show debug message once per hour
    if(ShowDebugPrints && !isAllowed && (now - g_lastSessionDebugTime >= 3600))
    {
-      Print("❌ [Session Control] Trading not allowed at hour ", currentHour,
-            " | London: ", LondonOpenHour, "-", LondonCloseHour,
-            " | NY: ", NewYorkOpenHour, "-", NewYorkCloseHour);
+      string localTime = TimeToString(TimeLocal(), TIME_MINUTES);
+      string brokerTime = TimeToString(TimeCurrent(), TIME_MINUTES);
+      Print("ℹ️ [Session Control] Trading not allowed at Eastern hour ", currentHourET,
+            " | Local time: ", localTime,
+            " | Broker time: ", brokerTime,
+            " | London ET: ", LondonOpenHour, "-", LondonCloseHour,
+            " | NY ET: ", NewYorkOpenHour, "-", NewYorkCloseHour);
       g_lastSessionDebugTime = now;
    }
    
@@ -214,20 +228,144 @@ bool IsNearExistingLevel(const double price, const SKeyLevel &levels[], const in
 }
 
 // MODULE 5.2: Key level strength calculation for breakout levels
-double CalculateLevelStrength(const int touchCount, const datetime firstTouch, const datetime lastTouch)
+double CalculateLevelStrength(const SKeyLevel &level)
 {
-   double touchScore = (double)touchCount / MinTouchCount;
+   // Touch score with higher cap and weighted by touch quality
+   double totalTouchStrength = 0;
+   for(int i = 0; i < ArraySize(level.touches); i++)
+      totalTouchStrength += level.touches[i].strength;
    
-   // Recency score: more recent touches get higher weight
+   double touchScore = MathMin(totalTouchStrength / MinTouchCount, 3.0);  // Increased cap to 3x
+   
+   // Recency score with adjusted decay
    datetime now = TimeCurrent();
-   double hoursElapsed = (double)(now - lastTouch) / 3600.0;
-   double recencyScore = MathExp(-hoursElapsed / (KeyLevelLookback * 24.0)); // Exponential decay
+   double hoursElapsed = (double)(now - level.lastTouch) / 3600.0;
+   double recencyScore = MathExp(-hoursElapsed / (KeyLevelLookback * 12.0)); // Slower decay
    
-   // Duration score: longer-lasting levels get higher weight
-   double hoursDuration = (double)(lastTouch - firstTouch) / 3600.0;
-   double durationScore = MathMin(hoursDuration / (KeyLevelLookback * 24.0), 1.0);
+   // Duration score with enhanced scaling
+   double hoursDuration = (double)(level.lastTouch - level.firstTouch) / 3600.0;
+   double normalizedDuration = hoursDuration / (double)MinLevelDurationHours;  // Fix conversion
+   double durationScore = MathMin(1.0 + MathLog(normalizedDuration) / 1.5, 1.5);
    
-   return (touchScore * TouchScoreWeight + recencyScore * RecencyWeight + durationScore * DurationWeight);
+   // Calculate weighted sum
+   double strength = (touchScore * TouchScoreWeight + 
+                     recencyScore * RecencyWeight + 
+                     durationScore * DurationWeight);
+                     
+   if(ShowDebugPrints)
+   {
+      static datetime lastDebugTime = 0;
+      if(now - lastDebugTime >= 60) // Log once per minute
+      {
+         Print("🔍 [Strength Calc] Level=", DoubleToString(level.price, _Digits),
+               " Touches=", level.touchCount,
+               " (Quality=", DoubleToString(totalTouchStrength/level.touchCount, 2), ")",
+               " Touch=", DoubleToString(touchScore * TouchScoreWeight, 4),
+               " Recency=", DoubleToString(recencyScore * RecencyWeight, 4),
+               " Duration=", DoubleToString(durationScore * DurationWeight, 4),
+               " Total=", DoubleToString(strength, 4));
+         lastDebugTime = now;
+      }
+   }
+   
+   return strength;
+}
+
+// Add after the SKeyLevel struct definition
+string GetKeyLevelLogFilename()
+{
+   string symbol = _Symbol;
+   string timeframe = EnumToString(Period());
+   return "KeyLevels_" + symbol + "_" + timeframe + ".csv";
+}
+
+void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason="")
+{
+   if(!ShowDebugPrints) return;
+   
+   static bool headerWritten = false;
+   string filename = GetKeyLevelLogFilename();
+   
+   // Create header if file doesn't exist
+   if(!headerWritten)
+   {
+      int handle = FileOpen(filename, FILE_WRITE|FILE_CSV);
+      if(handle != INVALID_HANDLE)
+      {
+         FileWrite(handle, 
+            "Timestamp",
+            "Price",
+            "Type",
+            "TouchCount",
+            "FirstTouch",
+            "LastTouch",
+            "DurationHours",
+            "TouchScore",
+            "RecencyScore",
+            "DurationScore",
+            "FinalStrength",
+            "IsAccepted",
+            "RejectionReason"
+         );
+         FileClose(handle);
+         headerWritten = true;
+      }
+   }
+   
+   // Append level data
+   int handle = FileOpen(filename, FILE_READ|FILE_WRITE|FILE_CSV);
+   if(handle != INVALID_HANDLE)
+   {
+      // Calculate individual scores using the same formula as CalculateLevelStrength
+      double touchScore = MathMin((double)level.touchCount / MinTouchCount, 2.0);
+      
+      datetime now = TimeCurrent();
+      double hoursElapsed = (double)(now - level.lastTouch) / 3600.0;
+      double recencyScore = MathExp(-hoursElapsed / (KeyLevelLookback * 8.0));
+      
+      double hoursDuration = (double)(now - level.firstTouch) / 3600.0;
+      double normalizedDuration = hoursDuration / (double)MinLevelDurationHours;
+      double durationScore = MathMin(1.0 + MathLog(normalizedDuration) / 2.0, 1.0);
+      
+      // Calculate weighted components for logging
+      double touchComponent = touchScore * TouchScoreWeight;
+      double recencyComponent = recencyScore * RecencyWeight;
+      double durationComponent = durationScore * DurationWeight;
+      
+      // Seek to end of file
+      FileSeek(handle, 0, SEEK_END);
+      
+      FileWrite(handle,
+         TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
+         DoubleToString(level.price, _Digits),
+         level.isResistance ? "Resistance" : "Support",
+         level.touchCount,
+         TimeToString(level.firstTouch, TIME_DATE|TIME_MINUTES),
+         TimeToString(level.lastTouch, TIME_DATE|TIME_MINUTES),
+         DoubleToString(hoursDuration, 2),
+         DoubleToString(touchComponent, 4),
+         DoubleToString(recencyComponent, 4),
+         DoubleToString(durationComponent, 4),
+         DoubleToString(level.strength, 4),
+         isAccepted ? "Yes" : "No",
+         rejectionReason
+      );
+      FileClose(handle);
+      
+      // Print summary to journal with detailed strength components
+      if(ShowDebugPrints)
+      {
+         Print("📊 [Key Level Analysis] ", level.isResistance ? "Resistance" : "Support", " @ ", 
+               DoubleToString(level.price, _Digits),
+               " | Touches: ", level.touchCount,
+               " | Components (T/R/D): ", 
+               DoubleToString(touchComponent, 4), "/",
+               DoubleToString(recencyComponent, 4), "/",
+               DoubleToString(durationComponent, 4),
+               " | Total Strength: ", DoubleToString(level.strength, 4),
+               " | ", isAccepted ? "✅ Accepted" : "❌ Rejected: " + rejectionReason);
+      }
+   }
 }
 
 // MODULE 5.3: Key level detection for breakout analysis
@@ -299,22 +437,50 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
             // Check minimum duration requirement
             double durationHours = (double)(lastTouch - firstTouch) / 3600.0;
             
-            if(touches >= MinTouchCount && durationHours >= MinLevelDurationHours)
+            // Create temporary level for logging
+            SKeyLevel tempLevel;
+            tempLevel.price = level;
+            tempLevel.touchCount = touches;
+            tempLevel.isResistance = true;
+            tempLevel.firstTouch = firstTouch;
+            tempLevel.lastTouch = lastTouch;
+            
+            // Log rejection if minimum touches not met
+            if(touches < MinTouchCount)
             {
-               double strength = CalculateLevelStrength(touches, firstTouch, lastTouch);
-               
-               if(strength >= MinStrengthThreshold)
-               {
-                  ArrayResize(tempLevels, levelCount + 1);
-                  tempLevels[levelCount].price = level;
-                  tempLevels[levelCount].touchCount = touches;
-                  tempLevels[levelCount].isResistance = true;
-                  tempLevels[levelCount].firstTouch = firstTouch;
-                  tempLevels[levelCount].lastTouch = lastTouch;
-                  tempLevels[levelCount].strength = strength;
-                  levelCount++;
-               }
+               LogKeyLevel(tempLevel, false, 
+                  StringFormat("Insufficient touches (%d < %d required)", 
+                  touches, MinTouchCount));
+               continue;
             }
+            
+            // Log rejection if duration too short
+            if(durationHours < MinLevelDurationHours)
+            {
+               LogKeyLevel(tempLevel, false,
+                  StringFormat("Duration too short (%.1f < %d hours required)",
+                  durationHours, MinLevelDurationHours));
+               continue;
+            }
+            
+            double strength = CalculateLevelStrength(tempLevel);
+            tempLevel.strength = strength;
+            
+            // Log rejection if strength too low
+            if(strength < MinStrengthThreshold)
+            {
+               LogKeyLevel(tempLevel, false,
+                  StringFormat("Strength too low (%.4f < %.2f required)",
+                  strength, MinStrengthThreshold));
+               continue;
+            }
+            
+            // Level accepted - log and add to array
+            LogKeyLevel(tempLevel, true);
+            
+            ArrayResize(tempLevels, levelCount + 1);
+            tempLevels[levelCount] = tempLevel;
+            levelCount++;
          }
       }
       
@@ -343,22 +509,50 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
             // Check minimum duration requirement
             double durationHours = (double)(lastTouch - firstTouch) / 3600.0;
             
-            if(touches >= MinTouchCount && durationHours >= MinLevelDurationHours)
+            // Create temporary level for logging
+            SKeyLevel tempLevel;
+            tempLevel.price = level;
+            tempLevel.touchCount = touches;
+            tempLevel.isResistance = false;
+            tempLevel.firstTouch = firstTouch;
+            tempLevel.lastTouch = lastTouch;
+            
+            // Log rejection if minimum touches not met
+            if(touches < MinTouchCount)
             {
-               double strength = CalculateLevelStrength(touches, firstTouch, lastTouch);
-               
-               if(strength >= MinStrengthThreshold)
-               {
-                  ArrayResize(tempLevels, levelCount + 1);
-                  tempLevels[levelCount].price = level;
-                  tempLevels[levelCount].touchCount = touches;
-                  tempLevels[levelCount].isResistance = false;
-                  tempLevels[levelCount].firstTouch = firstTouch;
-                  tempLevels[levelCount].lastTouch = lastTouch;
-                  tempLevels[levelCount].strength = strength;
-                  levelCount++;
-               }
+               LogKeyLevel(tempLevel, false, 
+                  StringFormat("Insufficient touches (%d < %d required)", 
+                  touches, MinTouchCount));
+               continue;
             }
+            
+            // Log rejection if duration too short
+            if(durationHours < MinLevelDurationHours)
+            {
+               LogKeyLevel(tempLevel, false,
+                  StringFormat("Duration too short (%.1f < %d hours required)",
+                  durationHours, MinLevelDurationHours));
+               continue;
+            }
+            
+            double strength = CalculateLevelStrength(tempLevel);
+            tempLevel.strength = strength;
+            
+            // Log rejection if strength too low
+            if(strength < MinStrengthThreshold)
+            {
+               LogKeyLevel(tempLevel, false,
+                  StringFormat("Strength too low (%.4f < %.2f required)",
+                  strength, MinStrengthThreshold));
+               continue;
+            }
+            
+            // Level accepted - log and add to array
+            LogKeyLevel(tempLevel, true);
+            
+            ArrayResize(tempLevels, levelCount + 1);
+            tempLevels[levelCount] = tempLevel;
+            levelCount++;
          }
       }
    }
@@ -1287,9 +1481,9 @@ void SetPivotSLTP(bool isBuy, double currentPrice, double &slPrice, double &tpPr
    {
       double pips = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
       Print("✅ [SetPivotSLTP] Levels set - Method: ", (havePivots ? "Pivot+ATR" : "Pure ATR"),
-            ", SL=", NormalizeDouble(MathAbs(currentPrice - slPrice)/pips, 1), " pips",
-            ", TP=", NormalizeDouble(MathAbs(currentPrice - tpPrice)/pips, 1), " pips",
-            ", Risk:Reward=", NormalizeDouble(MathAbs(currentPrice - tpPrice)/MathAbs(currentPrice - slPrice), 2));
+            " SL=", NormalizeDouble(MathAbs(currentPrice - slPrice)/pips, 1), " pips",
+            " TP=", NormalizeDouble(MathAbs(currentPrice - tpPrice)/pips, 1), " pips",
+            " Risk:Reward=", NormalizeDouble(MathAbs(currentPrice - tpPrice)/MathAbs(currentPrice - slPrice), 2));
    }
 }
 
@@ -1473,4 +1667,98 @@ bool IsHighVolatilityOrBusySession()
    // If we can't get ATR, just use time-based decision
    return isBusyTime;
 }
+
+// Add new touch validation function
+bool IsValidTouch(const double &prices[], const datetime &times[], const int touchIndex, const int lookback=3)
+{
+   if(ArraySize(prices) < lookback)
+      return false;
+      
+   // Check if price stayed near the level for at least a few bars
+   double avgPrice = 0;
+   for(int i = 0; i < lookback; i++)
+   {
+      avgPrice += prices[i];
+   }
+   avgPrice /= lookback;
+   
+   // Calculate price volatility around the touch
+   double variance = 0;
+   for(int i = 0; i < lookback; i++)
+   {
+      variance += MathPow(prices[i] - avgPrice, 2);
+   }
+   variance /= lookback;
+   
+   // Reject if volatility is too high (spike)
+   double stdDev = MathSqrt(variance);
+   if(stdDev > TouchZoneSize * 2)
+      return false;
+      
+   return true;
+}
+
+// Enhanced touch counting function
+void CountTouchesEnhanced(const double &highPrices[], const double &lowPrices[], 
+                         const datetime &times[], const double level,
+                         SKeyLevel &outLevel)
+{
+   if(ArraySize(highPrices) == 0 || ArraySize(lowPrices) == 0 || ArraySize(times) == 0)
+      return;
+      
+   ArrayResize(outLevel.touches, 0);
+   int touchCount = 0;
+   datetime firstTouch = 0;
+   datetime lastTouch = 0;
+   
+   int maxBars = MathMin(KeyLevelLookback, ArraySize(highPrices));
+   
+   for(int j = 0; j < maxBars; j++)
+   {
+      // Calculate distance to level
+      double highDist = MathAbs(highPrices[j] - level);
+      double lowDist = MathAbs(lowPrices[j] - level);
+      double minDist = MathMin(highDist, lowDist);
+      
+      if(minDist <= TouchZoneSize)
+      {
+         // Determine which price to use
+         double price = (highDist < lowDist) ? highPrices[j] : lowPrices[j];
+         double priceArray[];
+         int startIdx = MathMax(0, j - 3);  // Look back 3 bars for validation
+         int copySize = MathMin(3, j + 1);   // Make sure we don't exceed array bounds
+         
+         ArrayResize(priceArray, copySize);
+         for(int k = 0; k < copySize; k++)
+         {
+            priceArray[k] = (highDist < lowDist) ? highPrices[startIdx + k] : lowPrices[startIdx + k];
+         }
+         
+         // Validate this touch
+         if(IsValidTouch(priceArray, times, copySize - 1))
+         {
+            // Calculate touch strength based on proximity
+            double touchStrength = 1.0 - (minDist / TouchZoneSize);
+            
+            // Add to touches array
+            int size = ArraySize(outLevel.touches);
+            ArrayResize(outLevel.touches, size + 1);
+            outLevel.touches[size].time = times[j];
+            outLevel.touches[size].price = price;
+            outLevel.touches[size].strength = touchStrength;
+            outLevel.touches[size].isValid = true;
+            
+            touchCount++;
+            
+            if(firstTouch == 0 || times[j] < firstTouch) firstTouch = times[j];
+            if(times[j] > lastTouch) lastTouch = times[j];
+         }
+      }
+   }
+   
+   outLevel.touchCount = touchCount;
+   outLevel.firstTouch = firstTouch;
+   outLevel.lastTouch = lastTouch;
+}
+
 //+------------------------------------------------------------------+
