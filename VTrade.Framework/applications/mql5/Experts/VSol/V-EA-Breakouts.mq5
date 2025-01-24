@@ -10,109 +10,16 @@
 #include <Trade\Trade.mqh>
 CTrade trade;
 
-// -------------------------------------------------------------------
-// DAILY PIVOT LOGIC
-// -------------------------------------------------------------------
-/*
-   These two helper functions retrieve the last closed daily bar
-   to compute pivot points, then apply them as SL/TP in your
-   order-management logic (M8.1.a, etc.).
-*/
-
-// 1) Helper function: GetDailyPivotPoints()
-bool GetDailyPivotPoints(double &pivot, double &r1, double &r2, double &s1, double &s2)
-{
-   // Make sure we have enough data
-   MqlRates dailyRates[];
-   ArraySetAsSeries(dailyRates, true);
-
-   // We copy 2 bars from the daily timeframe: [0] is current day, [1] is the last closed day
-   if(CopyRates(_Symbol, PERIOD_D1, 0, 2, dailyRates) < 2)
-   {
-      Print("❌ [GetDailyPivotPoints] Unable to copy daily bars. Error=", GetLastError());
-      return false;
-   }
-
-   // The bar at index [1] is the most recently closed daily bar
-   double prevDayHigh  = dailyRates[1].high;
-   double prevDayLow   = dailyRates[1].low;
-   double prevDayClose = dailyRates[1].close;
-
-   // Standard pivot point formulas:
-   pivot = (prevDayHigh + prevDayLow + prevDayClose) / 3.0;
-   r1    = 2.0 * pivot - prevDayLow;
-   s1    = 2.0 * pivot - prevDayHigh;
-   r2    = pivot + (r1 - s1);
-   s2    = pivot - (r1 - s1);
-
-   return true;
-}
-
-// 2) Main function to apply pivot points for SL/TP
-bool ApplyDailyPivotSLTP(bool isBullish, double &priceEntry, double &priceSL, double &priceTP)
-{
-   double pivot=0, r1=0, r2=0, s1=0, s2=0;
-   if(!GetDailyPivotPoints(pivot, r1, r2, s1, s2))
-   {
-      Print("❌ [ApplyDailyPivotSLTP] Unable to compute daily pivots. Using defaults.");
-      return false;
-   }
-
-   // Decide which pivot levels to use
-   bool useWiderLevels = IsHighVolatilityOrBusySession(); // from Step 2
-
-   if(isBullish)
-   {
-      if(useWiderLevels)
-      {
-         // Wider stops in high-volatility sessions
-         priceSL = MathMin(s1, s2); // Could use s2 if you prefer the very wide level
-         priceTP = r2;             // Target r2 for bigger reward
-      }
-      else
-      {
-         // Normal or quieter session
-         priceSL = s1;            
-         priceTP = r1;            
-      }
-   }
-   else // Bearish
-   {
-      if(useWiderLevels)
-      {
-         priceSL = MathMax(r1, r2);
-         priceTP = s2;
-      }
-      else
-      {
-         priceSL = r1;
-         priceTP = s1;
-      }
-   }
-
-   // Safety checks
-   double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-
-   if(isBullish)
-   {
-      if(priceSL >= priceEntry)
-         priceSL = priceEntry - (50 * pointSize);
-      if(priceTP <= priceEntry)
-         priceTP = priceEntry + (100 * pointSize);
-   }
-   else
-   {
-      if(priceSL <= priceEntry)
-         priceSL = priceEntry + (50 * pointSize);
-      if(priceTP >= priceEntry)
-         priceTP = priceEntry - (100 * pointSize);
-   }
-
-   return true;
-}
 
 //==================================================================
-// MODULE 1: CONFIGURATION AND INPUTS
+// MODULE 1: CONFIGURATION AND INITIALIZATION
+// Purpose: Core EA settings, input parameters, and strategy configuration
+// Components:
+// - Strategy type and core behavior settings
+// - Breakout detection and validation parameters
+// - Risk management and position sizing
+// - Session control and trading hours
+// - Key level detection and strength calculation
 //==================================================================
 
 // Strategy type selection
@@ -126,59 +33,65 @@ enum ENUM_STRATEGY_TYPE
 input ENUM_STRATEGY_TYPE StrategyType = STRAT_BREAKOUT_RETEST;
 input bool   UseVolumeFilter        = true;    // Enable volume confirmation for breakouts 
 input bool   UseMinATRDistance      = true;    // Use ATR for minimum breakout distance 
-input bool   UseRetest             = true;   // Wait for price to retest breakout level 
-input bool   ShowDebugPrints       = true;    // Show detailed debug information 
+input bool   UseRetest             = true;     // Wait for price to retest breakout level 
+input bool   ShowDebugPrints       = true;     // Show detailed debug information 
 input bool   UseCandlestickConfirmation = false; // Use candlestick patterns for retest confirmation 
 
 // Breakout parameters
-input int    BreakoutLookback       = 15;      // Number of bars to look back for breakout [start=10 step=5 stop=50]
-input int    ATRPeriod              = 13;      // Period for ATR calculation [start=5 step=1 stop=30]
-input double VolumeFactor           = 2.0;     // Required volume multiple vs average [start=1.0 step=0.1 stop=2.0]
-input double ATRMultiplier          = 0.1;     // ATR multiplier for breakout distance [start=0.1 step=0.1 stop=1.0]
-input double RetestATRMultiplier    = 0.4;     // ATR multiplier for retest zone [start=0.1 step=0.1 stop=0.5]
-input int    MaxRetestBars          = 5;       // Maximum bars to wait for retest [start=3 step=1 stop=20]
-input int    MaxRetestMinutes       = 180;     // Maximum minutes to wait for retest [start=60 step=60 stop=480]
+input int    BreakoutLookback       = 15;      // [start=10 step=5 stop=50] Number of bars to look back for breakout
+input int    ATRPeriod              = 13;      // [start=5 step=1 stop=30] Period for ATR calculation
+input double VolumeFactor           = 2.0;     // [start=1.0 step=0.1 stop=5.0] Required volume multiple vs average
+input double ATRMultiplier          = 0.1;     // [start=0.1 step=0.1 stop=1.0] ATR multiplier for breakout distance
+input double RetestATRMultiplier    = 0.4;     // [start=0.1 step=0.1 stop=1.0] ATR multiplier for retest zone
+input int    MaxRetestBars          = 5;       // [start=3 step=1 stop=20] Maximum bars to wait for retest
+input int    MaxRetestMinutes       = 180;     // [start=60 step=60 stop=480] Maximum minutes to wait for retest
 
 // Risk management
-input double SLMultiplier           = 2.5;     // Stop loss multiplier vs ATR [start=1.0 step=0.5 stop=6.0]
-input double TPMultiplier           = 6;     // Take profit multiplier vs ATR [start=1.0 step=0.5 stop=6.0]
-input double RiskPercentage         = 5.0;     // Account risk per trade in percent [start=1.0 step=1.0 stop=5.0]
+input double SLMultiplier           = 2.5;     // [start=1.0 step=0.5 stop=6.0] Stop loss multiplier vs ATR
+input double TPMultiplier           = 6.0;     // [start=2.0 step=0.5 stop=8.0] Take profit multiplier vs ATR
+input double RiskPercentage         = 5.0;     // [start=0.5 step=0.5 stop=5.0] Account risk per trade in percent
 
 // Session control
-input bool   RestrictTradingHours   = true;   // Enable trading hour restrictions 
-input int    LondonOpenHour         = 2;       // London session open hour (broker time) [start=0 step=1 stop=5]
-input int    LondonCloseHour        = 10;      // London session close hour (broker time) [start=6 step=1 stop=14]
-input int    NewYorkOpenHour        = 7;       // New York session open hour (broker time) [start=7 step=1 stop=10]
-input int    NewYorkCloseHour       = 16;      // New York session close hour (broker time) [start=13 step=1 stop=18]
-input int    BrokerToLocalOffsetHours = 7;     // Hours to add to local time for broker time [start=0 step=1 stop=12]
+input bool   RestrictTradingHours   = true;    // Enable trading hour restrictions 
+input int    LondonOpenHour         = 2;       // [start=0 step=1 stop=5] London session open hour (broker time)
+input int    LondonCloseHour        = 10;      // [start=6 step=1 stop=14] London session close hour (broker time)
+input int    NewYorkOpenHour        = 7;       // [start=7 step=1 stop=10] New York session open hour (broker time)
+input int    NewYorkCloseHour       = 16;      // [start=13 step=1 stop=18] New York session close hour (broker time)
+input int    BrokerToLocalOffsetHours = 7;     // [start=0 step=1 stop=12] Hours to add to local time for broker time
 
 // Key level detection parameters
-input int    KeyLevelLookback       = 260;      // Bars to analyze for key levels [start=50 step=10 stop=300]
-input int    MinTouchCount          = 5;        // Minimum touches for key level validation [start=2 step=1 stop=6]
-input double TouchZoneSize          = 0.0002;   // Size of zone around key level in price units [start=0.0001 step=0.0001 stop=0.001]
-input double KeyLevelMinDistance    = 0.0019;   // Minimum distance between key levels [start=0.0002 step=0.0001 stop=0.002]
+input int    KeyLevelLookback       = 260;     // [start=100 step=20 stop=500] Bars to analyze for key levels
+input int    MinTouchCount          = 5;       // [start=3 step=1 stop=8] Minimum touches for key level validation
+input double TouchZoneSize          = 0.0002;  // [start=0.0001 step=0.0001 stop=0.001] Size of zone around key level in price units
+input double KeyLevelMinDistance    = 0.0019;  // [start=0.0005 step=0.0002 stop=0.003] Minimum distance between key levels
 
 // Strength calculation weights (must sum to 1.0)
-input double TouchScoreWeight       = 0.4;      // Weight for number of touches in strength calc [start=0.3 step=0.1 stop=0.7]
-input double RecencyWeight            = 0.2;      // Weight for recency of touches in strength calc [start=0.2 step=0.1 stop=0.5]
-input double DurationWeight           = 0.4;      // Weight for level duration in strength calc [start=0.1 step=0.1 stop=0.4]
+input double TouchScoreWeight       = 0.4;     // [start=0.2 step=0.1 stop=0.6] Weight for number of touches in strength calc
+input double RecencyWeight          = 0.2;     // [start=0.1 step=0.1 stop=0.4] Weight for recency of touches in strength calc
+input double DurationWeight         = 0.4;     // [start=0.2 step=0.1 stop=0.6] Weight for level duration in strength calc
 
 // Level validation
-input int    MinLevelDurationHours    = 48;       // Minimum hours a level must exist [start=12 step=12 stop=96]
-input double MinStrengthThreshold       = 0.7;      // Minimum strength score for valid level [start=0.4 step=0.1 stop=0.8]
+input int    MinLevelDurationHours  = 48;      // [start=24 step=12 stop=120] Minimum hours a level must exist
+input double MinStrengthThreshold   = 0.7;     // [start=0.5 step=0.1 stop=0.9] Minimum strength score for valid level
 
-// Example input for retest check threshold (in pips) & timeframe for candlestick pattern
-input double RetestPipsThreshold        = 15;       // Distance in pips to consider price in retest zone [start=5 step=5 stop=30]
+// Retest parameters
+input double RetestPipsThreshold    = 15;      // [start=5 step=5 stop=50] Distance in pips to consider price in retest zone
 input ENUM_TIMEFRAMES RetestTimeframe = PERIOD_M15; // Timeframe for candlestick pattern analysis
 
-// Volatility threshold (e.g., ATR above this means "high-volatility")
-input double ATRVolatilityThreshold = 0.0010;
-// Or, a time-based threshold for day/evening sessions
-input int HighVolatilityStartHour = 7;
-input int HighVolatilityEndHour   = 16;
+// Volatility thresholds
+input double ATRVolatilityThreshold = 0.0010;  // [start=0.0005 step=0.0001 stop=0.002] ATR threshold for high volatility
+input int    HighVolatilityStartHour = 7;      // [start=0 step=1 stop=12] Start hour of high volatility period
+input int    HighVolatilityEndHour   = 16;     // [start=12 step=1 stop=23] End hour of high volatility period
 
 //==================================================================
 // MODULE 2: GLOBAL STATE MANAGEMENT
+// Purpose: Maintains EA state variables and runtime tracking
+// Components:
+// - Trade state tracking (positions, breakouts)
+// - Technical indicator handles
+// - Multi-entry filter state
+// - Breakout zone tracking
+// - Session and volatility state
 //==================================================================
 datetime      g_lastBarTime      = 0;
 bool          g_hasPositionOpen  = false;
@@ -233,17 +146,15 @@ datetime g_lastSessionDebugTime = 0;
 
 // Add these with the other global variables at the top
 datetime g_lastLockoutDebugTime = 0;
-double g_lastReportedDistance = 0.0;
-
-//==================================================================
-// MODULE 3: STRATEGY CONSTANTS
-//==================================================================
-const double VOLUME_THRESH   = 1.1;  
-const double BO_ATR_MULT     = 0.3;  
-const double RT_ATR_MULT     = 0.2;  
+double g_lastReportedDistance = 0.0; 
 
 //==================================================================
 // MODULE 4: SESSION CONTROL
+// Purpose: Trading session validation and time-based filters
+// Components:
+// - Session time validation
+// - Trading hour restrictions
+// - Market activity monitoring
 //==================================================================
 
 // MODULE 4.1: Check if trading is allowed in current session
@@ -283,6 +194,12 @@ bool IsTradeAllowedInSession()
 
 //==================================================================
 // MODULE 5: BREAKOUT VALIDATION AND DETECTION
+// Purpose: Core breakout strategy implementation
+// Components:
+// - Key level proximity checking
+// - Level strength calculation
+// - Breakout pattern detection
+// - Volume and ATR validation
 //==================================================================
 
 // MODULE 5.1: Key level proximity check for breakout levels
@@ -719,6 +636,12 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
 
 //==================================================================
 // MODULE 6: RETEST VALIDATION
+// Purpose: Validates price retest of breakout levels
+// Components:
+// - Candlestick pattern analysis
+// - Retest zone validation
+// - Time-based retest constraints
+// - Retest confirmation logic
 //==================================================================
 
 // MODULE 6.1: Candlestick pattern check for retest validation
@@ -788,43 +711,61 @@ bool IsPriceInRetestZone()
       return false;
       
    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);  // Use bid for general price reference
-   double atrBuf[];
-   ArraySetAsSeries(atrBuf, true);
-   
-   if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) <= 0)
-   {
-      if(ShowDebugPrints)
-         Print("⚠️ [IsPriceInRetestZone] Failed to get ATR value. Using default zone size.");
-      return false;
-   }
-   
-   double zoneSize = atrBuf[0] * RetestATRMultiplier;
    double breakoutLevel = g_breakoutState.breakoutLevel;
+   double zoneSize = 0.0;
    
-   // For bullish breakout, price should come down to test the breakout level from above
-   if(g_breakoutState.isBullish)
+   // Get ATR-based zone size
+   if(g_handleATR != INVALID_HANDLE)
    {
-      bool inZone = (currentPrice >= breakoutLevel - zoneSize && 
-                     currentPrice <= breakoutLevel + zoneSize);
-                     
-      if(ShowDebugPrints && inZone)
-         Print("✅ [IsPriceInRetestZone] Price in bullish retest zone. Price=", currentPrice,
-               " Zone=", breakoutLevel-zoneSize, " to ", breakoutLevel+zoneSize);
-               
-      return inZone;
+      double atrBuf[];
+      ArraySetAsSeries(atrBuf, true);
+      if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) > 0)
+      {
+         zoneSize = atrBuf[0] * RetestATRMultiplier;
+      }
    }
-   // For bearish breakout, price should come up to test the breakout level from below
-   else
+   
+   // If ATR is not available or too small, use RetestPipsThreshold
+   double pipsZoneSize = RetestPipsThreshold * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(zoneSize < pipsZoneSize)
    {
-      bool inZone = (currentPrice >= breakoutLevel - zoneSize && 
-                     currentPrice <= breakoutLevel + zoneSize);
-                     
-      if(ShowDebugPrints && inZone)
-         Print("✅ [IsPriceInRetestZone] Price in bearish retest zone. Price=", currentPrice,
-               " Zone=", breakoutLevel-zoneSize, " to ", breakoutLevel+zoneSize);
-               
-      return inZone;
+      zoneSize = pipsZoneSize;
+      if(ShowDebugPrints)
+         Print("ℹ️ [IsPriceInRetestZone] Using pips-based zone size: ", RetestPipsThreshold, " pips");
    }
+   
+   // Calculate if price is in zone
+   bool inZone = (currentPrice >= breakoutLevel - zoneSize && 
+                  currentPrice <= breakoutLevel + zoneSize);
+                  
+   if(ShowDebugPrints && inZone)
+   {
+      Print("✅ [IsPriceInRetestZone] Price in ", (g_breakoutState.isBullish ? "bullish" : "bearish"),
+            " retest zone. Price=", currentPrice,
+            " Zone=", breakoutLevel-zoneSize, " to ", breakoutLevel+zoneSize,
+            " (", NormalizeDouble(zoneSize/SymbolInfoDouble(_Symbol, SYMBOL_POINT), 1), " pips)");
+   }
+   
+   return inZone;
+}
+
+// Helper function to check if we have an open position
+bool HasOpenPosition()
+{
+   if(PositionsTotal() > 0)
+   {
+      for(int i = 0; i < PositionsTotal(); i++)
+      {
+         if(PositionGetSymbol(i) == _Symbol && 
+            PositionGetInteger(POSITION_MAGIC) == g_magicNumber)
+         {
+            g_hasPositionOpen = true;  // Update global state
+            return true;
+         }
+      }
+   }
+   g_hasPositionOpen = false;  // Update global state
+   return false;
 }
 
 // MODULE 6.2: Retest validation and tracking
@@ -842,98 +783,101 @@ bool ValidateRetestConditions()
       return true;
    }
 
-   // CRITICAL: Check if we already have an open position
-   if(PositionsTotal() > 0)
+   // Check for existing position
+   if(HasOpenPosition())
    {
-      for(int i = 0; i < PositionsTotal(); i++)
-      {
-         if(PositionGetSymbol(i) == _Symbol && 
-            PositionGetInteger(POSITION_MAGIC) == g_magicNumber)
-         {
-            if(ShowDebugPrints)
-               Print("❌ [M6.2.a Retest Validation] Position already exists for this symbol and magic number");
-            g_breakoutState.awaitingRetest = false;  // Reset retest state
-            return false;
-         }
-      }
-   }
-
-   // 1) Compute how many minutes have passed since we started awaiting the retest
-   double elapsedSeconds = (TimeCurrent() - g_breakoutState.retestStartTime);
-   double elapsedMinutes = elapsedSeconds / 60.0;
-
-   // 2) Determine how many bars have elapsed
-   int currentBar      = iBarShift(_Symbol, _Period, TimeCurrent(), false);
-   int retestStartBar  = g_breakoutState.retestStartBar;
-   int barsElapsed     = retestStartBar - currentBar;
-
-   // Check if the bar count or time limit has been exceeded
-   if(elapsedMinutes >= MaxRetestMinutes || barsElapsed >= MaxRetestBars)
-   {
-      PrintFormat("❌ [M6.2.b Retest Validation] Retest timed out after %.2f minutes and %d bars. Canceling retest.",
-                  elapsedMinutes, barsElapsed);
-      g_breakoutState.awaitingRetest = false;
+      if(ShowDebugPrints)
+         Print("❌ [M6.2.a Retest Validation] Position already exists");
+      g_breakoutState.awaitingRetest = false;  // Reset retest state
       return false;
    }
 
-   // 3) Check if the price is "in zone"
-   bool inRetestZone = IsPriceInRetestZone();
-   if(inRetestZone)
+   // Rest of the existing validation logic...
+   double elapsedSeconds = (TimeCurrent() - g_breakoutState.retestStartTime);
+   double elapsedMinutes = elapsedSeconds / 60.0;
+   
+   int currentBar = iBarShift(_Symbol, _Period, TimeCurrent(), false);
+   int barsElapsed = g_breakoutState.retestStartBar - currentBar;
+   
+   if(elapsedMinutes >= MaxRetestMinutes || barsElapsed >= MaxRetestBars)
    {
-      PrintFormat(
-         "✅ [M6.2.c Retest Validation] Price in retest zone | Direction: %s",
-         g_breakoutState.isBullish ? "Bullish" : "Bearish"
-      );
-      return true;
+      if(ShowDebugPrints)
+         PrintFormat("❌ [M6.2.b Retest Validation] Retest timed out after %.2f minutes and %d bars",
+                    elapsedMinutes, barsElapsed);
+      g_breakoutState.awaitingRetest = false;
+      return false;
    }
-
-   // 4) Retest so far not timed out and not confirmed
-   return false;
+   
+   return IsPriceInRetestZone();
 }
 
 //==================================================================
 // MODULE 7: RISK MANAGEMENT
+// Purpose: Position sizing and risk control
+// Components:
+// - Dynamic lot size calculation
+// - Account risk percentage handling
+// - Broker-specific adjustments
 //==================================================================
 
 // MODULE 7.1: Position sizing calculation
 double CalculateLotSize(double stopLossPrice, double entryPrice, double riskPercent)
 {
-   // 1. Determine the account balance and risk in currency terms.
+   // 1. Determine the account balance and risk in currency terms
    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double riskAmount     = accountBalance * (riskPercent / 100.0); // e.g. 5% of balance
+   double riskAmount = accountBalance * (riskPercent / 100.0);
 
-   // 2. How many pips away is the SL? (Simplified for 5-digit brokers.)
-   double pipValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-   double stopDistancePoints = MathAbs(entryPrice - stopLossPrice) / _Point; // in points
-   // For a 5-digit pair, 1 pip = 10 points
+   // 2. Calculate stop loss distance in points
+   double stopDistancePoints = MathAbs(entryPrice - stopLossPrice) / _Point;
+   
+   // 3. Get tick value in account currency
+   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   if(tickValue == 0)
+   {
+      if(ShowDebugPrints)
+         Print("❌ [CalculateLotSize] Error: Zero tick value");
+      return 0.01; // Return minimum lot as fallback
+   }
 
-   // 3. If the trade goes straight to SL, how much we lose per lot?
-   //    lossPerLot = stopDistanceInPoints * pointValueFor1Lot
-   //    pointValueFor1Lot = pipValue * (1 lot = 100,000 for Forex) / (_Point * 10) if needed
-   // But in MQL5, pipValue typically includes the standard-lot factor, so let's keep it simpler:
-   double potentialLossPerLot = stopDistancePoints * pipValue;
+   // 4. Calculate potential loss per lot
+   double potentialLossPerLot = stopDistancePoints * tickValue;
+   if(potentialLossPerLot == 0)
+   {
+      if(ShowDebugPrints)
+         Print("❌ [CalculateLotSize] Error: Zero loss per lot calculation");
+      return 0.01;
+   }
 
-   // 4. Calculate how many lots correspond to the maximum risk.
-   //    riskAmount / potentialLossPerLot = approximate number of full lots
+   // 5. Calculate lots based on risk amount
    double lots = riskAmount / potentialLossPerLot;
 
-   // 5. Adjust for broker's min/max lot constraints and step.
-   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   // 6. Adjust for broker's constraints
+   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
-   // Enforce boundaries
-   if(lots < minLot) lots = minLot;
-   if(lots > maxLot) lots = maxLot;
-
-   // Round to the nearest valid step
+   // Round down to nearest valid lot step
    lots = MathFloor(lots / lotStep) * lotStep;
+
+   // Enforce boundaries
+   lots = MathMax(minLot, MathMin(maxLot, lots));
+
+   if(ShowDebugPrints)
+      Print("✅ [CalculateLotSize] Risk=", riskPercent, "%, Balance=", accountBalance,
+            ", Stop Distance=", stopDistancePoints, " points",
+            ", Calculated Lots=", lots);
 
    return lots;
 }
 
 //==================================================================
 // MODULE 8: ORDER MANAGEMENT
+// Purpose: Trade execution and order handling
+// Components:
+// - Trade placement with SL/TP
+// - Pivot-based SL/TP calculation
+// - Order validation and safety checks
+// - Multi-entry filter logic
 //==================================================================
 
 // MODULE 8.1: Trade execution and order management
@@ -1049,8 +993,116 @@ bool PlaceTrade(bool isBullish, double entryPrice, double slPrice, double tpPric
    return true;
 }
 
+
+// -------------------------------------------------------------------
+// DAILY PIVOT LOGIC
+// -------------------------------------------------------------------
+/*
+   These two helper functions retrieve the last closed daily bar
+   to compute pivot points, then apply them as SL/TP in your
+   order-management logic (M8.1.a, etc.).
+*/
+
+// 1) Helper function: GetDailyPivotPoints()
+bool GetDailyPivotPoints(double &pivot, double &r1, double &r2, double &s1, double &s2)
+{
+   // Make sure we have enough data
+   MqlRates dailyRates[];
+   ArraySetAsSeries(dailyRates, true);
+
+   // We copy 2 bars from the daily timeframe: [0] is current day, [1] is the last closed day
+   if(CopyRates(_Symbol, PERIOD_D1, 0, 2, dailyRates) < 2)
+   {
+      Print("❌ [GetDailyPivotPoints] Unable to copy daily bars. Error=", GetLastError());
+      return false;
+   }
+
+   // The bar at index [1] is the most recently closed daily bar
+   double prevDayHigh  = dailyRates[1].high;
+   double prevDayLow   = dailyRates[1].low;
+   double prevDayClose = dailyRates[1].close;
+
+   // Standard pivot point formulas:
+   pivot = (prevDayHigh + prevDayLow + prevDayClose) / 3.0;
+   r1    = 2.0 * pivot - prevDayLow;
+   s1    = 2.0 * pivot - prevDayHigh;
+   r2    = pivot + (r1 - s1);
+   s2    = pivot - (r1 - s1);
+
+   return true;
+}
+
+// 2) Main function to apply pivot points for SL/TP
+bool ApplyDailyPivotSLTP(bool isBullish, double &priceEntry, double &priceSL, double &priceTP)
+{
+   double pivot=0, r1=0, r2=0, s1=0, s2=0;
+   if(!GetDailyPivotPoints(pivot, r1, r2, s1, s2))
+   {
+      Print("❌ [ApplyDailyPivotSLTP] Unable to compute daily pivots. Using defaults.");
+      return false;
+   }
+
+   // Decide which pivot levels to use
+   bool useWiderLevels = IsHighVolatilityOrBusySession(); // from Step 2
+
+   if(isBullish)
+   {
+      if(useWiderLevels)
+      {
+         // Wider stops in high-volatility sessions
+         priceSL = MathMin(s1, s2); // Could use s2 if you prefer the very wide level
+         priceTP = r2;             // Target r2 for bigger reward
+      }
+      else
+      {
+         // Normal or quieter session
+         priceSL = s1;            
+         priceTP = r1;            
+      }
+   }
+   else // Bearish
+   {
+      if(useWiderLevels)
+      {
+         priceSL = MathMax(r1, r2);
+         priceTP = s2;
+      }
+      else
+      {
+         priceSL = r1;
+         priceTP = s1;
+      }
+   }
+
+   // Safety checks
+   double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
+   if(isBullish)
+   {
+      if(priceSL >= priceEntry)
+         priceSL = priceEntry - (50 * pointSize);
+      if(priceTP <= priceEntry)
+         priceTP = priceEntry + (100 * pointSize);
+   }
+   else
+   {
+      if(priceSL <= priceEntry)
+         priceSL = priceEntry + (50 * pointSize);
+      if(priceTP >= priceEntry)
+         priceTP = priceEntry - (100 * pointSize);
+   }
+
+   return true;
+}
+
 //==================================================================
 // MODULE 9: STRATEGY EXECUTION
+// Purpose: Main strategy logic and trade execution flow
+// Components:
+// - Daily pivot calculation
+// - Breakout-retest execution
+// - Position management
+// - Strategy state transitions
 //==================================================================
 
 // MODULE 9.1: Calculate daily pivot points
@@ -1085,111 +1137,113 @@ void CalculateDailyPivots(string symbol,
 // MODULE 9.2: Set pivot-based SL/TP
 void SetPivotSLTP(bool isBuy, double currentPrice, double &slPrice, double &tpPrice)
 {
-   double pivot, r1, r2, s1, s2;
-   CalculateDailyPivots(_Symbol, pivot, r1, r2, s1, s2);
+   // Initialize with safe defaults
+   slPrice = 0.0;
+   tpPrice = 0.0;
    
-   // If we fail to get pivot data or pivot == 0, skip or fallback
-   if(pivot <= 0.0)
+   // Get ATR value first as we need it for both methods
+   double atrValue = 0.0;
+   if(g_handleATR != INVALID_HANDLE)
    {
-      if(ShowDebugPrints)
-         Print("⚠️ [SetPivotSLTP] Invalid pivot data. Setting default fallback SL/TP.");
-      
-      // Use ATR-based fallback if available
-      double fallbackDist = 30.0 * SymbolInfoDouble(_Symbol, SYMBOL_POINT); // Default fallback
-      
-      if(g_handleATR != INVALID_HANDLE)
+      double atrBuf[];
+      ArraySetAsSeries(atrBuf, true);
+      if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) > 0)
       {
-         double atrBuf[];
-         ArraySetAsSeries(atrBuf, true);
-         if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) > 0)
-         {
-            fallbackDist = atrBuf[0] * ATRMultiplier;
-         }
+         atrValue = atrBuf[0];
       }
-      
-      if(isBuy)
-      {
-         slPrice = currentPrice - fallbackDist;
-         tpPrice = currentPrice + fallbackDist;
-      }
-      else
-      {
-         slPrice = currentPrice + fallbackDist;
-         tpPrice = currentPrice - fallbackDist;
-      }
-      return;
    }
 
-   // For a bullish breakout
+   // If we can't get ATR, use a fallback based on point size
+   if(atrValue <= 0.0)
+   {
+      atrValue = 50 * SymbolInfoDouble(_Symbol, SYMBOL_POINT); // Default to 50 points
+      if(ShowDebugPrints)
+         Print("⚠️ [SetPivotSLTP] Using fallback ATR value of ", atrValue);
+   }
+
+   // Calculate ATR-based distances
+   double atrStopDistance = atrValue * SLMultiplier;
+   double atrTpDistance = atrValue * TPMultiplier;
+
+   // Get pivot points
+   double pivot, r1, r2, s1, s2;
+   bool havePivots = false;
+   
+   CalculateDailyPivots(_Symbol, pivot, r1, r2, s1, s2);
+   havePivots = (pivot > 0.0);
+
+   // Set SL/TP based on direction
    if(isBuy)
    {
-      // For bullish trades:
-      // - SL: Use closer of S1 or (current price - ATR)
-      // - TP: Use further of R2 or (current price + 2*ATR)
-      double atrStop = 0.0;
-      if(g_handleATR != INVALID_HANDLE)
+      if(havePivots)
       {
-         double atrBuf[];
-         ArraySetAsSeries(atrBuf, true);
-         if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) > 0)
-         {
-            atrStop = atrBuf[0];
-         }
-      }
-      
-      // If ATR is available, use it to potentially tighten the stop
-      if(atrStop > 0)
-      {
-         slPrice = MathMax(MathMin(pivot, s1), currentPrice - atrStop);
-         tpPrice = MathMax(r2, currentPrice + (2 * atrStop));  // 1:2 minimum risk:reward
+         // Use the tighter of pivot-based or ATR-based SL
+         slPrice = MathMax(MathMin(s1, currentPrice - atrStopDistance), 
+                          currentPrice - (2 * atrStopDistance)); // Maximum 2x ATR stop
+         
+         // Use the further of pivot-based or ATR-based TP
+         tpPrice = MathMax(r2, currentPrice + atrTpDistance);
       }
       else
       {
-         slPrice = MathMin(pivot, s1);
-         tpPrice = r2;
+         // Pure ATR-based levels
+         slPrice = currentPrice - atrStopDistance;
+         tpPrice = currentPrice + atrTpDistance;
       }
    }
    else
    {
-      // For bearish trades:
-      // - SL: Use closer of R1 or (current price + ATR)
-      // - TP: Use further of S2 or (current price - 2*ATR)
-      double atrStop = 0.0;
-      if(g_handleATR != INVALID_HANDLE)
+      if(havePivots)
       {
-         double atrBuf[];
-         ArraySetAsSeries(atrBuf, true);
-         if(CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) > 0)
-         {
-            atrStop = atrBuf[0];
-         }
-      }
-      
-      // If ATR is available, use it to potentially tighten the stop
-      if(atrStop > 0)
-      {
-         slPrice = MathMin(MathMax(pivot, r1), currentPrice + atrStop);
-         tpPrice = MathMin(s2, currentPrice - (2 * atrStop));  // 1:2 minimum risk:reward
+         // Use the tighter of pivot-based or ATR-based SL
+         slPrice = MathMin(MathMax(r1, currentPrice + atrStopDistance),
+                          currentPrice + (2 * atrStopDistance)); // Maximum 2x ATR stop
+         
+         // Use the further of pivot-based or ATR-based TP
+         tpPrice = MathMin(s2, currentPrice - atrTpDistance);
       }
       else
       {
-         slPrice = MathMax(pivot, r1);
-         tpPrice = s2;
+         // Pure ATR-based levels
+         slPrice = currentPrice + atrStopDistance;
+         tpPrice = currentPrice - atrTpDistance;
       }
    }
    
-   // Defensive check: if we ended up with negative or near-zero SL/TP, clamp or log
-   if(slPrice <= 0.0)
+   // Ensure minimum broker distance requirements
+   double minDistance = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * 
+                       SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   
+   if(isBuy)
    {
-      if(ShowDebugPrints)
-         Print("⚠️ [SetPivotSLTP] SL is invalid or <= 0.0. Clamping to currentPrice.");
-      slPrice = currentPrice;
+      if(currentPrice - slPrice < minDistance)
+         slPrice = currentPrice - minDistance;
+      if(tpPrice - currentPrice < minDistance)
+         tpPrice = currentPrice + minDistance;
    }
-   if(tpPrice <= 0.0)
+   else
+   {
+      if(slPrice - currentPrice < minDistance)
+         slPrice = currentPrice + minDistance;
+      if(currentPrice - tpPrice < minDistance)
+         tpPrice = currentPrice - minDistance;
+   }
+
+   // Final validation
+   if(slPrice <= 0.0 || tpPrice <= 0.0)
    {
       if(ShowDebugPrints)
-         Print("⚠️ [SetPivotSLTP] TP is invalid or <= 0.0. Clamping to currentPrice.");
-      tpPrice = currentPrice;
+         Print("❌ [SetPivotSLTP] Invalid SL/TP calculation. SL=", slPrice, " TP=", tpPrice);
+      return;
+   }
+
+   if(ShowDebugPrints)
+   {
+      double pips = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      Print("✅ [SetPivotSLTP] Levels set - Method: ", (havePivots ? "Pivot+ATR" : "Pure ATR"),
+            ", SL=", NormalizeDouble(MathAbs(currentPrice - slPrice)/pips, 1), " pips",
+            ", TP=", NormalizeDouble(MathAbs(currentPrice - tpPrice)/pips, 1), " pips",
+            ", Risk:Reward=", NormalizeDouble(MathAbs(currentPrice - tpPrice)/MathAbs(currentPrice - slPrice), 2));
    }
 }
 
@@ -1269,6 +1323,12 @@ void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
 
 //==================================================================
 // MODULE 10: EA LIFECYCLE
+// Purpose: Expert Advisor initialization and runtime management
+// Components:
+// - EA initialization and cleanup
+// - Main trading loop (OnTick)
+// - Resource management
+// - Debug logging
 //==================================================================
 
 // MODULE 10.1: EA initialization
