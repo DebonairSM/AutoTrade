@@ -644,7 +644,12 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
 // - Retest confirmation logic
 //==================================================================
 
-// MODULE 6.1: Candlestick pattern check for retest validation
+// MODULE 6.1: Candlestick Pattern Analysis
+// Purpose: Validates candlestick patterns for retest confirmation
+// Components:
+// - Engulfing pattern detection
+// - Pattern direction validation
+// - Candle body comparison
 bool CheckEngulfingPattern(const bool bullish)
 {
    // We'll copy two candles from the specified retest timeframe
@@ -704,7 +709,12 @@ bool CheckEngulfingPattern(const bool bullish)
    return false;
 }
 
-// MODULE 6.2.1: Check if price is in retest zone
+// MODULE 6.2.1: Retest Zone Price Check
+// Purpose: Validates if current price is within retest zone
+// Components:
+// - ATR-based zone calculation
+// - Fixed pip threshold fallback
+// - Zone boundary validation
 bool IsPriceInRetestZone()
 {
    if(!g_breakoutState.awaitingRetest)
@@ -749,7 +759,12 @@ bool IsPriceInRetestZone()
    return inZone;
 }
 
-// Helper function to check if we have an open position
+// MODULE 6.3: Position State Management
+// Purpose: Centralized position tracking and state management
+// Components:
+// - Position existence check
+// - Magic number validation
+// - Global state maintenance
 bool HasOpenPosition()
 {
    if(PositionsTotal() > 0)
@@ -768,7 +783,13 @@ bool HasOpenPosition()
    return false;
 }
 
-// MODULE 6.2: Retest validation and tracking
+// MODULE 6.4: Retest Validation
+// Purpose: Comprehensive retest condition validation
+// Components:
+// - Time-based validation
+// - Bar count validation
+// - Position conflict check
+// - Zone price validation
 bool ValidateRetestConditions()
 {
    // If user does not want retest, skip it entirely
@@ -820,7 +841,13 @@ bool ValidateRetestConditions()
 // - Broker-specific adjustments
 //==================================================================
 
-// MODULE 7.1: Position sizing calculation
+// MODULE 7.1: Position Sizing
+// Purpose: Risk-based position size calculation
+// Components:
+// - Account balance analysis
+// - Risk percentage application
+// - Broker constraint handling
+// - Lot size normalization
 double CalculateLotSize(double stopLossPrice, double entryPrice, double riskPercent)
 {
    // 1. Determine the account balance and risk in currency terms
@@ -880,7 +907,13 @@ double CalculateLotSize(double stopLossPrice, double entryPrice, double riskPerc
 // - Multi-entry filter logic
 //==================================================================
 
-// MODULE 8.1: Trade execution and order management
+// MODULE 8.1: Trade Execution
+// Purpose: Order placement and validation
+// Components:
+// - Price normalization
+// - SL/TP validation
+// - Order type handling
+// - Trade placement confirmation
 bool PlaceTrade(bool isBullish, double entryPrice, double slPrice, double tpPrice, double lots)
 {
    trade.SetExpertMagicNumber(g_magicNumber);
@@ -1003,7 +1036,12 @@ bool PlaceTrade(bool isBullish, double entryPrice, double slPrice, double tpPric
    order-management logic (M8.1.a, etc.).
 */
 
-// 1) Helper function: GetDailyPivotPoints()
+// MODULE 8.2: Daily Pivot Points
+// Purpose: Calculate daily pivot levels
+// Components:
+// - Previous day OHLC processing
+// - Pivot point calculation
+// - Support/Resistance level derivation
 bool GetDailyPivotPoints(double &pivot, double &r1, double &r2, double &s1, double &s2)
 {
    // Make sure we have enough data
@@ -1105,11 +1143,13 @@ bool ApplyDailyPivotSLTP(bool isBullish, double &priceEntry, double &priceSL, do
 // - Strategy state transitions
 //==================================================================
 
-// MODULE 9.1: Calculate daily pivot points
-void CalculateDailyPivots(string symbol, 
-                          double &pivotPoint, 
-                          double &r1, double &r2, 
-                          double &s1, double &s2)
+// MODULE 9.1: Pivot Level Calculation
+// Purpose: Daily pivot point computation
+// Components:
+// - Historical data retrieval
+// - Classic pivot formula application
+// - Support/Resistance calculation
+void CalculateDailyPivots(string symbol, double &pivotPoint, double &r1, double &r2, double &s1, double &s2)
 {
    MqlRates dailyData[];
    // We'll look at the previous daily bar (index=1).
@@ -1134,7 +1174,13 @@ void CalculateDailyPivots(string symbol,
    s2 = pivotPoint - (r1 - s1);            // Support 2
 }
 
-// MODULE 9.2: Set pivot-based SL/TP
+// MODULE 9.2: Stop Loss and Take Profit Management
+// Purpose: Dynamic SL/TP level calculation
+// Components:
+// - ATR-based distance calculation
+// - Pivot point integration
+// - Minimum distance enforcement
+// - Broker requirement compliance
 void SetPivotSLTP(bool isBuy, double currentPrice, double &slPrice, double &tpPrice)
 {
    // Initialize with safe defaults
@@ -1247,7 +1293,13 @@ void SetPivotSLTP(bool isBuy, double currentPrice, double &slPrice, double &tpPr
    }
 }
 
-// MODULE 9.3: Execute breakout-retest strategy
+// MODULE 9.3: Strategy Core Execution
+// Purpose: Main strategy implementation and trade execution
+// Components:
+// - Position conflict prevention
+// - Cooldown enforcement
+// - Risk management application
+// - Trade placement coordination
 void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
 {
    // CRITICAL: Check for existing positions and enforce cooldown
