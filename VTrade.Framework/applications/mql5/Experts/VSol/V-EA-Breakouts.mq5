@@ -381,8 +381,11 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
    }
 
    // Copy arrays
-   double highPrices[], lowPrices[], closePrices[];
+   double highPrices[];
+   double lowPrices[];
+   double closePrices[];
    datetime times[];
+   
    ArraySetAsSeries(highPrices, true);
    ArraySetAsSeries(lowPrices, true);
    ArraySetAsSeries(closePrices, true);
@@ -604,7 +607,10 @@ bool DoesVolumeMeetRequirement(const long &volumes[], const int lookback)
 
    long sumVol = 0;
    for(int i = 1; i <= lookback; i++)
-      sumVol += volumes[i];
+   {
+      if(i < ArraySize(volumes))
+         sumVol += volumes[i];
+   }
       
    double avgVol = (double)sumVol / (double)lookback;
    double currVol = (double)volumes[0];
@@ -648,6 +654,10 @@ bool IsATRDistanceMet(const double currentClose, const double breakoutLevel)
 // MODULE 5.6: Main breakout detection and state initialization
 bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
 {
+   static datetime lastDebugTime = 0;
+   datetime now = TimeCurrent();
+   bool shouldLog = (now - lastDebugTime >= 3600); // Log once per hour
+
    // CRITICAL: First check if we already have a position - if so, skip breakout detection entirely
    if(PositionsTotal() > 0)
    {
@@ -656,6 +666,8 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
          if(PositionGetSymbol(i) == _Symbol && 
             PositionGetInteger(POSITION_MAGIC) == g_magicNumber)
          {
+            if(ShowDebugPrints && shouldLog)
+               Print("❌ [M5.6.a Breakout Detection] Position already exists for this symbol and magic number");
             return false;  // Skip breakout detection if we have a position
          }
       }
@@ -686,7 +698,7 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
       // Reset lockout if we're on a new bar AND have moved far enough from the zone
       if(currentBar > g_lastTradeBar && distanceFromLastBreak >= threshold)
       {
-         if(ShowDebugPrints)
+         if(ShowDebugPrints && shouldLog)
             Print("✅ [M5.6.a Breakout Detection] Resetting lockout. Distance from zone: ", 
                   NormalizeDouble(distanceFromLastBreak/pointSize, 1), " pips",
                   " (required ", NormalizeDouble(threshold/pointSize, 1), " pips)");
@@ -695,19 +707,11 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
       }
       else
       {
-         datetime now = TimeCurrent();
-         // Only show debug message if:
-         // 1. Distance has changed by at least 50 pips from last report, OR
-         // 2. At least 1 hour has passed since last debug message
-         if(ShowDebugPrints && 
-            (MathAbs(distanceInPips - g_lastReportedDistance) >= 50.0 || 
-             now - g_lastLockoutDebugTime >= 3600))
+         if(ShowDebugPrints && shouldLog)
          {
             Print("❌ [M5.6.a Breakout Detection] Still within lockout zone. Distance: ", 
                   NormalizeDouble(distanceInPips, 1), " pips",
                   " (need ", NormalizeDouble(threshold/pointSize, 1), " pips)");
-            g_lastLockoutDebugTime = now;
-            g_lastReportedDistance = distanceInPips;
          }
          return false;
       }
@@ -716,7 +720,23 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
    // Find key levels first
    SKeyLevel strongestLevel;
    if(!FindKeyLevels(strongestLevel))
+   {
+      if(ShowDebugPrints && shouldLog)
+      {
+         Print("ℹ️ [DetectBreakout] No valid key levels found");
+         lastDebugTime = now;
+      }
       return false;
+   }
+
+   if(ShowDebugPrints && shouldLog)
+   {
+      Print("🎯 [DetectBreakout] Strongest level found at ", 
+            DoubleToString(strongestLevel.price, _Digits),
+            " Type: ", (strongestLevel.isResistance ? "Resistance" : "Support"),
+            " Strength: ", DoubleToString(strongestLevel.strength, 4),
+            " Touches: ", strongestLevel.touchCount);
+   }
 
    // Prepare data arrays
    double highPrices[];
@@ -748,7 +768,7 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
    bool bullishBreak = (lastClose > (strongestLevel.price + pipPoint));
    bool bearishBreak = (lastClose < (strongestLevel.price - pipPoint));
 
-   if(ShowDebugPrints)
+   if(ShowDebugPrints && shouldLog)
    {
       //rbandeira
       //Print("[M5.6.a Breakout Detection] LastClose=", lastClose,
@@ -774,7 +794,7 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
          g_breakoutState.barsWaiting    = 0;
          g_breakoutState.retestStartTime = TimeCurrent();
          g_breakoutState.retestStartBar = iBarShift(_Symbol, _Period, TimeCurrent(), false);
-         if(ShowDebugPrints)
+         if(ShowDebugPrints && shouldLog)
          {
             static datetime lastBreakoutMsg = 0;
             datetime now = TimeCurrent();
@@ -807,7 +827,7 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
          g_breakoutState.barsWaiting    = 0;
          g_breakoutState.retestStartTime = TimeCurrent();
          g_breakoutState.retestStartBar = iBarShift(_Symbol, _Period, TimeCurrent(), false);
-         if(ShowDebugPrints)
+         if(ShowDebugPrints && shouldLog)
          {
             static datetime lastBreakoutMsg = 0;
             datetime now = TimeCurrent();
@@ -1056,7 +1076,7 @@ double CalculateLotSize(double stopLossPrice, double entryPrice, double riskPerc
    if(tickValue == 0)
    {
       if(ShowDebugPrints)
-         Print("❌ [CalculateLotSize] Error: Zero tick value");
+         Print("⚠️ [CalculateLotSize] Zero tick value, using minimum lot as fallback");
       return 0.01; // Return minimum lot as fallback
    }
 
@@ -1065,11 +1085,11 @@ double CalculateLotSize(double stopLossPrice, double entryPrice, double riskPerc
    if(potentialLossPerLot == 0)
    {
       if(ShowDebugPrints)
-         Print("❌ [CalculateLotSize] Error: Zero loss per lot calculation");
+         Print("⚠️ [CalculateLotSize] Zero loss per lot calculation, using minimum lot as fallback");
       return 0.01;
    }
 
-   // 5. Calculate lots based on risk amount
+   // 5. Calculate initial lots based on risk amount
    double lots = riskAmount / potentialLossPerLot;
 
    // 6. Adjust for broker's constraints
@@ -1083,10 +1103,64 @@ double CalculateLotSize(double stopLossPrice, double entryPrice, double riskPerc
    // Enforce boundaries
    lots = MathMax(minLot, MathMin(maxLot, lots));
 
+   // 7. Calculate margin requirements for both BUY and SELL
+   double marginBuy = 0.0, marginSell = 0.0;
+   if(!OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, lots, entryPrice, marginBuy) ||
+      !OrderCalcMargin(ORDER_TYPE_SELL, _Symbol, lots, entryPrice, marginSell))
+   {
+      if(ShowDebugPrints)
+         Print("⚠️ [CalculateLotSize] Failed to calculate margin, using minimum lot as fallback");
+      return minLot;
+   }
+
+   // Use the higher margin requirement
+   double margin = MathMax(marginBuy, marginSell);
+
+   // Get available margin and apply a safety factor
+   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   double safetyMargin = freeMargin * 0.8; // Only use 80% of free margin
+   
+   // If margin requirement exceeds safe margin, reduce lot size
+   if(margin > safetyMargin)
+   {
+      // Calculate maximum lots based on available margin with safety factor
+      double maxLotsMargin = lots * (safetyMargin / margin);
+      // Round down to nearest lot step
+      maxLotsMargin = MathFloor(maxLotsMargin / lotStep) * lotStep;
+      // Ensure minimum lot size
+      lots = MathMax(minLot, maxLotsMargin);
+      
+      if(ShowDebugPrints)
+         Print("⚠️ [CalculateLotSize] Reduced lot size due to margin requirements. Original: ", 
+               lots, " New: ", maxLotsMargin,
+               " Margin Required: ", margin,
+               " Free Margin: ", freeMargin,
+               " Safe Margin: ", safetyMargin);
+   }
+
+   // Final check - recalculate margin for new lot size
+   if(!OrderCalcMargin(ORDER_TYPE_SELL, _Symbol, lots, entryPrice, margin))
+   {
+      if(ShowDebugPrints)
+         Print("⚠️ [CalculateLotSize] Final margin check failed, using minimum lot as fallback");
+      return minLot;
+   }
+
+   // If still not enough margin, return minimum lot
+   if(margin > freeMargin)
+   {
+      if(ShowDebugPrints)
+         Print("⚠️ [CalculateLotSize] Still insufficient margin, using minimum lot as fallback");
+      return minLot;
+   }
+
    if(ShowDebugPrints)
       Print("✅ [CalculateLotSize] Risk=", riskPercent, "%, Balance=", accountBalance,
             ", Stop Distance=", stopDistancePoints, " points",
-            ", Calculated Lots=", lots);
+            ", Calculated Lots=", lots,
+            ", Margin Required=", margin,
+            ", Free Margin=", freeMargin,
+            ", Safe Margin: ", safetyMargin);
 
    return lots;
 }
@@ -1137,7 +1211,7 @@ bool PlaceTrade(bool isBullish, double entryPrice, double slPrice, double tpPric
          else
          {
             if(ShowDebugPrints)
-               Print("⚠️ [PlaceTrade] SL invalid and pivot calculation failed. Using fallback distance.");
+               Print("⚠️ [PlaceTrade] SL invalid and pivot calculation failed, using fallback distance");
             slPrice = entryPrice - fallbackStopDistance;
          }
       }
@@ -1146,7 +1220,7 @@ bool PlaceTrade(bool isBullish, double entryPrice, double slPrice, double tpPric
       if(slPrice <= point || slPrice >= entryPrice)
       {
          if(ShowDebugPrints)
-            Print("⚠️ [PlaceTrade] Invalid SL for Buy. Using fallback distance.");
+            Print("⚠️ [PlaceTrade] Invalid SL for Buy, using fallback distance");
          slPrice = entryPrice - fallbackStopDistance;
       }
    }
@@ -1164,7 +1238,7 @@ bool PlaceTrade(bool isBullish, double entryPrice, double slPrice, double tpPric
          else
          {
             if(ShowDebugPrints)
-               Print("⚠️ [PlaceTrade] SL invalid and pivot calculation failed. Using fallback distance.");
+               Print("⚠️ [PlaceTrade] SL invalid and pivot calculation failed, using fallback distance");
             slPrice = entryPrice + fallbackStopDistance;
          }
       }
@@ -1173,7 +1247,7 @@ bool PlaceTrade(bool isBullish, double entryPrice, double slPrice, double tpPric
       if(slPrice <= point || slPrice <= entryPrice)
       {
          if(ShowDebugPrints)
-            Print("⚠️ [PlaceTrade] Invalid SL for Sell. Using fallback distance.");
+            Print("⚠️ [PlaceTrade] Invalid SL for Sell, using fallback distance");
          slPrice = entryPrice + fallbackStopDistance;
       }
    }
@@ -1608,19 +1682,41 @@ void OnDeinit(const int reason)
 // MODULE 10.3: Main EA tick
 void OnTick()
 {
+   static datetime lastDebugTime = 0;
+   datetime now = TimeCurrent();
+   bool shouldLog = (now - lastDebugTime >= 3600); // Log once per hour
+   
    // Check if trading is allowed in current session
    if(!IsTradeAllowedInSession())
+   {
+      if(shouldLog && ShowDebugPrints)
+      {
+         Print("🕒 [OnTick] Trading not allowed in current session");
+         lastDebugTime = now;
+      }
       return;
+   }
 
    // 1) If retest is in progress, see if it is confirmed
    if(g_breakoutState.awaitingRetest)
    {
       bool retestConfirmed = ValidateRetestConditions();
+      if(ShowDebugPrints && shouldLog)
+      {
+         Print("🔄 [OnTick] Retest in progress - Confirmed: ", retestConfirmed,
+               " Level: ", g_breakoutState.breakoutLevel,
+               " Direction: ", (g_breakoutState.isBullish ? "Bullish" : "Bearish"),
+               " Bars waiting: ", g_breakoutState.barsWaiting);
+      }
+      
       if(retestConfirmed)
       {
+         if(ShowDebugPrints)
+            Print("✅ [OnTick] Retest confirmed - executing trade");
+         
          // Retest confirmed; place trade based on stored breakout state
          ExecuteBreakoutRetestStrategy(g_breakoutState.isBullish,
-                                       g_breakoutState.breakoutLevel);
+                                     g_breakoutState.breakoutLevel);
       }
    }
    else
@@ -1630,11 +1726,21 @@ void OnTick()
       bool   isBullish     = false;
 
       bool breakoutConfirmed = DetectBreakoutAndInitRetest(breakoutLevel, isBullish);
+      
+      if(ShowDebugPrints && shouldLog)
+      {
+         Print("🔍 [OnTick] Breakout detection - Confirmed: ", breakoutConfirmed,
+               breakoutConfirmed ? " Level: " + DoubleToString(breakoutLevel, _Digits) +
+                                 " Direction: " + (isBullish ? "Bullish" : "Bearish") : "");
+      }
 
       // If breakoutConfirmed == true, that means retest is not required, so go ahead with trade
       if(breakoutConfirmed)
+      {
+         if(ShowDebugPrints)
+            Print("✅ [OnTick] Breakout confirmed without retest - executing trade");
          ExecuteBreakoutRetestStrategy(isBullish, breakoutLevel);
-      // If breakoutConfirmed == false, either no breakout or retest is now pending
+      }
    }
 }
 
@@ -1671,14 +1777,20 @@ bool IsHighVolatilityOrBusySession()
 // Add new touch validation function
 bool IsValidTouch(const double &prices[], const datetime &times[], const int touchIndex, const int lookback=3)
 {
-   if(ArraySize(prices) < lookback)
+   if(touchIndex < 0 || touchIndex >= ArraySize(prices) || touchIndex >= ArraySize(times))
+      return false;
+      
+   // Check if we have enough bars before the touch point
+   if(touchIndex < lookback - 1)
       return false;
       
    // Check if price stayed near the level for at least a few bars
    double avgPrice = 0;
    for(int i = 0; i < lookback; i++)
    {
-      avgPrice += prices[i];
+      if(touchIndex - i < 0 || touchIndex - i >= ArraySize(prices))
+         return false;
+      avgPrice += prices[touchIndex - i];
    }
    avgPrice /= lookback;
    
@@ -1686,7 +1798,9 @@ bool IsValidTouch(const double &prices[], const datetime &times[], const int tou
    double variance = 0;
    for(int i = 0; i < lookback; i++)
    {
-      variance += MathPow(prices[i] - avgPrice, 2);
+      if(touchIndex - i < 0 || touchIndex - i >= ArraySize(prices))
+         return false;
+      variance += MathPow(prices[touchIndex - i] - avgPrice, 2);
    }
    variance /= lookback;
    
@@ -1703,7 +1817,11 @@ void CountTouchesEnhanced(const double &highPrices[], const double &lowPrices[],
                          const datetime &times[], const double level,
                          SKeyLevel &outLevel)
 {
-   if(ArraySize(highPrices) == 0 || ArraySize(lowPrices) == 0 || ArraySize(times) == 0)
+   int highSize = ArraySize(highPrices);
+   int lowSize = ArraySize(lowPrices);
+   int timeSize = ArraySize(times);
+   
+   if(highSize == 0 || lowSize == 0 || timeSize == 0)
       return;
       
    ArrayResize(outLevel.touches, 0);
@@ -1711,7 +1829,7 @@ void CountTouchesEnhanced(const double &highPrices[], const double &lowPrices[],
    datetime firstTouch = 0;
    datetime lastTouch = 0;
    
-   int maxBars = MathMin(KeyLevelLookback, ArraySize(highPrices));
+   int maxBars = MathMin(KeyLevelLookback, MathMin(highSize, MathMin(lowSize, timeSize)));
    
    for(int j = 0; j < maxBars; j++)
    {
@@ -1724,18 +1842,23 @@ void CountTouchesEnhanced(const double &highPrices[], const double &lowPrices[],
       {
          // Determine which price to use
          double price = (highDist < lowDist) ? highPrices[j] : lowPrices[j];
-         double priceArray[];
-         int startIdx = MathMax(0, j - 3);  // Look back 3 bars for validation
-         int copySize = MathMin(3, j + 1);   // Make sure we don't exceed array bounds
          
-         ArrayResize(priceArray, copySize);
-         for(int k = 0; k < copySize; k++)
+         // Create temporary arrays for validation
+         double priceArray[];
+         ArrayResize(priceArray, highSize);
+         
+         // Copy the appropriate price array based on which distance is smaller
+         if(highDist < lowDist)
          {
-            priceArray[k] = (highDist < lowDist) ? highPrices[startIdx + k] : lowPrices[startIdx + k];
+            ArrayCopy(priceArray, highPrices);
+         }
+         else
+         {
+            ArrayCopy(priceArray, lowPrices);
          }
          
          // Validate this touch
-         if(IsValidTouch(priceArray, times, copySize - 1))
+         if(IsValidTouch(priceArray, times, j))
          {
             // Calculate touch strength based on proximity
             double touchStrength = 1.0 - (minDist / TouchZoneSize);
