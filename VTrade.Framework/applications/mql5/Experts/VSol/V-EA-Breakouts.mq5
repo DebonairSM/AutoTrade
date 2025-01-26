@@ -93,9 +93,15 @@ input int    HighVolatilityEndHour   = 16;     // [start=12 step=1 stop=23] End 
 // - Breakout zone tracking
 // - Session and volatility state
 //==================================================================
-datetime      g_lastBarTime      = 0;
+
+// Core state variables
+datetime      g_lastBarTime      = 0;    // Track last bar time
+int           g_lastBarIndex     = -1;   // Track last bar index
 bool          g_hasPositionOpen  = false;
 int           g_magicNumber      = 12345;
+
+// Timer settings
+static int    TIMER_INTERVAL     = 15;   // 15 second timer interval
 
 // Breakout state tracking
 double        g_breakoutLevel    = 0.0;
@@ -113,6 +119,22 @@ int           g_lastTradeBar     = 0;     // Bar index of last trade
 double        g_activeBreakoutZonePrice = 0.0;  // Price level of the active breakout zone
 bool          g_activeBreakoutDirection = false; // Direction of active breakout (true=bullish)
 bool          g_inLockout = false;              // Whether we have an active breakout zone lockout
+
+// Debug and logging time tracking
+datetime      g_lastSessionDebugTime = 0;    // Last session debug message time
+datetime      g_lastLockoutDebugTime = 0;    // Last lockout debug message time
+datetime      g_lastKeyLevelLogTime = 0;     // Track last key level log time
+double        g_lastReportedDistance = 0.0;   // Last reported distance
+
+// Performance monitoring
+datetime      g_lastCalculationTime = 0;    // Last time we performed heavy calculations
+datetime      g_lastDebugTime = 0;          // Last time we printed debug info
+ulong         g_tickCount = 0;              // Total number of ticks processed
+ulong         g_calculationCount = 0;       // Number of times we performed heavy calculations
+ulong         g_lastTickTime = 0;            // For measuring tick processing time
+double        g_maxTickTime = 0;            // Maximum time spent processing a tick
+double        g_avgTickTime = 0;            // Average time spent processing a tick
+double        g_totalTickTime = 0;          // Total time spent processing ticks
 
 struct SBreakoutState
 {
@@ -149,13 +171,6 @@ struct SKeyLevel
 // Global variables for key level tracking
 SKeyLevel g_keyLevels[];  // Array to store detected key levels
 int g_lastKeyLevelUpdate = 0;  // Bar index of last key level update
-
-// Add global variable for tracking last debug message time
-datetime g_lastSessionDebugTime = 0;
-
-// Add these with the other global variables at the top
-datetime g_lastLockoutDebugTime = 0;
-double g_lastReportedDistance = 0.0; 
 
 //==================================================================
 // MODULE 4: SESSION CONTROL
@@ -251,22 +266,6 @@ double CalculateLevelStrength(const SKeyLevel &level)
    double strength = (touchScore * TouchScoreWeight + 
                      recencyScore * RecencyWeight + 
                      durationScore * DurationWeight);
-                     
-   if(ShowDebugPrints)
-   {
-      static datetime lastDebugTime = 0;
-      if(now - lastDebugTime >= 60) // Log once per minute
-      {
-         Print("🔍 [Strength Calc] Level=", DoubleToString(level.price, _Digits),
-               " Touches=", level.touchCount,
-               " (Quality=", DoubleToString(totalTouchStrength/level.touchCount, 2), ")",
-               " Touch=", DoubleToString(touchScore * TouchScoreWeight, 4),
-               " Recency=", DoubleToString(recencyScore * RecencyWeight, 4),
-               " Duration=", DoubleToString(durationScore * DurationWeight, 4),
-               " Total=", DoubleToString(strength, 4));
-         lastDebugTime = now;
-      }
-   }
    
    return strength;
 }
@@ -283,10 +282,15 @@ void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason
 {
    if(!ShowDebugPrints) return;
    
+   // Only log every 5 minutes (300 seconds)
+   datetime now = TimeCurrent();
+   if(now - g_lastKeyLevelLogTime < 300) return;
+   g_lastKeyLevelLogTime = now;
+   
+   // Log to CSV file for detailed analysis
    static bool headerWritten = false;
    string filename = GetKeyLevelLogFilename();
    
-   // Create header if file doesn't exist
    if(!headerWritten)
    {
       int handle = FileOpen(filename, FILE_WRITE|FILE_CSV);
@@ -312,29 +316,32 @@ void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason
       }
    }
    
-   // Append level data
+   // Only print to journal if level is accepted or if it's a significant rejection
+   if(isAccepted || level.touchCount >= MinTouchCount)
+   {
+      Print("🎯 Key Level ", (isAccepted ? "Accepted" : "Rejected"), ": ",
+            level.isResistance ? "Resistance" : "Support", " @ ", 
+            DoubleToString(level.price, _Digits),
+            " | Strength: ", DoubleToString(level.strength, 4),
+            isAccepted ? "" : " | Reason: " + rejectionReason);
+   }
+   
+   // Always write to CSV for complete analysis
    int handle = FileOpen(filename, FILE_READ|FILE_WRITE|FILE_CSV);
    if(handle != INVALID_HANDLE)
    {
-      // Calculate individual scores using the same formula as CalculateLevelStrength
       double touchScore = MathMin((double)level.touchCount / MinTouchCount, 2.0);
-      
-      datetime now = TimeCurrent();
       double hoursElapsed = (double)(now - level.lastTouch) / 3600.0;
       double recencyScore = MathExp(-hoursElapsed / (KeyLevelLookback * 8.0));
-      
       double hoursDuration = (double)(now - level.firstTouch) / 3600.0;
       double normalizedDuration = hoursDuration / (double)MinLevelDurationHours;
       double durationScore = MathMin(1.0 + MathLog(normalizedDuration) / 2.0, 1.0);
       
-      // Calculate weighted components for logging
       double touchComponent = touchScore * TouchScoreWeight;
       double recencyComponent = recencyScore * RecencyWeight;
       double durationComponent = durationScore * DurationWeight;
       
-      // Seek to end of file
       FileSeek(handle, 0, SEEK_END);
-      
       FileWrite(handle,
          TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
          DoubleToString(level.price, _Digits),
@@ -351,20 +358,6 @@ void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason
          rejectionReason
       );
       FileClose(handle);
-      
-      // Print summary to journal with detailed strength components
-      if(ShowDebugPrints)
-      {
-         Print("📊 [Key Level Analysis] ", level.isResistance ? "Resistance" : "Support", " @ ", 
-               DoubleToString(level.price, _Digits),
-               " | Touches: ", level.touchCount,
-               " | Components (T/R/D): ", 
-               DoubleToString(touchComponent, 4), "/",
-               DoubleToString(recencyComponent, 4), "/",
-               DoubleToString(durationComponent, 4),
-               " | Total Strength: ", DoubleToString(level.strength, 4),
-               " | ", isAccepted ? "✅ Accepted" : "❌ Rejected: " + rejectionReason);
-      }
    }
 }
 
@@ -1663,8 +1656,18 @@ int OnInit()
       return INIT_FAILED;
    }
 
+   // Setup timer
+   if(!EventSetTimer(TIMER_INTERVAL))
+   {
+      if(ShowDebugPrints)
+         Print("❌ [OnInit] Failed to set timer");
+      return INIT_FAILED;
+   }
+
    if(ShowDebugPrints)
-      Print("ℹ️ [M10.1.a Initialization] EA started. Session trading restrictions are ", (RestrictTradingHours ? "enabled" : "disabled"), ".");
+      Print("ℹ️ [OnInit] EA started. Session trading restrictions are ", 
+            (RestrictTradingHours ? "enabled" : "disabled"), 
+            ". Timer interval: ", TIMER_INTERVAL, " seconds");
    return(INIT_SUCCEEDED);
 }
 
@@ -1674,74 +1677,49 @@ void OnDeinit(const int reason)
    // Clean up indicator handle
    if(g_handleATR != INVALID_HANDLE)
       IndicatorRelease(g_handleATR);
+      
+   // Remove timer
+   EventKillTimer();
 
    if(ShowDebugPrints)
-      Print("ℹ️ [M10.2.a Deinitialization] EA Deinit. Reason=", reason);
+      Print("ℹ️ [OnDeinit] EA Deinit. Reason=", reason);
 }
 
 // MODULE 10.3: Main EA tick
 void OnTick()
 {
-   static datetime lastDebugTime = 0;
-   datetime now = TimeCurrent();
-   bool shouldLog = (now - lastDebugTime >= 3600); // Log once per hour
+   // Performance monitoring
+   g_tickCount += 1;
+   ulong tickStartTime = GetMicrosecondCount();
    
-   // Check if trading is allowed in current session
-   if(!IsTradeAllowedInSession())
+   datetime now = TimeCurrent();
+   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   bool isNewBar = (currentBarTime != g_lastBarTime);
+   
+   // Update bar tracking if new bar
+   if(isNewBar)
    {
-      if(shouldLog && ShowDebugPrints)
-      {
-         Print("🕒 [OnTick] Trading not allowed in current session");
-         lastDebugTime = now;
-      }
-      return;
+      g_lastBarTime = currentBarTime;
    }
-
-   // 1) If retest is in progress, see if it is confirmed
+   
+   // Quick price checks only - leave heavy calculations to timer
    if(g_breakoutState.awaitingRetest)
    {
-      bool retestConfirmed = ValidateRetestConditions();
-      if(ShowDebugPrints && shouldLog)
-      {
-         Print("🔄 [OnTick] Retest in progress - Confirmed: ", retestConfirmed,
-               " Level: ", g_breakoutState.breakoutLevel,
-               " Direction: ", (g_breakoutState.isBullish ? "Bullish" : "Bearish"),
-               " Bars waiting: ", g_breakoutState.barsWaiting);
-      }
+      double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double retestZone = g_breakoutState.breakoutLevel;
+      double zoneSize = RetestPipsThreshold * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
       
-      if(retestConfirmed)
-      {
-         if(ShowDebugPrints)
-            Print("✅ [OnTick] Retest confirmed - executing trade");
-         
-         // Retest confirmed; place trade based on stored breakout state
-         ExecuteBreakoutRetestStrategy(g_breakoutState.isBullish,
-                                     g_breakoutState.breakoutLevel);
-      }
+      bool priceInZone = (currentPrice >= retestZone - zoneSize && 
+                         currentPrice <= retestZone + zoneSize);
    }
-   else
-   {
-      // 2) Look for a new breakout
-      double breakoutLevel = 0.0;
-      bool   isBullish     = false;
-
-      bool breakoutConfirmed = DetectBreakoutAndInitRetest(breakoutLevel, isBullish);
-      
-      if(ShowDebugPrints && shouldLog)
-      {
-         Print("🔍 [OnTick] Breakout detection - Confirmed: ", breakoutConfirmed,
-               breakoutConfirmed ? " Level: " + DoubleToString(breakoutLevel, _Digits) +
-                                 " Direction: " + (isBullish ? "Bullish" : "Bearish") : "");
-      }
-
-      // If breakoutConfirmed == true, that means retest is not required, so go ahead with trade
-      if(breakoutConfirmed)
-      {
-         if(ShowDebugPrints)
-            Print("✅ [OnTick] Breakout confirmed without retest - executing trade");
-         ExecuteBreakoutRetestStrategy(isBullish, breakoutLevel);
-      }
-   }
+   
+   // Performance stats calculation
+   ulong tickEndTime = GetMicrosecondCount();
+   double tickTime = (tickEndTime - tickStartTime) / 1000.0;
+   
+   g_totalTickTime += tickTime;
+   g_avgTickTime = g_totalTickTime / (double)g_tickCount;
+   g_maxTickTime = MathMax(g_maxTickTime, tickTime);
 }
 
 bool IsHighVolatilityOrBusySession()
@@ -1882,6 +1860,88 @@ void CountTouchesEnhanced(const double &highPrices[], const double &lowPrices[],
    outLevel.touchCount = touchCount;
    outLevel.firstTouch = firstTouch;
    outLevel.lastTouch = lastTouch;
+}
+
+// Add OnTimer event handler
+void OnTimer()
+{
+   // Performance monitoring for timer events
+   ulong timerStartTime = GetMicrosecondCount();
+   static ulong g_timerCount = 0;
+   g_timerCount++;
+   
+   datetime now = TimeCurrent();
+   static datetime lastCalculationTime = 0;
+   
+   // Get current bar info
+   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   static datetime lastProcessedBarTime = 0;
+   bool isNewBar = (currentBarTime != lastProcessedBarTime);
+   
+   // Only perform periodic calculations every minute
+   if(now - lastCalculationTime < 60)
+      return;
+      
+   lastCalculationTime = now;
+   
+   // Check if trading is allowed
+   if(!IsTradeAllowedInSession())
+      return;
+   
+   // Perform periodic heavy calculations here
+   if(g_breakoutState.awaitingRetest)
+   {
+      g_calculationCount++;
+      bool retestConfirmed = ValidateRetestConditions();
+      if(retestConfirmed)
+      {
+         if(ShowDebugPrints)
+            Print("✅ Trade Signal: Retest confirmed at ", TimeToString(now, TIME_MINUTES));
+         ExecuteBreakoutRetestStrategy(g_breakoutState.isBullish,
+                                     g_breakoutState.breakoutLevel);
+      }
+   }
+   else if(isNewBar) // Look for new breakouts on new bars
+   {
+      g_calculationCount++;
+      double breakoutLevel = 0.0;
+      bool isBullish = false;
+      
+      bool breakoutConfirmed = DetectBreakoutAndInitRetest(breakoutLevel, isBullish);
+      if(breakoutConfirmed)
+      {
+         if(ShowDebugPrints)
+            Print("✅ Trade Signal: Breakout detected at ", TimeToString(now, TIME_MINUTES),
+                  " | Level: ", DoubleToString(breakoutLevel, _Digits),
+                  " | Direction: ", (isBullish ? "Buy" : "Sell"));
+                  
+         ExecuteBreakoutRetestStrategy(isBullish, breakoutLevel);
+      }
+      
+      // Update last processed bar
+      lastProcessedBarTime = currentBarTime;
+   }
+   
+   // Log timer performance
+   ulong timerEndTime = GetMicrosecondCount();
+   double timerProcessingTime = (timerEndTime - timerStartTime) / 1000.0;
+   
+   // Log consolidated stats every 4 hours
+   static datetime lastStatsTime = 0;
+   if(ShowDebugPrints && now - lastStatsTime >= 14400) // 4 hours
+   {
+      Print("📊 EA Status Report [", TimeToString(now, TIME_DATE|TIME_MINUTES), "]",
+            "\n  Performance:",
+            "\n    Ticks/Calculations: ", g_tickCount, "/", g_calculationCount,
+            "\n    Avg/Max Tick Time: ", DoubleToString(g_avgTickTime, 3), "/", DoubleToString(g_maxTickTime, 3), "ms",
+            "\n    Timer Events: ", g_timerCount,
+            "\n    Last Process Time: ", DoubleToString(timerProcessingTime, 3), "ms",
+            "\n  Trading:",
+            "\n    Session Active: ", (IsTradeAllowedInSession() ? "Yes" : "No"),
+            "\n    Awaiting Retest: ", (g_breakoutState.awaitingRetest ? "Yes" : "No"),
+            "\n    Open Positions: ", PositionsTotal());
+      lastStatsTime = now;
+   }
 }
 
 //+------------------------------------------------------------------+
