@@ -31,57 +31,60 @@ enum ENUM_STRATEGY_TYPE
 
 // Core strategy inputs
 input ENUM_STRATEGY_TYPE StrategyType = STRAT_BREAKOUT_RETEST;
-input bool   UseVolumeFilter        = true;    // Enable volume confirmation for breakouts 
-input bool   UseMinATRDistance      = true;    // Use ATR for minimum breakout distance 
-input bool   UseRetest             = true;     // Wait for price to retest breakout level 
-input bool   ShowDebugPrints       = true;     // Show detailed debug information 
-input bool   UseCandlestickConfirmation = false; // Use candlestick patterns for retest confirmation 
+input bool   UseVolumeFilter        = true;    // Keep enabled during optimization
+input bool   UseMinATRDistance      = true;    // Keep enabled during optimization
+input bool   UseRetest             = true;     // Keep enabled during optimization
+input bool   ShowDebugPrints       = false;    // Keep disabled during optimization
+input bool   UseCandlestickConfirmation = false; // Optional feature, keep disabled initially
 
 // Breakout parameters
-input int    BreakoutLookback       = 15;      // [start=10 step=5 stop=50] Number of bars to look back for breakout
-input int    ATRPeriod              = 13;      // [start=5 step=1 stop=30] Period for ATR calculation
-input double VolumeFactor           = 2.0;     // [start=1.0 step=0.1 stop=5.0] Required volume multiple vs average
-input double ATRMultiplier          = 0.1;     // [start=0.1 step=0.1 stop=1.0] ATR multiplier for breakout distance
-input double RetestATRMultiplier    = 0.4;     // [start=0.1 step=0.1 stop=1.0] ATR multiplier for retest zone
-input int    MaxRetestBars          = 5;       // [start=3 step=1 stop=20] Maximum bars to wait for retest
-input int    MaxRetestMinutes       = 180;     // [start=60 step=60 stop=480] Maximum minutes to wait for retest
+input int    BreakoutLookback       = 15;      // [PHASE 1] Range: 8-30, step=2 - Key parameter for level detection
+input int    ATRPeriod              = 13;      // Keep default during initial optimization
+input double VolumeFactor           = 1.5;     // [PHASE 3] Range: 1.2-2.5, step=0.1 - Volume breakout threshold
+input double ATRMultiplier          = 0.1;     // Keep default during initial optimization
+input double RetestATRMultiplier    = 0.4;     // [PHASE 1] Range: 0.2-0.8, step=0.05 - Retest zone size
+input int    MaxRetestBars          = 5;       // [PHASE 3] Range: 3-12, step=1 - Max bars for retest
+input int    MaxRetestMinutes       = 180;     // Keep default during initial optimization
 
 // Risk management
-input double SLMultiplier           = 2.5;     // [start=1.0 step=0.5 stop=6.0] Stop loss multiplier vs ATR
-input double TPMultiplier           = 6.0;     // [start=2.0 step=0.5 stop=8.0] Take profit multiplier vs ATR
-input double RiskPercentage         = 5.0;     // [start=0.5 step=0.5 stop=5.0] Account risk per trade in percent
+input double SLMultiplier           = 1.5;     // [PHASE 2] Range: 1.0-3.0, step=0.2 - Stop loss size
+input double TPMultiplier           = 6.0;     // [PHASE 2] Range: 2.0-5.0, step=0.25 - Take profit size
+input double RiskPercentage         = 5.0;     // [PHASE 2] Range: 0.5-3.0, step=0.25 - Account risk per trade
 
-// Session control
-input bool   RestrictTradingHours   = true;    // Enable trading hour restrictions 
-input int    LondonOpenHour         = 3;       // [start=2 step=1 stop=5] London session open hour (Eastern time)
-input int    LondonCloseHour        = 11;      // [start=8 step=1 stop=12] London session close hour (Eastern time)
-input int    NewYorkOpenHour        = 9;       // [start=8 step=1 stop=10] New York session open hour (Eastern time)
-input int    NewYorkCloseHour       = 16;      // [start=15 step=1 stop=17] New York session close hour (Eastern time)
-input int    BrokerToLocalOffsetHours = 7;     // [start=0 step=1 stop=12] Hours to add to local time for broker time
+// Session control - Keep defaults during initial optimization
+input bool   RestrictTradingHours   = true;    
+input int    LondonOpenHour         = 3;       
+input int    LondonCloseHour        = 11;      
+input int    NewYorkOpenHour        = 9;       
+input int    NewYorkCloseHour       = 16;      
+input int    BrokerToLocalOffsetHours = 7;     
 
 // Key level detection parameters
-input int    KeyLevelLookback       = 260;     // [start=100 step=20 stop=500] Bars to analyze for key levels
-input int    MinTouchCount          = 1;       // [start=1 step=1 stop=3] Minimum touches for key level validation
-input double TouchZoneSize          = 0.0002;  // [start=0.0001 step=0.0001 stop=0.001] Size of zone around key level in price units
-input double KeyLevelMinDistance    = 0.0019;  // [start=0.0005 step=0.0002 stop=0.003] Minimum distance between key levels
+input int    KeyLevelLookback       = 260;     // Keep default during initial optimization
+input int    MinTouchCount          = 1;       // Keep default during initial optimization
+input double TouchZoneSize          = 0.0002;  // Keep default during initial optimization
+input double KeyLevelMinDistance    = 0.0019;  // Keep default during initial optimization
 
-// Strength calculation weights (must sum to 1.0)
-input double TouchScoreWeight       = 0.5;     // [start=0.2 step=0.1 stop=0.6] Weight for number of touches in strength calc
-input double RecencyWeight          = 0.3;     // [start=0.1 step=0.1 stop=0.4] Weight for recency of touches in strength calc
-input double DurationWeight         = 0.2;     // [start=0.2 step=0.1 stop=0.6] Weight for level duration in strength calc
+// Strength calculation weights - Keep defaults during initial optimization
+input double TouchScoreWeight       = 0.5;     
+input double RecencyWeight          = 0.3;     
+input double DurationWeight         = 0.2;     
 
 // Level validation
-input int    MinLevelDurationHours  = 12;      // [start=06 step=12 stop=38] Minimum hours a level must exist
-input double MinStrengthThreshold   = 0.55;     // [start=0.5 step=0.1 stop=0.9] Minimum strength score for valid level
+input int    MinLevelDurationHours  = 12;      // Keep default during initial optimization
+input double MinStrengthThreshold   = 0.55;    // [PHASE 1] Range: 0.45-0.75, step=0.05 - Level strength filter
 
-// Retest parameters
-input double RetestPipsThreshold    = 15;      // [start=5 step=5 stop=50] Distance in pips to consider price in retest zone
-input ENUM_TIMEFRAMES RetestTimeframe = PERIOD_M15; // Timeframe for candlestick pattern analysis
+// Retest parameters - Keep defaults during initial optimization
+input double RetestPipsThreshold    = 15;      
+input ENUM_TIMEFRAMES RetestTimeframe = PERIOD_M15; 
 
-// Volatility thresholds
-input double ATRVolatilityThreshold = 0.0010;  // [start=0.0005 step=0.0001 stop=0.002] ATR threshold for high volatility
-input int    HighVolatilityStartHour = 7;      // [start=0 step=1 stop=12] Start hour of high volatility period
-input int    HighVolatilityEndHour   = 16;     // [start=12 step=1 stop=23] End hour of high volatility period
+// Volatility thresholds - Keep defaults during initial optimization
+input double ATRVolatilityThreshold = 0.0010;  
+input int    HighVolatilityStartHour = 7;      
+input int    HighVolatilityEndHour   = 16;     
+
+// Volume filter parameters
+input ENUM_APPLIED_VOLUME VolumeType   = VOLUME_TICK; // Volume type to use
 
 //==================================================================
 // MODULE 2: GLOBAL STATE MANAGEMENT
@@ -99,6 +102,11 @@ datetime      g_lastBarTime      = 0;    // Track last bar time
 int           g_lastBarIndex     = -1;   // Track last bar index
 bool          g_hasPositionOpen  = false;
 int           g_magicNumber      = 12345;
+
+// Session control state
+bool          g_allowNewTrades     = true;  // Controls new trade entry permission
+bool          g_allowTradeManagement = true; // Controls position management permission
+datetime      g_lastSessionStateChange = 0;  // Track last session state change
 
 // Timer settings
 static int    TIMER_INTERVAL     = 15;   // 15 second timer interval
@@ -184,9 +192,13 @@ int g_lastKeyLevelUpdate = 0;  // Bar index of last key level update
 // MODULE 4.1: Check if trading is allowed in current session
 bool IsTradeAllowedInSession()
 {
-   // If trading hours are not restricted, always allow trading
+   // If trading hours are not restricted, allow everything
    if(!RestrictTradingHours)
+   {
+      g_allowNewTrades = true;
+      g_allowTradeManagement = true;
       return true;
+   }
       
    // Get current broker time and convert to Eastern time
    datetime now = TimeCurrent();
@@ -203,21 +215,22 @@ bool IsTradeAllowedInSession()
    bool inNewYorkSession = (currentHourET >= NewYorkOpenHour && currentHourET < NewYorkCloseHour);
    
    // Trading is allowed if we're in either session
-   bool isAllowed = inLondonSession || inNewYorkSession;
+   bool isInSession = inLondonSession || inNewYorkSession;
    
-   // Only show debug message once per day when session state changes
-   static bool lastSessionState = false;
-   if(ShowDebugPrints && isAllowed != lastSessionState)
+   // Update global permission flags
+   bool previousTradeState = g_allowNewTrades;
+   g_allowNewTrades = isInSession;  // Only allow new trades during session
+   g_allowTradeManagement = true;   // Always allow trade management
+   
+   // Only log when the session state actually changes
+   if(ShowDebugPrints && previousTradeState != g_allowNewTrades)
    {
-      string localTime = TimeToString(TimeLocal(), TIME_MINUTES);
-      string brokerTime = TimeToString(TimeCurrent(), TIME_MINUTES);
-      Print("ℹ️ [Session Control] Trading ", (isAllowed ? "enabled" : "disabled"), " at Eastern hour ", currentHourET,
-            " | Local: ", localTime,
-            " | Broker: ", brokerTime);
-      lastSessionState = isAllowed;
+      Print("ℹ️ [Session Control] Trading ", (isInSession ? "enabled" : "disabled"), 
+            " at Eastern hour ", currentHourET);
+      g_lastSessionStateChange = now;
    }
    
-   return isAllowed;
+   return isInSession;  // Return session state for backward compatibility
 }
 
 //==================================================================
@@ -281,12 +294,20 @@ void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason
 {
    if(!ShowDebugPrints) return;
    
-   // Only log every 15 minutes (900 seconds) for rejections
+   static datetime lastLogTime = 0;
    datetime now = TimeCurrent();
-   if(!isAccepted && now - g_lastKeyLevelLogTime < 900) return;
-   g_lastKeyLevelLogTime = now;
    
-   // Log to CSV file for detailed analysis
+   // Only log every hour for accepted levels
+   if(isAccepted && now - lastLogTime < 3600) return;
+   
+   // Only log rejections that are close to being accepted (strength > 0.58)
+   if(!isAccepted && level.strength <= 0.58) return;
+   
+   // Update last log time for accepted levels
+   if(isAccepted)
+      lastLogTime = now;
+   
+   // Log to CSV file for detailed analysis (keep this for strategy optimization)
    static bool headerWritten = false;
    string filename = GetKeyLevelLogFilename();
    
@@ -315,19 +336,13 @@ void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason
       }
    }
    
-   // Only print to journal if:
-   // 1. Level is accepted
-   // 2. Level has significant touches (>= MinTouchCount) and strength > 0.55
-   // 3. Level was very close to being accepted (strength > 0.58)
-   if(isAccepted || 
-      (level.touchCount >= MinTouchCount && level.strength > 0.55) ||
-      level.strength > 0.58)
+   // Only print to journal if level is accepted
+   if(isAccepted)
    {
       Print("🎯 Key Level ", (isAccepted ? "Accepted" : "Rejected"), ": ",
             level.isResistance ? "Resistance" : "Support", " @ ", 
             DoubleToString(level.price, _Digits),
-            " | Strength: ", DoubleToString(level.strength, 4),
-            isAccepted ? "" : " | Reason: " + rejectionReason);
+            " | Strength: ", DoubleToString(level.strength, 4));
    }
    
    // Always write to CSV for complete analysis
@@ -361,8 +376,7 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
    if(MathAbs(TouchScoreWeight + RecencyWeight + DurationWeight - 1.0) > 0.001)
    {
       if(ShowDebugPrints)
-         Print("❌ [M5.3.a Key Level Detection] ERROR: Strength weights must sum to 1.0. Current sum: ",
-               TouchScoreWeight + RecencyWeight + DurationWeight);
+         Print("❌ [M5.3.a Key Level Detection] ERROR: Strength weights must sum to 1.0");
       return false;
    }
 
@@ -377,12 +391,10 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
    ArraySetAsSeries(closePrices, true);
    ArraySetAsSeries(times, true);
 
-   // Edge case: KeyLevelLookback might be < 3
    if(KeyLevelLookback < 3)
    {
       if(ShowDebugPrints)
-         Print("❌ [M5.3.a Key Level Detection] KeyLevelLookback too small (", KeyLevelLookback,
-               "). No key levels will be found.");
+         Print("❌ [M5.3.a Key Level Detection] KeyLevelLookback too small");
       return false;
    }
 
@@ -392,12 +404,15 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
       CopyTime(_Symbol, PERIOD_CURRENT, 0, KeyLevelLookback, times) <= 0)
    {
       if(ShowDebugPrints)
-         Print("❌ [M5.3.b Key Level Detection] Failed to copy price data. Error=", GetLastError());
+         Print("❌ [M5.3.b Key Level Detection] Failed to copy price data");
       return false;
    }
 
    SKeyLevel tempLevels[];
    int levelCount = 0;
+   static datetime lastKeyLevelLog = 0;
+   static double lastStrongestLevel = 0;
+   static double lastStrongestStrength = 0;
 
    for(int i = 1; i < KeyLevelLookback - 1; i++)
    {
@@ -568,15 +583,24 @@ bool FindKeyLevels(SKeyLevel &outStrongestLevel)
       
       outStrongestLevel = tempLevels[strongestIdx];
       
-      if(ShowDebugPrints)
+      // Only log if:
+      // 1. It's been at least 1 hour since last log, OR
+      // 2. The strongest level has changed significantly (different price or strength change > 0.01)
+      datetime now = TimeCurrent();
+      bool significantChange = (MathAbs(outStrongestLevel.price - lastStrongestLevel) > 0.0001) ||
+                             (MathAbs(outStrongestLevel.strength - lastStrongestStrength) > 0.01);
+      
+      if(ShowDebugPrints && (now - lastKeyLevelLog >= 3600 || significantChange))
       {
-         //rbandeira
-         //Print("[M5.3 Key Level Detection] Found ", levelCount, " key levels. Strongest level: ",
-         //      "Price=", outStrongestLevel.price,
-         //      ", Type=", (outStrongestLevel.isResistance ? "Resistance" : "Support"),
-         //      ", Touches=", outStrongestLevel.touchCount,
-         //      ", Strength=", outStrongestLevel.strength,
-         //      ", Duration=", (double)(outStrongestLevel.lastTouch - outStrongestLevel.firstTouch) / 3600.0, " hours");
+         Print("🎯 [DetectBreakout] Strongest level found at ", 
+               DoubleToString(outStrongestLevel.price, _Digits),
+               " Type: ", (outStrongestLevel.isResistance ? "Resistance" : "Support"),
+               " Strength: ", DoubleToString(outStrongestLevel.strength, 4),
+               " Touches: ", outStrongestLevel.touchCount);
+               
+         lastKeyLevelLog = now;
+         lastStrongestLevel = outStrongestLevel.price;
+         lastStrongestStrength = outStrongestLevel.strength;
       }
       
       return true;
@@ -591,17 +615,76 @@ bool DoesVolumeMeetRequirement(const long &volumes[], const int lookback)
    if(!UseVolumeFilter) 
       return true;
 
-   long sumVol = 0;
-   for(int i = 1; i <= lookback; i++)
+   // Ensure we have enough data
+   if(ArraySize(volumes) < lookback + 2)  // Need one extra bar for previous volume
    {
-      if(i < ArraySize(volumes))
+      if(ShowDebugPrints)
+         Print("❌ [Volume Filter] Not enough volume data. Need ", lookback + 2, " bars, got ", ArraySize(volumes));
+      return false;
+   }
+
+   // Calculate average volume excluding current and previous bar
+   long sumVol = 0;
+   int countVol = 0;
+   
+   // Debug: Print first few volume values
+   if(ShowDebugPrints)
+   {
+      string volDebug = "📊 [Volume Data] First 5 volumes: ";
+      for(int i = 0; i < MathMin(5, ArraySize(volumes)); i++)
+         volDebug += StringFormat("v[%d]=%d ", i, volumes[i]);
+      Print(volDebug);
+   }
+   
+   // Start from index 2 to exclude current and previous bar
+   for(int i = 2; i <= lookback + 1; i++)
+   {
+      if(volumes[i] > 0)  // Only count valid volumes
+      {
          sumVol += volumes[i];
+         countVol++;
+      }
+   }
+   
+   // If we don't have enough valid volume data
+   if(countVol == 0)
+   {
+      if(ShowDebugPrints)
+         Print("❌ [Volume Filter] No valid volume data found in lookback period");
+      return false;
    }
       
-   double avgVol = (double)sumVol / (double)lookback;
-   double currVol = (double)volumes[0];
+   double avgVol = (double)sumVol / (double)countVol;
+   double currentVol = (double)volumes[1];  // Use previous bar's volume for comparison
 
-   return (currVol >= avgVol * VolumeFactor);
+   // Avoid division by zero
+   if(avgVol <= 0)
+   {
+      if(ShowDebugPrints)
+         Print("❌ [Volume Filter] Average volume is zero or negative: ", avgVol);
+      return false;
+   }
+
+   double volRatio = currentVol / avgVol;
+
+   if(ShowDebugPrints)
+   {
+      static datetime lastVolDebug = 0;
+      datetime now = TimeCurrent();
+      if(now - lastVolDebug >= 3600)  // Log once per hour
+      {
+         Print("ℹ️ [Volume Analysis] ",
+               "\n  Previous Bar Volume: ", currentVol,
+               "\n  Sum Volume: ", sumVol,
+               "\n  Count Valid Bars: ", countVol,
+               "\n  Average Volume: ", avgVol,
+               "\n  Ratio: ", DoubleToString(volRatio, 2), "x",
+               "\n  Required: ", DoubleToString(VolumeFactor, 2), "x");
+         lastVolDebug = now;
+      }
+   }
+
+   return (volRatio >= VolumeFactor);
 }
 
 // MODULE 5.5: ATR distance check for breakout validation
@@ -715,15 +798,6 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
       return false;
    }
 
-   if(ShowDebugPrints && shouldLog)
-   {
-      Print("🎯 [DetectBreakout] Strongest level found at ", 
-            DoubleToString(strongestLevel.price, _Digits),
-            " Type: ", (strongestLevel.isResistance ? "Resistance" : "Support"),
-            " Strength: ", DoubleToString(strongestLevel.strength, 4),
-            " Touches: ", strongestLevel.touchCount);
-   }
-
    // Prepare data arrays
    double highPrices[];
    double lowPrices[];
@@ -739,7 +813,8 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
    if(CopyHigh(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, highPrices) <= 0 ||
       CopyLow(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, lowPrices) <= 0 ||
       CopyClose(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, closePrices) <= 0 ||
-      CopyTickVolume(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, volumes) <= 0)
+      ((VolumeType == VOLUME_REAL && CopyRealVolume(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, volumes) <= 0) ||
+       (VolumeType == VOLUME_TICK && CopyTickVolume(_Symbol, PERIOD_CURRENT, 0, bars_to_copy, volumes) <= 0)))
    {
       if(ShowDebugPrints)
          Print("❌ [M5.6.a Breakout Detection] Failed to copy price or volume data. Err=", GetLastError());
@@ -754,14 +829,46 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
    bool bullishBreak = (lastClose > (strongestLevel.price + pipPoint));
    bool bearishBreak = (lastClose < (strongestLevel.price - pipPoint));
 
+   // Enhanced logging for breakout conditions
    if(ShowDebugPrints && shouldLog)
    {
-      //rbandeira
-      //Print("[M5.6.a Breakout Detection] LastClose=", lastClose,
-      //      " | KeyLevel=", strongestLevel.price,
-      //      " | VolumeOK=", volumeOK,
-      //      " | BullishBreak=", bullishBreak,
-      //      " | BearishBreak=", bearishBreak);
+      // Calculate volume metrics for logging
+      long sumVol = 0;
+      for(int i = 1; i <= BreakoutLookback; i++)
+      {
+         if(i < ArraySize(volumes))
+            sumVol += volumes[i];
+      }
+      double avgVol = (double)sumVol / (double)BreakoutLookback;
+      double currVol = (double)volumes[0];
+      double volRatio = currVol / avgVol;
+
+      // Calculate ATR metrics for logging
+      double atrBuf[];
+      ArraySetAsSeries(atrBuf, true);
+      double currentATR = 0;
+      double minBreakoutDist = 0;
+      
+      if(g_handleATR != INVALID_HANDLE && CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) > 0)
+      {
+         currentATR = atrBuf[0];
+         minBreakoutDist = currentATR * ATRMultiplier;
+      }
+
+      // Log detailed breakout analysis
+      Print("🔍 [Breakout Analysis] Price: ", DoubleToString(lastClose, _Digits),
+            "\n  Level: ", DoubleToString(strongestLevel.price, _Digits),
+            " (", (strongestLevel.isResistance ? "Resistance" : "Support"), ")",
+            "\n  Strength: ", DoubleToString(strongestLevel.strength, 4),
+            "\n  Break Direction: ", (bullishBreak ? "Bullish" : (bearishBreak ? "Bearish" : "None")),
+            "\n  Distance: ", DoubleToString(MathAbs(lastClose - strongestLevel.price)/pipPoint, 1), " pips",
+            "\n  Volume OK: ", (volumeOK ? "Yes" : "No"),
+            "\n    Current/Avg Volume: ", DoubleToString(volRatio, 2), "x",
+            " (need ", DoubleToString(VolumeFactor, 2), "x)",
+            "\n  ATR Distance OK: ", (IsATRDistanceMet(lastClose, strongestLevel.price) ? "Yes" : "No"),
+            "\n    Current ATR: ", DoubleToString(currentATR, _Digits),
+            "\n    Min Required Distance: ", DoubleToString(minBreakoutDist, _Digits),
+            "\n    Actual Distance: ", DoubleToString(MathAbs(lastClose - strongestLevel.price), _Digits));
    }
 
    // Bullish breakout
@@ -782,14 +889,7 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
          g_breakoutState.retestStartBar = iBarShift(_Symbol, _Period, TimeCurrent(), false);
          if(ShowDebugPrints && shouldLog)
          {
-            static datetime lastBreakoutMsg = 0;
-            datetime now = TimeCurrent();
-            // Only show message once per minute
-            if(now - lastBreakoutMsg >= 60)
-            {
-               Print("✅ [M5.6.b Breakout Detection] Bullish breakout found; awaiting retest.");
-               lastBreakoutMsg = now;
-            }
+            Print("✅ [M5.6.b Breakout Detection] Bullish breakout found; awaiting retest.");
          }
          return false;  
       }
@@ -815,14 +915,7 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
          g_breakoutState.retestStartBar = iBarShift(_Symbol, _Period, TimeCurrent(), false);
          if(ShowDebugPrints && shouldLog)
          {
-            static datetime lastBreakoutMsg = 0;
-            datetime now = TimeCurrent();
-            // Only show message once per minute
-            if(now - lastBreakoutMsg >= 60)
-            {
-               Print("✅ [M5.6.c Breakout Detection] Bearish breakout found; awaiting retest.");
-               lastBreakoutMsg = now;
-            }
+            Print("✅ [M5.6.c Breakout Detection] Bearish breakout found; awaiting retest.");
          }
          return false;  
       }
@@ -1556,7 +1649,15 @@ void SetPivotSLTP(bool isBuy, double currentPrice, double &slPrice, double &tpPr
 // - Trade placement coordination
 void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
 {
-   // CRITICAL: Check for existing positions and enforce cooldown
+   // CRITICAL: First check if new trades are allowed
+   if(!g_allowNewTrades)
+   {
+      if(ShowDebugPrints)
+         Print("❌ [M9.3 Strategy Execution] New trades not allowed during current session");
+      return;
+   }
+
+   // Check for existing positions and enforce cooldown
    if(PositionsTotal() > 0)
    {
       for(int i = 0; i < PositionsTotal(); i++)
@@ -1695,15 +1796,35 @@ void OnTick()
       g_lastBarTime = currentBarTime;
    }
    
-   // Quick price checks only - leave heavy calculations to timer
-   if(g_breakoutState.awaitingRetest)
+   // Check session permissions
+   IsTradeAllowedInSession();  // This updates g_allowNewTrades and g_allowTradeManagement
+   
+   // Always check and manage open positions regardless of session
+   if(g_allowTradeManagement && g_hasPositionOpen)
    {
-      double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double retestZone = g_breakoutState.breakoutLevel;
-      double zoneSize = RetestPipsThreshold * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-      
-      bool priceInZone = (currentPrice >= retestZone - zoneSize && 
-                         currentPrice <= retestZone + zoneSize);
+      // Future enhancement: Add position management logic here
+      // (e.g., trailing stops, breakeven, partial closes)
+   }
+   
+   // Only look for new trade opportunities if allowed
+   if(g_allowNewTrades)
+   {
+      // Check for retest conditions if we're awaiting one
+      if(g_breakoutState.awaitingRetest)
+      {
+         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         double retestZone = g_breakoutState.breakoutLevel;
+         double zoneSize = RetestPipsThreshold * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+         
+         bool priceInZone = (currentPrice >= retestZone - zoneSize && 
+                            currentPrice <= retestZone + zoneSize);
+                            
+         if(priceInZone && ValidateRetestConditions())
+         {
+            ExecuteBreakoutRetestStrategy(g_breakoutState.isBullish,
+                                        g_breakoutState.breakoutLevel);
+         }
+      }
    }
    
    // Performance stats calculation
@@ -1925,7 +2046,7 @@ void OnTimer()
       Print("📊 EA Status Report [", TimeToString(now, TIME_DATE|TIME_MINUTES), "]",
             "\n  Performance:",
             "\n    Ticks/Calculations: ", g_tickCount, "/", g_calculationCount,
-            "\n    Calc/Tick Ratio: ", DoubleToString(g_calculationCount * 100.0 / (double)g_tickCount, 2), "%",
+            "\n    Calc/Tick Ratio: ", DoubleToString((g_calculationCount * 100.0 / (double)g_tickCount), 2), "%",
             "\n    Avg/Max Tick Time: ", DoubleToString(g_avgTickTime, 3), "/", DoubleToString(g_maxTickTime, 3), "ms",
             "\n    Timer Events: ", g_timerCount,
             "\n    Last Process Time: ", DoubleToString(timerProcessingTime, 3), "ms",
