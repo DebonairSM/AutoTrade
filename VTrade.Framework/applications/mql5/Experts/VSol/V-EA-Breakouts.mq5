@@ -61,7 +61,7 @@ input int    BrokerToLocalOffsetHours = 7;     // [start=0 step=1 stop=12] Hours
 
 // Key level detection parameters
 input int    KeyLevelLookback       = 260;     // [start=100 step=20 stop=500] Bars to analyze for key levels
-input int    MinTouchCount          = 3;       // [start=3 step=1 stop=8] Minimum touches for key level validation
+input int    MinTouchCount          = 1;       // [start=1 step=1 stop=3] Minimum touches for key level validation
 input double TouchZoneSize          = 0.0002;  // [start=0.0001 step=0.0001 stop=0.001] Size of zone around key level in price units
 input double KeyLevelMinDistance    = 0.0019;  // [start=0.0005 step=0.0002 stop=0.003] Minimum distance between key levels
 
@@ -71,8 +71,8 @@ input double RecencyWeight          = 0.3;     // [start=0.1 step=0.1 stop=0.4] 
 input double DurationWeight         = 0.2;     // [start=0.2 step=0.1 stop=0.6] Weight for level duration in strength calc
 
 // Level validation
-input int    MinLevelDurationHours  = 24;      // [start=24 step=12 stop=120] Minimum hours a level must exist
-input double MinStrengthThreshold   = 0.6;     // [start=0.5 step=0.1 stop=0.9] Minimum strength score for valid level
+input int    MinLevelDurationHours  = 12;      // [start=06 step=12 stop=38] Minimum hours a level must exist
+input double MinStrengthThreshold   = 0.55;     // [start=0.5 step=0.1 stop=0.9] Minimum strength score for valid level
 
 // Retest parameters
 input double RetestPipsThreshold    = 15;      // [start=5 step=5 stop=50] Distance in pips to consider price in retest zone
@@ -205,17 +205,16 @@ bool IsTradeAllowedInSession()
    // Trading is allowed if we're in either session
    bool isAllowed = inLondonSession || inNewYorkSession;
    
-   // Only show debug message once per hour
-   if(ShowDebugPrints && !isAllowed && (now - g_lastSessionDebugTime >= 3600))
+   // Only show debug message once per day when session state changes
+   static bool lastSessionState = false;
+   if(ShowDebugPrints && isAllowed != lastSessionState)
    {
       string localTime = TimeToString(TimeLocal(), TIME_MINUTES);
       string brokerTime = TimeToString(TimeCurrent(), TIME_MINUTES);
-      Print("ℹ️ [Session Control] Trading not allowed at Eastern hour ", currentHourET,
-            " | Local time: ", localTime,
-            " | Broker time: ", brokerTime,
-            " | London ET: ", LondonOpenHour, "-", LondonCloseHour,
-            " | NY ET: ", NewYorkOpenHour, "-", NewYorkCloseHour);
-      g_lastSessionDebugTime = now;
+      Print("ℹ️ [Session Control] Trading ", (isAllowed ? "enabled" : "disabled"), " at Eastern hour ", currentHourET,
+            " | Local: ", localTime,
+            " | Broker: ", brokerTime);
+      lastSessionState = isAllowed;
    }
    
    return isAllowed;
@@ -282,9 +281,9 @@ void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason
 {
    if(!ShowDebugPrints) return;
    
-   // Only log every 5 minutes (300 seconds)
+   // Only log every 15 minutes (900 seconds) for rejections
    datetime now = TimeCurrent();
-   if(now - g_lastKeyLevelLogTime < 300) return;
+   if(!isAccepted && now - g_lastKeyLevelLogTime < 900) return;
    g_lastKeyLevelLogTime = now;
    
    // Log to CSV file for detailed analysis
@@ -316,8 +315,13 @@ void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason
       }
    }
    
-   // Only print to journal if level is accepted or if it's a significant rejection
-   if(isAccepted || level.touchCount >= MinTouchCount)
+   // Only print to journal if:
+   // 1. Level is accepted
+   // 2. Level has significant touches (>= MinTouchCount) and strength > 0.55
+   // 3. Level was very close to being accepted (strength > 0.58)
+   if(isAccepted || 
+      (level.touchCount >= MinTouchCount && level.strength > 0.55) ||
+      level.strength > 0.58)
    {
       Print("🎯 Key Level ", (isAccepted ? "Accepted" : "Rejected"), ": ",
             level.isResistance ? "Resistance" : "Support", " @ ", 
@@ -330,17 +334,6 @@ void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason
    int handle = FileOpen(filename, FILE_READ|FILE_WRITE|FILE_CSV);
    if(handle != INVALID_HANDLE)
    {
-      double touchScore = MathMin((double)level.touchCount / MinTouchCount, 2.0);
-      double hoursElapsed = (double)(now - level.lastTouch) / 3600.0;
-      double recencyScore = MathExp(-hoursElapsed / (KeyLevelLookback * 8.0));
-      double hoursDuration = (double)(now - level.firstTouch) / 3600.0;
-      double normalizedDuration = hoursDuration / (double)MinLevelDurationHours;
-      double durationScore = MathMin(1.0 + MathLog(normalizedDuration) / 2.0, 1.0);
-      
-      double touchComponent = touchScore * TouchScoreWeight;
-      double recencyComponent = recencyScore * RecencyWeight;
-      double durationComponent = durationScore * DurationWeight;
-      
       FileSeek(handle, 0, SEEK_END);
       FileWrite(handle,
          TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
@@ -349,10 +342,10 @@ void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason
          level.touchCount,
          TimeToString(level.firstTouch, TIME_DATE|TIME_MINUTES),
          TimeToString(level.lastTouch, TIME_DATE|TIME_MINUTES),
-         DoubleToString(hoursDuration, 2),
-         DoubleToString(touchComponent, 4),
-         DoubleToString(recencyComponent, 4),
-         DoubleToString(durationComponent, 4),
+         DoubleToString((double)(level.lastTouch - level.firstTouch) / 3600.0, 2),
+         DoubleToString(level.strength * TouchScoreWeight, 4),
+         DoubleToString(level.strength * RecencyWeight, 4),
+         DoubleToString(level.strength * DurationWeight, 4),
          DoubleToString(level.strength, 4),
          isAccepted ? "Yes" : "No",
          rejectionReason
@@ -1914,8 +1907,6 @@ void OnTimer()
             Print("✅ Trade Signal: Breakout detected at ", TimeToString(now, TIME_MINUTES),
                   " | Level: ", DoubleToString(breakoutLevel, _Digits),
                   " | Direction: ", (isBullish ? "Buy" : "Sell"));
-                  
-         ExecuteBreakoutRetestStrategy(isBullish, breakoutLevel);
       }
       
       // Update last processed bar
@@ -1926,13 +1917,15 @@ void OnTimer()
    ulong timerEndTime = GetMicrosecondCount();
    double timerProcessingTime = (timerEndTime - timerStartTime) / 1000.0;
    
-   // Log consolidated stats every 4 hours
+   // Log consolidated stats every 6 hours and only if there's been activity
    static datetime lastStatsTime = 0;
-   if(ShowDebugPrints && now - lastStatsTime >= 14400) // 4 hours
+   if(ShowDebugPrints && now - lastStatsTime >= 21600 && // 6 hours
+      (g_calculationCount > 0 || g_tickCount > 1000)) // Only if there's been activity
    {
       Print("📊 EA Status Report [", TimeToString(now, TIME_DATE|TIME_MINUTES), "]",
             "\n  Performance:",
             "\n    Ticks/Calculations: ", g_tickCount, "/", g_calculationCount,
+            "\n    Calc/Tick Ratio: ", DoubleToString(g_calculationCount * 100.0 / (double)g_tickCount, 2), "%",
             "\n    Avg/Max Tick Time: ", DoubleToString(g_avgTickTime, 3), "/", DoubleToString(g_maxTickTime, 3), "ms",
             "\n    Timer Events: ", g_timerCount,
             "\n    Last Process Time: ", DoubleToString(timerProcessingTime, 3), "ms",
