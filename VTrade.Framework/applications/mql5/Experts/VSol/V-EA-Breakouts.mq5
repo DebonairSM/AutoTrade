@@ -31,60 +31,69 @@ enum ENUM_STRATEGY_TYPE
 
 // Core strategy inputs
 input ENUM_STRATEGY_TYPE StrategyType = STRAT_BREAKOUT_RETEST;
-input bool   UseVolumeFilter        = true;    // Keep enabled during optimization
-input bool   UseMinATRDistance      = true;    // Keep enabled during optimization
-input bool   UseRetest             = true;     // Keep enabled during optimization
-input bool   ShowDebugPrints       = false;    // Keep disabled during optimization
-input bool   UseCandlestickConfirmation = false; // Optional feature, keep disabled initially
 
-// Breakout parameters
-input int    BreakoutLookback       = 15;      // [PHASE 1] Range: 8-30, step=2 - Key parameter for level detection
-input int    ATRPeriod              = 13;      // Keep default during initial optimization
-input double VolumeFactor           = 1.5;     // [PHASE 3] Range: 1.2-2.5, step=0.1 - Volume breakout threshold
-input double ATRMultiplier          = 0.1;     // Keep default during initial optimization
-input double RetestATRMultiplier    = 0.4;     // [PHASE 1] Range: 0.2-0.8, step=0.05 - Retest zone size
-input int    MaxRetestBars          = 5;       // [PHASE 3] Range: 3-12, step=1 - Max bars for retest
-input int    MaxRetestMinutes       = 180;     // Keep default during initial optimization
+// [P1 OPTIMIZATION] - Core Breakout Detection for H1
+// Goal: Find optimal parameters for identifying valid H1 breakouts
+// Success Metrics: 
+// - Higher win rate (>60%)
+// - Minimal false breakouts (<20%)
+// - Clear level identification (check debug logs)
+input int    BreakoutLookback       = 24;      // BreakoutLookback: P1 opt 12-48/4, H1 bars
+input double MinStrengthThreshold   = 0.65;    // MinStrengthThreshold: P1 opt 0.55-0.85/0.05
+input double RetestATRMultiplier    = 0.5;     // RetestATRMultiplier: P1 opt 0.3-1.0/0.1
 
-// Risk management
-input double SLMultiplier           = 1.5;     // [PHASE 2] Range: 1.0-3.0, step=0.2 - Stop loss size
-input double TPMultiplier           = 6.0;     // [PHASE 2] Range: 2.0-5.0, step=0.25 - Take profit size
-input double RiskPercentage         = 5.0;     // [PHASE 2] Range: 0.5-3.0, step=0.25 - Account risk per trade
+// Core filters - Keep enabled in P1
+input bool   UseVolumeFilter        = true;     // UseVolumeFilter: Required for breakout
+input bool   UseMinATRDistance      = true;     // UseMinATRDistance: Required for validation
+input bool   UseRetest             = true;      // UseRetest: Required for entry confirmation
+input bool   ShowDebugPrints       = true;      // ShowDebugPrints: Enable logging
 
-// Session control - Keep defaults during initial optimization
-input bool   RestrictTradingHours   = true;    
-input int    LondonOpenHour         = 3;       
-input int    LondonCloseHour        = 11;      
-input int    NewYorkOpenHour        = 9;       
-input int    NewYorkCloseHour       = 16;      
-input int    BrokerToLocalOffsetHours = 7;     
+// [DISABLED FOR P1] - Risk Management
+input double SLMultiplier           = 1.5;     // SLMultiplier: P2 optimization
+input double TPMultiplier           = 6.0;     // TPMultiplier: P2 optimization
+input double RiskPercentage         = 1.0;     // RiskPercentage: Fixed 1% in P1
 
-// Key level detection parameters
-input int    KeyLevelLookback       = 260;     // Keep default during initial optimization
-input int    MinTouchCount          = 1;       // Keep default during initial optimization
-input double TouchZoneSize          = 0.0002;  // Keep default during initial optimization
-input double KeyLevelMinDistance    = 0.0019;  // Keep default during initial optimization
+// [DISABLED FOR P1] - Advanced Settings
+input bool   UseCandlestickConfirmation = false; // UseCandlestickConfirmation: Disabled in P1
+input double VolumeFactor           = 2.0;     // VolumeFactor: P3 optimization
+input int    MaxRetestBars          = 8;       // MaxRetestBars: P3 optimization
+input int    MaxRetestMinutes       = 480;     // MaxRetestMinutes: Fixed 8h for H1
 
-// Strength calculation weights - Keep defaults during initial optimization
-input double TouchScoreWeight       = 0.5;     
-input double RecencyWeight          = 0.3;     
-input double DurationWeight         = 0.2;     
+// Session control - Fixed in P1
+input bool   RestrictTradingHours   = true;    // RestrictTradingHours: Session control
+input int    LondonOpenHour         = 3;       // LondonOpenHour: London start (ET)
+input int    LondonCloseHour        = 11;      // LondonCloseHour: London end (ET)
+input int    NewYorkOpenHour        = 9;       // NewYorkOpenHour: NY start (ET)
+input int    NewYorkCloseHour       = 16;      // NewYorkCloseHour: NY end (ET)
+input int    BrokerToLocalOffsetHours = 7;     // BrokerToLocalOffsetHours: ET offset
 
-// Level validation
-input int    MinLevelDurationHours  = 12;      // Keep default during initial optimization
-input double MinStrengthThreshold   = 0.55;    // [PHASE 1] Range: 0.45-0.75, step=0.05 - Level strength filter
+// Technical Parameters - Fixed in P1
+input int    ATRPeriod              = 14;      // ATRPeriod: Fixed 14
+input double ATRMultiplier          = 0.2;     // ATRMultiplier: Fixed 0.2
+input int    KeyLevelLookback       = 480;     // KeyLevelLookback: Fixed 480 (20 days)
+input int    MinTouchCount          = 2;       // MinTouchCount: Fixed 2
+input double TouchZoneSize          = 0.0004;  // TouchZoneSize: Fixed 0.0004
+input double KeyLevelMinDistance    = 0.0025;  // KeyLevelMinDistance: Fixed 0.0025
 
-// Retest parameters - Keep defaults during initial optimization
-input double RetestPipsThreshold    = 15;      
-input ENUM_TIMEFRAMES RetestTimeframe = PERIOD_M15; 
+// Level validation weights - Fixed in P1
+input double TouchScoreWeight       = 0.5;     // TouchScoreWeight: Fixed 0.5
+input double RecencyWeight          = 0.3;     // RecencyWeight: Fixed 0.3
+input double DurationWeight         = 0.2;     // DurationWeight: Fixed 0.2
 
-// Volatility thresholds - Keep defaults during initial optimization
-input double ATRVolatilityThreshold = 0.0010;  
-input int    HighVolatilityStartHour = 7;      
-input int    HighVolatilityEndHour   = 16;     
+// Level validation - Fixed in P1
+input int    MinLevelDurationHours  = 12;      // MinLevelDurationHours: Fixed 12h
+
+// Retest parameters - Fixed in P1
+input double RetestPipsThreshold    = 15;      // RetestPipsThreshold: Fixed 15p
+input ENUM_TIMEFRAMES RetestTimeframe = PERIOD_M15; // RetestTimeframe: Fixed M15
+
+// Volatility thresholds - Fixed in P1
+input double ATRVolatilityThreshold = 0.0010;  // ATRVolatilityThreshold: Fixed 0.001
+input int    HighVolatilityStartHour = 7;      // HighVolatilityStartHour: Fixed 7
+input int    HighVolatilityEndHour   = 16;     // HighVolatilityEndHour: Fixed 16
 
 // Volume filter parameters
-input ENUM_APPLIED_VOLUME VolumeType   = VOLUME_TICK; // Volume type to use
+input ENUM_APPLIED_VOLUME VolumeType   = VOLUME_TICK; // VolumeType: Use tick volume
 
 //==================================================================
 // MODULE 2: GLOBAL STATE MANAGEMENT
@@ -179,6 +188,14 @@ struct SKeyLevel
 // Global variables for key level tracking
 SKeyLevel g_keyLevels[];  // Array to store detected key levels
 int g_lastKeyLevelUpdate = 0;  // Bar index of last key level update
+
+// [OPTIMIZATION LOGGING]
+string g_lastBreakoutStats = "";    // Stores stats about last breakout
+int g_totalBreakouts = 0;          // Total breakouts detected
+int g_validBreakouts = 0;          // Breakouts that met all criteria
+int g_falseBreakouts = 0;          // Failed breakouts
+int g_retestSuccess = 0;           // Successful retests
+double g_avgStrength = 0;          // Average level strength
 
 //==================================================================
 // MODULE 4: SESSION CONTROL
@@ -798,6 +815,10 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
       return false;
    }
 
+   // Update optimization metrics for level strength
+   g_avgStrength = (g_avgStrength * g_totalBreakouts + strongestLevel.strength) / (g_totalBreakouts + 1);
+   g_totalBreakouts++;
+
    // Prepare data arrays
    double highPrices[];
    double lowPrices[];
@@ -829,101 +850,81 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
    bool bullishBreak = (lastClose > (strongestLevel.price + pipPoint));
    bool bearishBreak = (lastClose < (strongestLevel.price - pipPoint));
 
-   // Enhanced logging for breakout conditions
-   if(ShowDebugPrints && shouldLog)
+   // Enhanced logging for optimization
+   if(ShowDebugPrints)
    {
-      // Calculate volume metrics for logging
-      long sumVol = 0;
-      for(int i = 1; i <= BreakoutLookback; i++)
-      {
-         if(i < ArraySize(volumes))
-            sumVol += volumes[i];
-      }
-      double avgVol = (double)sumVol / (double)BreakoutLookback;
-      double currVol = (double)volumes[0];
-      double volRatio = currVol / avgVol;
-
-      // Calculate ATR metrics for logging
-      double atrBuf[];
-      ArraySetAsSeries(atrBuf, true);
-      double currentATR = 0;
-      double minBreakoutDist = 0;
+      string breakoutStats = StringFormat(
+         "BREAKOUT_STATS\t%s\t%.5f\t%s\t%.4f\t%s\t%s\t%d\t%d\t%.2f",
+         TimeToString(now),
+         strongestLevel.price,
+         (bullishBreak ? "BULL" : (bearishBreak ? "BEAR" : "NONE")),
+         strongestLevel.strength,
+         (volumeOK ? "1" : "0"),
+         (IsATRDistanceMet(lastClose, strongestLevel.price) ? "1" : "0"),
+         strongestLevel.touchCount,
+         g_totalBreakouts,
+         g_avgStrength
+      );
       
-      if(g_handleATR != INVALID_HANDLE && CopyBuffer(g_handleATR, 0, 0, 1, atrBuf) > 0)
+      // Store last stats and log to file
+      g_lastBreakoutStats = breakoutStats;
+      int handle = FileOpen("OptimizationLog.txt", FILE_WRITE|FILE_READ|FILE_TXT);
+      if(handle != INVALID_HANDLE)
       {
-         currentATR = atrBuf[0];
-         minBreakoutDist = currentATR * ATRMultiplier;
+         FileSeek(handle, 0, SEEK_END);
+         FileWriteString(handle, breakoutStats + "\n");
+         FileClose(handle);
       }
-
-      // Log detailed breakout analysis
-      Print("🔍 [Breakout Analysis] Price: ", DoubleToString(lastClose, _Digits),
-            "\n  Level: ", DoubleToString(strongestLevel.price, _Digits),
-            " (", (strongestLevel.isResistance ? "Resistance" : "Support"), ")",
-            "\n  Strength: ", DoubleToString(strongestLevel.strength, 4),
-            "\n  Break Direction: ", (bullishBreak ? "Bullish" : (bearishBreak ? "Bearish" : "None")),
-            "\n  Distance: ", DoubleToString(MathAbs(lastClose - strongestLevel.price)/pipPoint, 1), " pips",
-            "\n  Volume OK: ", (volumeOK ? "Yes" : "No"),
-            "\n    Current/Avg Volume: ", DoubleToString(volRatio, 2), "x",
-            " (need ", DoubleToString(VolumeFactor, 2), "x)",
-            "\n  ATR Distance OK: ", (IsATRDistanceMet(lastClose, strongestLevel.price) ? "Yes" : "No"),
-            "\n    Current ATR: ", DoubleToString(currentATR, _Digits),
-            "\n    Min Required Distance: ", DoubleToString(minBreakoutDist, _Digits),
-            "\n    Actual Distance: ", DoubleToString(MathAbs(lastClose - strongestLevel.price), _Digits));
    }
 
    // Bullish breakout
    if(bullishBreak && volumeOK && IsATRDistanceMet(lastClose, strongestLevel.price))
    {
+      g_validBreakouts++;
       outBreakoutLevel = strongestLevel.price;
-      outBullish       = true;
+      outBullish = true;
 
-      // If retest is toggled on, set global breakoutState, then return false
       if(UseRetest)
       {
-         g_breakoutState.breakoutTime   = TimeCurrent();
-         g_breakoutState.breakoutLevel  = strongestLevel.price;
-         g_breakoutState.isBullish      = true;
+         g_breakoutState.breakoutTime = TimeCurrent();
+         g_breakoutState.breakoutLevel = strongestLevel.price;
+         g_breakoutState.isBullish = true;
          g_breakoutState.awaitingRetest = true;
-         g_breakoutState.barsWaiting    = 0;
+         g_breakoutState.barsWaiting = 0;
          g_breakoutState.retestStartTime = TimeCurrent();
          g_breakoutState.retestStartBar = iBarShift(_Symbol, _Period, TimeCurrent(), false);
-         if(ShowDebugPrints && shouldLog)
-         {
-            Print("✅ [M5.6.b Breakout Detection] Bullish breakout found; awaiting retest.");
-         }
-         return false;  
+         return false;
       }
-
-      // Return true only if no retest required => safe to place trade
       return true;
    }
 
    // Bearish breakout
    if(bearishBreak && volumeOK && IsATRDistanceMet(strongestLevel.price, lastClose))
    {
+      g_validBreakouts++;
       outBreakoutLevel = strongestLevel.price;
-      outBullish       = false;
+      outBullish = false;
 
       if(UseRetest)
       {
-         g_breakoutState.breakoutTime   = TimeCurrent();
-         g_breakoutState.breakoutLevel  = strongestLevel.price;
-         g_breakoutState.isBullish      = false;
+         g_breakoutState.breakoutTime = TimeCurrent();
+         g_breakoutState.breakoutLevel = strongestLevel.price;
+         g_breakoutState.isBullish = false;
          g_breakoutState.awaitingRetest = true;
-         g_breakoutState.barsWaiting    = 0;
+         g_breakoutState.barsWaiting = 0;
          g_breakoutState.retestStartTime = TimeCurrent();
          g_breakoutState.retestStartBar = iBarShift(_Symbol, _Period, TimeCurrent(), false);
-         if(ShowDebugPrints && shouldLog)
-         {
-            Print("✅ [M5.6.c Breakout Detection] Bearish breakout found; awaiting retest.");
-         }
-         return false;  
+         return false;
       }
-
       return true;
    }
 
-   // No breakout
+   // If we detected a breakout but filters failed, count as false breakout
+   if(bullishBreak || bearishBreak)
+   {
+      g_falseBreakouts++;
+   }
+
    return false;
 }
 
