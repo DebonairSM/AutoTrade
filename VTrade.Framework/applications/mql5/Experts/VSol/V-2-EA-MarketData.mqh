@@ -28,17 +28,6 @@ struct SKeyLevel
     STouch    touches[];      // Dynamic array of touches
 };
 
-struct SBreakoutState
-{
-    datetime breakoutTime;  
-    double   breakoutLevel; 
-    bool     isBullish;     
-    bool     awaitingRetest; 
-    int      barsWaiting;   
-    datetime retestStartTime;
-    int      retestStartBar;
-};
-
 //+------------------------------------------------------------------+
 //| Market Data Analysis Class                                         |
 //+------------------------------------------------------------------+
@@ -55,8 +44,8 @@ private:
     static double   m_cachedS1;
     static double   m_cachedS2;
     
-    // Breakout detection parameters
-    static int      m_breakoutLookback;
+    // Level detection parameters
+    static int      m_lookbackPeriod;
     static double   m_minStrengthThreshold;
     static double   m_touchZoneSize;
     static int      m_minTouchCount;
@@ -65,31 +54,18 @@ private:
     static double   m_durationWeight;
     static int      m_minLevelDurationHours;
     
-    // Breakout state tracking
-    static SBreakoutState m_breakoutState;
-    static SKeyLevel      m_keyLevels[];
-    static int           m_lastKeyLevelUpdate;
-    
-    // Performance metrics
-    static int      m_totalBreakouts;
-    static int      m_validBreakouts;
-    static int      m_falseBreakouts;
-    static double   m_avgStrength;
-
     // Private helper methods
     static bool     IsNearExistingLevel(const double price, const SKeyLevel &levels[], const int count);
     static double   CalculateLevelStrength(const SKeyLevel &level);
     static bool     IsValidTouch(const double &prices[], const datetime &times[], const int touchIndex, const int lookback=3);
-    static void     LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason="");
-    static string   GetKeyLevelLogFilename();
 
 public:
     //--- Initialization
-    static void Init(bool showDebugPrints, int breakoutLookback=24, double minStrength=0.65,
+    static void Init(bool showDebugPrints, int lookbackPeriod=24, double minStrength=0.65,
                     double touchZone=0.0004, int minTouches=2)
     {
         m_showDebugPrints = showDebugPrints;
-        m_breakoutLookback = breakoutLookback;
+        m_lookbackPeriod = lookbackPeriod;
         m_minStrengthThreshold = minStrength;
         m_touchZoneSize = touchZone;
         m_minTouchCount = minTouches;
@@ -101,7 +77,6 @@ public:
         m_minLevelDurationHours = 12;
         
         ResetCache();
-        ResetBreakoutState();
     }
     
     //--- Reset cache
@@ -115,46 +90,19 @@ public:
         m_cachedS2 = 0;
     }
     
-    //--- Reset breakout state
-    static void ResetBreakoutState()
-    {
-        m_breakoutState.breakoutTime = 0;
-        m_breakoutState.breakoutLevel = 0;
-        m_breakoutState.isBullish = false;
-        m_breakoutState.awaitingRetest = false;
-        m_breakoutState.barsWaiting = 0;
-        m_breakoutState.retestStartTime = 0;
-        m_breakoutState.retestStartBar = 0;
-        
-        ArrayResize(m_keyLevels, 0);
-        m_lastKeyLevelUpdate = 0;
-    }
-    
-    //--- Pivot Points Analysis
+    //--- Market Analysis Methods
     static bool GetDailyPivotPoints(string symbol, double &pivot, double &r1, double &r2, double &s1, double &s2);
     static bool GetWeeklyPivotPoints(string symbol, double &pivot, double &r1, double &r2, double &s1, double &s2);
-    
-    //--- Price Action Analysis
     static bool GetPriceAction(string symbol, ENUM_TIMEFRAMES timeframe, int lookback,
                              double &highestHigh, double &lowestLow, double &averageRange);
-                             
-    //--- Volatility Analysis
     static double GetATR(string symbol, ENUM_TIMEFRAMES timeframe, int period, int shift = 1);
     static double GetStdDev(string symbol, ENUM_TIMEFRAMES timeframe, int period, int shift = 1);
-    
-    //--- Volume Analysis
     static bool GetVolumeProfile(string symbol, ENUM_TIMEFRAMES timeframe, int lookback,
                                double &valueAreaHigh, double &valueAreaLow, double &poc);
     
-    //--- Breakout Detection Methods
-    static bool DetectBreakoutAndInitRetest(string symbol, double &outBreakoutLevel, bool &outBullish);
+    //--- Key Level Analysis
     static bool FindKeyLevels(string symbol, SKeyLevel &outStrongestLevel);
-    
-    //--- Getters for breakout state
-    static bool     IsAwaitingRetest() { return m_breakoutState.awaitingRetest; }
-    static double   GetBreakoutLevel() { return m_breakoutState.breakoutLevel; }
-    static bool     IsBullishBreakout() { return m_breakoutState.isBullish; }
-    static datetime GetBreakoutTime() { return m_breakoutState.breakoutTime; }
+    static bool IsBreakoutCandidate(string symbol, const SKeyLevel &level, bool &isBullish);
 };
 
 // Initialize static members
@@ -166,22 +114,15 @@ double   CV2EAMarketData::m_cachedR2 = 0;
 double   CV2EAMarketData::m_cachedS1 = 0;
 double   CV2EAMarketData::m_cachedS2 = 0;
 
-// Initialize static members for breakout detection
-int           CV2EAMarketData::m_breakoutLookback = 24;
-double        CV2EAMarketData::m_minStrengthThreshold = 0.65;
-double        CV2EAMarketData::m_touchZoneSize = 0.0004;
-int           CV2EAMarketData::m_minTouchCount = 2;
-double        CV2EAMarketData::m_touchScoreWeight = 0.5;
-double        CV2EAMarketData::m_recencyWeight = 0.3;
-double        CV2EAMarketData::m_durationWeight = 0.2;
-int           CV2EAMarketData::m_minLevelDurationHours = 12;
-SBreakoutState CV2EAMarketData::m_breakoutState = {0};
-SKeyLevel     CV2EAMarketData::m_keyLevels[];
-int           CV2EAMarketData::m_lastKeyLevelUpdate = 0;
-int           CV2EAMarketData::m_totalBreakouts = 0;
-int           CV2EAMarketData::m_validBreakouts = 0;
-int           CV2EAMarketData::m_falseBreakouts = 0;
-double        CV2EAMarketData::m_avgStrength = 0;
+// Initialize level detection parameters
+int      CV2EAMarketData::m_lookbackPeriod = 24;
+double   CV2EAMarketData::m_minStrengthThreshold = 0.65;
+double   CV2EAMarketData::m_touchZoneSize = 0.0004;
+int      CV2EAMarketData::m_minTouchCount = 2;
+double   CV2EAMarketData::m_touchScoreWeight = 0.5;
+double   CV2EAMarketData::m_recencyWeight = 0.3;
+double   CV2EAMarketData::m_durationWeight = 0.2;
+int      CV2EAMarketData::m_minLevelDurationHours = 12;
 
 //+------------------------------------------------------------------+
 //| Get daily pivot points with caching                                |
@@ -290,7 +231,7 @@ double CV2EAMarketData::CalculateLevelStrength(const SKeyLevel &level)
     // Recency score with adjusted decay
     datetime now = TimeCurrent();
     double hoursElapsed = (double)(now - level.lastTouch) / 3600.0;
-    double recencyScore = MathExp(-hoursElapsed / (m_breakoutLookback * 12.0));
+    double recencyScore = MathExp(-hoursElapsed / (m_lookbackPeriod * 12.0));
     
     // Duration score with enhanced scaling
     double hoursDuration = (double)(level.lastTouch - level.firstTouch) / 3600.0;
@@ -317,9 +258,9 @@ bool CV2EAMarketData::FindKeyLevels(string symbol, SKeyLevel &outStrongestLevel)
     ArraySetAsSeries(lowPrices, true);
     ArraySetAsSeries(times, true);
 
-    if(CopyHigh(symbol, PERIOD_CURRENT, 0, m_breakoutLookback, highPrices) <= 0 ||
-       CopyLow(symbol, PERIOD_CURRENT, 0, m_breakoutLookback, lowPrices) <= 0 ||
-       CopyTime(symbol, PERIOD_CURRENT, 0, m_breakoutLookback, times) <= 0)
+    if(CopyHigh(symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, highPrices) <= 0 ||
+       CopyLow(symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, lowPrices) <= 0 ||
+       CopyTime(symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, times) <= 0)
     {
         if(m_showDebugPrints)
             Print("❌ [FindKeyLevels] Failed to copy price data");
@@ -330,7 +271,7 @@ bool CV2EAMarketData::FindKeyLevels(string symbol, SKeyLevel &outStrongestLevel)
     int levelCount = 0;
 
     // Find swing highs and lows
-    for(int i = 1; i < m_breakoutLookback - 1; i++)
+    for(int i = 1; i < m_lookbackPeriod - 1; i++)
     {
         // Check swing highs
         if(highPrices[i] > highPrices[i-1] && highPrices[i] > highPrices[i+1])
@@ -347,7 +288,7 @@ bool CV2EAMarketData::FindKeyLevels(string symbol, SKeyLevel &outStrongestLevel)
                 datetime firstTouch = times[i];
                 datetime lastTouch = times[i];
                 
-                for(int j = 0; j < m_breakoutLookback; j++)
+                for(int j = 0; j < m_lookbackPeriod; j++)
                 {
                     if(MathAbs(highPrices[j] - level) <= m_touchZoneSize ||
                        MathAbs(lowPrices[j] - level) <= m_touchZoneSize)
@@ -408,46 +349,6 @@ bool CV2EAMarketData::FindKeyLevels(string symbol, SKeyLevel &outStrongestLevel)
 }
 
 //+------------------------------------------------------------------+
-//| Detect breakout and initialize retest                              |
-//+------------------------------------------------------------------+
-bool CV2EAMarketData::DetectBreakoutAndInitRetest(string symbol, double &outBreakoutLevel, bool &outBullish)
-{
-    // Find key levels first
-    SKeyLevel strongestLevel;
-    if(!FindKeyLevels(symbol, strongestLevel))
-        return false;
-
-    // Get current price data
-    double close = iClose(symbol, PERIOD_CURRENT, 1);
-    double high = iHigh(symbol, PERIOD_CURRENT, 1);
-    double low = iLow(symbol, PERIOD_CURRENT, 1);
-    
-    // Check for breakout
-    bool bullishBreak = (close > strongestLevel.price);
-    bool bearishBreak = (close < strongestLevel.price);
-    
-    if(bullishBreak || bearishBreak)
-    {
-        outBreakoutLevel = strongestLevel.price;
-        outBullish = bullishBreak;
-        
-        // Update breakout state
-        m_breakoutState.breakoutTime = TimeCurrent();
-        m_breakoutState.breakoutLevel = strongestLevel.price;
-        m_breakoutState.isBullish = bullishBreak;
-        m_breakoutState.awaitingRetest = true;
-        m_breakoutState.barsWaiting = 0;
-        m_breakoutState.retestStartTime = TimeCurrent();
-        m_breakoutState.retestStartBar = iBarShift(symbol, PERIOD_CURRENT, TimeCurrent(), false);
-        
-        m_validBreakouts++;
-        return true;
-    }
-
-    return false;
-}
-
-//+------------------------------------------------------------------+
 //| Check if touch is valid                                           |
 //+------------------------------------------------------------------+
 bool CV2EAMarketData::IsValidTouch(const double &prices[], const datetime &times[], const int touchIndex, const int lookback=3)
@@ -466,5 +367,27 @@ bool CV2EAMarketData::IsValidTouch(const double &prices[], const datetime &times
             return true;
         }
     }
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check if price has broken a key level                             |
+//+------------------------------------------------------------------+
+bool CV2EAMarketData::IsBreakoutCandidate(string symbol, const SKeyLevel &level, bool &isBullish)
+{
+    double close = iClose(symbol, PERIOD_CURRENT, 1);
+    
+    // Simple breakout check - can be enhanced with more conditions
+    if(close > level.price)
+    {
+        isBullish = true;
+        return true;
+    }
+    else if(close < level.price)
+    {
+        isBullish = false;
+        return true;
+    }
+    
     return false;
 } 

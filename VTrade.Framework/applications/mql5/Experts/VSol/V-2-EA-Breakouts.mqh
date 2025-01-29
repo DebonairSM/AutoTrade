@@ -12,6 +12,20 @@
 #include "V-2-EA-MarketData.mqh"
 
 //+------------------------------------------------------------------+
+//| Structure Definitions                                              |
+//+------------------------------------------------------------------+
+struct SBreakoutState
+{
+    datetime breakoutTime;  
+    double   breakoutLevel; 
+    bool     isBullish;     
+    bool     awaitingRetest; 
+    int      barsWaiting;   
+    datetime retestStartTime;
+    int      retestStartBar;
+};
+
+//+------------------------------------------------------------------+
 //| Breakout Strategy Class                                            |
 //+------------------------------------------------------------------+
 class CV2EABreakouts
@@ -49,6 +63,13 @@ private:
     double        m_maxTickTime;
     double        m_avgTickTime;
     double        m_totalTickTime;
+    int           m_totalBreakouts;    // Total breakouts detected
+    int           m_validBreakouts;    // Valid breakouts that met all criteria
+    int           m_falseBreakouts;    // Failed breakouts
+    double        m_avgStrength;       // Average level strength
+    
+    // Breakout state
+    SBreakoutState m_breakoutState;    // Current breakout state
 
 public:
     //--- Constructor and destructor
@@ -74,6 +95,10 @@ public:
     
     //--- Getters for strategy state
     bool          HasOpenPosition(void) const { return m_hasPositionOpen; }
+    bool          IsAwaitingRetest(void) const { return m_breakoutState.awaitingRetest; }
+    double        GetBreakoutLevel(void) const { return m_breakoutState.breakoutLevel; }
+    bool          IsBullishBreakout(void) const { return m_breakoutState.isBullish; }
+    datetime      GetBreakoutTime(void) const { return m_breakoutState.breakoutTime; }
     ulong         GetTickCount(void) const { return m_tickCount; }
     double        GetAvgProcessingTime(void) const { return m_avgTickTime; }
 
@@ -85,6 +110,8 @@ private:
     bool          CheckNewBar(void);
     void          ExecuteBreakoutStrategy(void);
     bool          ApplyDailyPivotSLTP(bool isBullish, double &entryPrice, double &slPrice, double &tpPrice);
+    bool          DetectBreakoutAndInitRetest(void);
+    void          ResetBreakoutState(void);
 };
 
 //+------------------------------------------------------------------+
@@ -99,8 +126,13 @@ CV2EABreakouts::CV2EABreakouts(void) : m_initialized(false),
                                        m_calculationCount(0),
                                        m_maxTickTime(0.0),
                                        m_avgTickTime(0.0),
-                                       m_totalTickTime(0.0)
+                                       m_totalTickTime(0.0),
+                                       m_totalBreakouts(0),
+                                       m_validBreakouts(0),
+                                       m_falseBreakouts(0),
+                                       m_avgStrength(0.0)
 {
+    ResetBreakoutState();
 }
 
 //+------------------------------------------------------------------+
@@ -384,4 +416,51 @@ void CV2EABreakouts::ExecuteBreakoutTrade(bool isBullish, double entryPrice)
     // Place the trade
     CV2EAUtils::PlaceTrade(isBullish, entryPrice, slPrice, tpPrice, lots);
 }
-*/ 
+*/
+
+//+------------------------------------------------------------------+
+//| Detect breakout and initialize retest                              |
+//+------------------------------------------------------------------+
+bool CV2EABreakouts::DetectBreakoutAndInitRetest(void)
+{
+    // Find key levels first
+    SKeyLevel strongestLevel;
+    if(!CV2EAMarketData::FindKeyLevels(_Symbol, strongestLevel))
+        return false;
+
+    // Check if price has broken the level
+    bool isBullish;
+    if(!CV2EAMarketData::IsBreakoutCandidate(_Symbol, strongestLevel, isBullish))
+        return false;
+        
+    // Update breakout state
+    m_breakoutState.breakoutTime = TimeCurrent();
+    m_breakoutState.breakoutLevel = strongestLevel.price;
+    m_breakoutState.isBullish = isBullish;
+    m_breakoutState.awaitingRetest = true;
+    m_breakoutState.barsWaiting = 0;
+    m_breakoutState.retestStartTime = TimeCurrent();
+    m_breakoutState.retestStartBar = iBarShift(_Symbol, PERIOD_CURRENT, TimeCurrent(), false);
+    
+    m_validBreakouts++;
+    
+    if(m_showDebugPrints)
+        Print("✅ [DetectBreakout] ", (isBullish ? "Bullish" : "Bearish"), 
+              " breakout detected at level ", strongestLevel.price);
+              
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Reset breakout state                                               |
+//+------------------------------------------------------------------+
+void CV2EABreakouts::ResetBreakoutState(void)
+{
+    m_breakoutState.breakoutTime = 0;
+    m_breakoutState.breakoutLevel = 0;
+    m_breakoutState.isBullish = false;
+    m_breakoutState.awaitingRetest = false;
+    m_breakoutState.barsWaiting = 0;
+    m_breakoutState.retestStartTime = 0;
+    m_breakoutState.retestStartBar = 0;
+} 
