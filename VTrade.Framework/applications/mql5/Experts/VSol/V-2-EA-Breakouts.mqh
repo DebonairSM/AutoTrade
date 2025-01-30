@@ -40,6 +40,54 @@ struct SStrategyState
     }
 };
 
+//--- Level Performance Tracking
+struct SLevelPerformance
+{
+    int successfulBounces;    // Number of times price respected the level
+    int falseBreaks;         // Number of times price broke but returned
+    int trueBreaks;          // Number of times price broke decisively
+    double avgBounceSize;    // Average size of bounces from this level
+    double successRate;      // Ratio of successful bounces to total tests
+    
+    void Reset()
+    {
+        successfulBounces = 0;
+        falseBreaks = 0;
+        trueBreaks = 0;
+        avgBounceSize = 0;
+        successRate = 0;
+    }
+};
+
+//--- System Health Tracking
+struct SSystemHealth
+{
+    int missedOpportunities;  // Clear levels that weren't detected
+    int falseSignals;        // Invalid levels that were detected
+    double detectionRate;     // Ratio of correct detections to total
+    double noiseRatio;       // Ratio of false signals to valid signals
+    datetime lastUpdate;      // Last time health metrics were updated
+    
+    void Reset()
+    {
+        missedOpportunities = 0;
+        falseSignals = 0;
+        detectionRate = 0;
+        noiseRatio = 0;
+        lastUpdate = 0;
+    }
+};
+
+// Add after other struct definitions
+struct SChartLine
+{
+    string name;        // Unique line name
+    double price;      // Price level
+    datetime lastUpdate; // Last update time
+    color lineColor;   // Line color
+    bool isActive;     // Whether line is currently shown
+};
+
 //+------------------------------------------------------------------+
 //| Key Level Detection Class                                          |
 //+------------------------------------------------------------------+
@@ -107,6 +155,26 @@ private:
         }
     } m_hourlyStats;
 
+    //--- Performance tracking
+    SLevelPerformance m_levelPerformance;  // Track level performance
+    SSystemHealth m_systemHealth;          // Track system health
+    
+    //--- Key level history
+    double m_recentBreaks[];              // Store recent level breaks
+    datetime m_recentBreakTimes[];        // Times of recent breaks
+    int m_recentBreakCount;               // Count of recent breaks
+
+    struct SAlertTime
+    {
+        double price;
+        datetime lastAlert;
+    };
+    SAlertTime m_lastAlerts[];  // Array to track last alert times for each level
+
+    //--- Add to class private members
+    SChartLine m_chartLines[];  // Array to track chart lines
+    datetime m_lastChartUpdate; // Last chart update time
+
 public:
     //--- Constructor and destructor
     CV2EABreakouts(void) : m_initialized(false),
@@ -126,7 +194,14 @@ public:
         m_state.Reset();
     }
     
-    ~CV2EABreakouts(void) {}
+    ~CV2EABreakouts(void)
+    {
+        // Clear all chart objects created by this EA
+        for(int i = 0; i < ArraySize(m_chartLines); i++)
+        {
+            ObjectDelete(0, m_chartLines[i].name);
+        }
+    }
     
     //--- Initialization
     bool Init(int lookbackPeriod, double minStrength, double touchZone, 
@@ -171,55 +246,15 @@ public:
             return;
         }
         
-        // Check if it's time for hourly report
         datetime currentTime = TimeCurrent();
-        
-        // Get current hour components for more explicit hour change detection
-        MqlDateTime dt;
-        TimeToStruct(currentTime, dt);
-        datetime currentHour = currentTime - dt.min * 60 - dt.sec;  // More precise hour rounding
-        
-        // Validate last report time
-        if(m_lastHourlyReport > currentTime)
-        {
-            DebugPrint("⚠️ Invalid last report time detected, resetting", DEBUG_ERRORS);
-            m_lastHourlyReport = 0;
-        }
-        
-        // Only print report at the start of each hour
-        if(m_lastHourlyReport == 0 || currentHour > m_lastHourlyReport)
-        {
-            // Print hourly summary and reset stats
-            PrintHourlySummary();
-            
-            // Ensure complete reset of all stats
-            m_hourlyStats.Reset();
-            m_hourlyStats.lowTouchCount = 0;  // Explicitly reset low touch count
-            m_hourlyStats.lowStrength = 0;    // Explicitly reset low strength
-            m_hourlyStats.validLevels = 0;    // Explicitly reset valid levels
-            
-            m_lastHourlyReport = currentHour;  // Store the hour timestamp
-            
-            DebugPrint(StringFormat("📊 Starting new hourly period at %s", 
-                TimeToString(currentTime, TIME_DATE|TIME_MINUTES)), DEBUG_NORMAL);
-        }
         
         // Step 1: Key Level Identification
         SKeyLevel strongestLevel;
         bool foundKeyLevel = FindKeyLevels(strongestLevel);
         
-        // Update hourly statistics
+        // Update system state
         if(foundKeyLevel)
         {
-            // Update strongest level if needed
-            if(strongestLevel.strength > m_hourlyStats.strongestStrength)
-            {
-                m_hourlyStats.strongestLevel = strongestLevel.price;
-                m_hourlyStats.strongestStrength = strongestLevel.strength;
-                m_hourlyStats.strongestTouches = strongestLevel.touchCount;
-                m_hourlyStats.isStrongestResistance = strongestLevel.isResistance;
-            }
-            
             // If we found a new key level that's significantly different from our active one
             if(!m_state.keyLevelFound || 
                MathAbs(strongestLevel.price - m_state.activeKeyLevel.price) > m_touchZone)
@@ -227,8 +262,10 @@ public:
                 // Update strategy state with new key level
                 m_state.keyLevelFound = true;
                 m_state.activeKeyLevel = strongestLevel;
-                m_state.lastUpdate = TimeCurrent();
+                m_state.lastUpdate = currentTime;
                 
+                // Print key levels report when we find a new significant level
+                PrintKeyLevelsReport();
             }
         }
         else if(m_state.keyLevelFound)
@@ -238,10 +275,75 @@ public:
             m_state.Reset();
         }
         
+        // Step 2: Check for price approaching key levels
+        double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        for(int i = 0; i < m_keyLevelCount; i++)
+        {
+            double distance = MathAbs(currentPrice - m_currentKeyLevels[i].price);
+            if(distance <= m_touchZone * 2) // Alert when price is within 2x the touch zone
+            {
+                PrintTradeSetupAlert(m_currentKeyLevels[i], distance);
+            }
+        }
+        
+        // Step 3: Update and print system health report (hourly)
+        PrintSystemHealthReport();
+        
+        // Step 4: Update chart lines
+        UpdateChartLines();
+        
         // Future steps will be added here:
-        // Step 2: Breakout Detection
-        // Step 3: Retest Validation
-        // Step 4: Trade Management
+        // Step 5: Breakout Detection
+        // Step 6: Retest Validation
+        // Step 7: Trade Management
+    }
+    
+    // Helper method to update system health metrics
+    void UpdateSystemHealth(bool validDetection, bool falseSignal)
+    {
+        static int totalDetections = 0;
+        totalDetections++;
+        
+        if(validDetection)
+            m_systemHealth.detectionRate = (m_systemHealth.detectionRate * (totalDetections - 1) + 1.0) / totalDetections;
+        
+        if(falseSignal)
+        {
+            m_systemHealth.falseSignals++;
+            m_systemHealth.noiseRatio = (double)m_systemHealth.falseSignals / totalDetections;
+        }
+    }
+    
+    // Helper method to track level breaks
+    void AddLevelBreak(double price, bool isFalseBreak = false)
+    {
+        if(isFalseBreak)
+        {
+            m_levelPerformance.falseBreaks++;
+        }
+        else
+        {
+            m_levelPerformance.trueBreaks++;
+            
+            // Add to recent breaks array
+            if(m_recentBreakCount >= ArraySize(m_recentBreaks))
+            {
+                ArrayResize(m_recentBreaks, m_recentBreakCount + 10);
+                ArrayResize(m_recentBreakTimes, m_recentBreakCount + 10);
+            }
+            
+            m_recentBreaks[m_recentBreakCount] = price;
+            m_recentBreakTimes[m_recentBreakCount] = TimeCurrent();
+            m_recentBreakCount++;
+        }
+        
+        // Update success rate
+        int totalTests = m_levelPerformance.successfulBounces + 
+                        m_levelPerformance.falseBreaks + 
+                        m_levelPerformance.trueBreaks;
+        
+        if(totalTests > 0)
+            m_levelPerformance.successRate = (double)m_levelPerformance.successfulBounces / totalTests;
     }
     
     void PrintHourlySummary()
@@ -512,18 +614,49 @@ private:
     
     double CalculateLevelStrength(const SKeyLevel &level)
     {
-        // Touch score (0.4 weight)
-        double touchScore = MathMin((double)level.touchCount / m_minTouches, 1.5);
+        // Base strength from touch count (0.50-0.95 range)
+        double touchBase = 0;
+        switch(level.touchCount) {
+            case 2: touchBase = 0.50; break;  // Base level
+            case 3: touchBase = 0.70; break;  // Significant jump
+            case 4: touchBase = 0.85; break;  // Strong level
+            default: touchBase = MathMin(0.90 + ((level.touchCount - 5) * 0.01), 0.95); // Cap at 0.95
+        }
         
-        // Recency score (0.3 weight)
+        // Recency modifier (-60% to +30% of base)
         double hoursElapsed = (double)(TimeCurrent() - level.lastTouch) / 3600.0;
-        double recencyScore = MathExp(-hoursElapsed / (m_lookbackPeriod * 12.0));
+        double recencyMod = 0;
         
-        // Duration score (0.3 weight)
+        if(hoursElapsed <= m_lookbackPeriod / 4) {  // Very recent (within 1/4 of lookback)
+            recencyMod = 0.30;
+        } else if(hoursElapsed <= m_lookbackPeriod / 2) {  // Recent (within 1/2 of lookback)
+            recencyMod = 0.15;
+        } else if(hoursElapsed <= m_lookbackPeriod) {  // Within lookback
+            recencyMod = 0;
+        } else {  // Old
+            recencyMod = -0.60;
+        }
+        
+        // Duration bonus (up to +35% of base)
         double hoursDuration = (double)(level.lastTouch - level.firstTouch) / 3600.0;
-        double durationScore = MathMin(hoursDuration / 24.0, 1.0);
+        double durationMod = 0;
         
-        return (touchScore * 0.4 + recencyScore * 0.3 + durationScore * 0.3);
+        if(hoursDuration >= m_lookbackPeriod / 2) {  // Long-lasting
+            durationMod = 0.35;
+        } else if(hoursDuration >= m_lookbackPeriod / 4) {  // Medium duration
+            durationMod = 0.20;
+        } else if(hoursDuration >= m_lookbackPeriod / 8) {  // Short duration
+            durationMod = 0.10;
+        }
+        
+        // Calculate final strength with modifiers
+        double strength = touchBase * (1.0 + recencyMod + durationMod);
+        
+        // Add tiny random variation (0.05% max)
+        strength += 0.0005 * MathMod(level.price * 10000, 10) / 10;
+        
+        // Ensure bounds
+        return MathMin(MathMax(strength, 0.45), 0.98);
     }
     
     void AddKeyLevel(const SKeyLevel &level)
@@ -554,5 +687,338 @@ private:
         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
         
         Print(StringFormat("[%s] [%.5f] %s", timestamp, currentPrice, message));
+    }
+
+    void PrintKeyLevelsReport()
+    {
+        string timeStr = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES);
+        double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        
+        // Create arrays to store and sort levels
+        SKeyLevel supportLevels[];
+        SKeyLevel resistanceLevels[];
+        ArrayResize(supportLevels, m_keyLevelCount);
+        ArrayResize(resistanceLevels, m_keyLevelCount);
+        int supportCount = 0;
+        int resistanceCount = 0;
+        
+        // Separate levels into support and resistance
+        for(int i = 0; i < m_keyLevelCount; i++)
+        {
+            if(m_currentKeyLevels[i].isResistance)
+                resistanceLevels[resistanceCount++] = m_currentKeyLevels[i];
+            else
+                supportLevels[supportCount++] = m_currentKeyLevels[i];
+        }
+        
+        // Sort levels by distance from current price
+        for(int i = 0; i < supportCount - 1; i++)
+        {
+            for(int j = i + 1; j < supportCount; j++)
+            {
+                if(MathAbs(supportLevels[i].price - currentPrice) > MathAbs(supportLevels[j].price - currentPrice))
+                {
+                    SKeyLevel temp = supportLevels[i];
+                    supportLevels[i] = supportLevels[j];
+                    supportLevels[j] = temp;
+                }
+            }
+        }
+        
+        for(int i = 0; i < resistanceCount - 1; i++)
+        {
+            for(int j = i + 1; j < resistanceCount; j++)
+            {
+                if(MathAbs(resistanceLevels[i].price - currentPrice) > MathAbs(resistanceLevels[j].price - currentPrice))
+                {
+                    SKeyLevel temp = resistanceLevels[i];
+                    resistanceLevels[i] = resistanceLevels[j];
+                    resistanceLevels[j] = temp;
+                }
+            }
+        }
+        
+        // Print header without timestamp in each line
+        DebugPrint(StringFormat("=== KEY LEVELS REPORT [%s] ===\nPrice: %.5f", timeStr, currentPrice), DEBUG_IMPORTANT);
+        
+        // Print Support Levels
+        if(supportCount > 0)
+        {
+            DebugPrint("\nSUPPORT:", DEBUG_IMPORTANT);
+            for(int i = 0; i < supportCount; i++)
+            {
+                double distance = MathAbs(currentPrice - supportLevels[i].price);
+                string marker = (supportLevels[i].strength > 0.8) ? "⭐" : "";
+                string arrow = (currentPrice > supportLevels[i].price) ? "↓" : " ";
+                string distanceStr = StringFormat("%d pips", (int)(distance / _Point));
+                
+                DebugPrint(StringFormat("%s %.5f (%s) | S:%.2f T:%d %s",
+                    arrow,
+                    supportLevels[i].price,
+                    distanceStr,
+                    supportLevels[i].strength,
+                    supportLevels[i].touchCount,
+                    marker), DEBUG_IMPORTANT);
+            }
+        }
+        
+        // Print Resistance Levels
+        if(resistanceCount > 0)
+        {
+            DebugPrint("\nRESISTANCE:", DEBUG_IMPORTANT);
+            for(int i = 0; i < resistanceCount; i++)
+            {
+                double distance = MathAbs(currentPrice - resistanceLevels[i].price);
+                string marker = (resistanceLevels[i].strength > 0.8) ? "⭐" : "";
+                string arrow = (currentPrice < resistanceLevels[i].price) ? "↑" : " ";
+                string distanceStr = StringFormat("%d pips", (int)(distance / _Point));
+                
+                DebugPrint(StringFormat("%s %.5f (%s) | S:%.2f T:%d %s",
+                    arrow,
+                    resistanceLevels[i].price,
+                    distanceStr,
+                    resistanceLevels[i].strength,
+                    resistanceLevels[i].touchCount,
+                    marker), DEBUG_IMPORTANT);
+            }
+        }
+        
+        // Print Recent Breaks if any (limit to last 3)
+        if(m_recentBreakCount > 0)
+        {
+            DebugPrint("\nRECENT BREAKS:", DEBUG_IMPORTANT);
+            for(int i = MathMax(0, m_recentBreakCount - 3); i < m_recentBreakCount; i++)
+            {
+                DebugPrint(StringFormat("%.5f @ %s",
+                    m_recentBreaks[i],
+                    TimeToString(m_recentBreakTimes[i], TIME_MINUTES)), DEBUG_IMPORTANT);
+            }
+        }
+    }
+    
+    void PrintSystemHealthReport()
+    {
+        if(m_systemHealth.lastUpdate == 0) return;
+        
+        datetime currentTime = TimeCurrent();
+        if(currentTime - m_systemHealth.lastUpdate < 3600) return; // Only update hourly
+        
+        DebugPrint(StringFormat(
+            "\n=== SYSTEM HEALTH REPORT ===\n" +
+            "Detection Rate: %.1f%%\n" +
+            "Noise Ratio: %.1f%%\n" +
+            "Missed Opportunities: %d\n" +
+            "False Signals: %d",
+            m_systemHealth.detectionRate * 100,
+            m_systemHealth.noiseRatio * 100,
+            m_systemHealth.missedOpportunities,
+            m_systemHealth.falseSignals), DEBUG_IMPORTANT);
+            
+        m_systemHealth.lastUpdate = currentTime;
+    }
+    
+    void PrintTradeSetupAlert(const SKeyLevel &level, double distance)
+    {
+        // Only alert if price is within 30 pips of the level
+        if(distance > 0.0030) return;
+        
+        // Check last alert time for this level
+        datetime lastAlertTime = 0;
+        bool found = false;
+        
+        for(int i = 0; i < ArraySize(m_lastAlerts); i++)
+        {
+            if(MathAbs(m_lastAlerts[i].price - level.price) < m_touchZone)
+            {
+                lastAlertTime = m_lastAlerts[i].lastAlert;
+                found = true;
+                break;
+            }
+        }
+        
+        // Prevent alert spam by requiring minimum 5 minutes between alerts for same level
+        datetime currentTime = TimeCurrent();
+        if(found && currentTime - lastAlertTime < 300) return;
+        
+        // Only alert if level has some proven success
+        if(m_levelPerformance.successRate < 0.30) return;
+        
+        DebugPrint(StringFormat(
+            "\n🔔 TRADE SETUP ALERT\n" +
+            "Price approaching %s @ %.5f\n" +
+            "Distance: %.1f pips\n" +
+            "Level Strength: %.2f\n" +
+            "Previous Touches: %d\n" +
+            "Success Rate: %.1f%%",
+            level.isResistance ? "resistance" : "support",
+            level.price,
+            distance / _Point,
+            level.strength,
+            level.touchCount,
+            m_levelPerformance.successRate * 100), DEBUG_IMPORTANT);
+        
+        // Update last alert time
+        if(!found)
+        {
+            int size = ArraySize(m_lastAlerts);
+            ArrayResize(m_lastAlerts, size + 1);
+            m_lastAlerts[size].price = level.price;
+            m_lastAlerts[size].lastAlert = currentTime;
+        }
+        else
+        {
+            for(int i = 0; i < ArraySize(m_lastAlerts); i++)
+            {
+                if(MathAbs(m_lastAlerts[i].price - level.price) < m_touchZone)
+                {
+                    m_lastAlerts[i].lastAlert = currentTime;
+                    break;
+                }
+            }
+        }
+    }
+    
+    //--- Add new methods
+    void UpdateChartLines()
+    {
+        datetime currentTime = TimeCurrent();
+        
+        // Update if an hour has passed or if it's the first update
+        bool shouldUpdate = (m_lastChartUpdate == 0) || 
+                          (currentTime - m_lastChartUpdate >= 3600) ||
+                          (m_keyLevelCount != ArraySize(m_chartLines));  // Also update if level count changed
+            
+        if(!shouldUpdate)
+            return;
+            
+        // Clear old lines
+        ClearInactiveChartLines();
+        
+        // Mark all lines as inactive before update
+        for(int i = 0; i < ArraySize(m_chartLines); i++)
+            m_chartLines[i].isActive = false;
+        
+        // Update lines for current key levels
+        for(int i = 0; i < m_keyLevelCount; i++)
+        {
+            string lineName = StringFormat("KL_%s_%.5f", 
+                m_currentKeyLevels[i].isResistance ? "R" : "S",
+                m_currentKeyLevels[i].price);
+                
+            // Determine line color and style based on strength
+            color lineColor;
+            ENUM_LINE_STYLE lineStyle;
+            int lineWidth;
+            
+            if(m_currentKeyLevels[i].strength >= 0.85) {
+                lineColor = m_currentKeyLevels[i].isResistance ? clrCrimson : clrForestGreen;  // Strong levels
+                lineStyle = STYLE_SOLID;
+                lineWidth = 2;
+            }
+            else if(m_currentKeyLevels[i].strength >= 0.70) {
+                lineColor = m_currentKeyLevels[i].isResistance ? clrLightCoral : clrMediumSeaGreen;  // Medium levels
+                lineStyle = STYLE_SOLID;
+                lineWidth = 1;
+            }
+            else {
+                lineColor = m_currentKeyLevels[i].isResistance ? clrPink : clrPaleGreen;  // Weak levels
+                lineStyle = STYLE_DOT;
+                lineWidth = 1;
+            }
+            
+            // Check if line already exists
+            bool found = false;
+            for(int j = 0; j < ArraySize(m_chartLines); j++)
+            {
+                if(m_chartLines[j].name == lineName)
+                {
+                    // Update existing line
+                    m_chartLines[j].isActive = true;
+                    m_chartLines[j].lineColor = lineColor;
+                    m_chartLines[j].lastUpdate = currentTime;
+                    found = true;
+                    
+                    // Update line properties
+                    if(!ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor) ||
+                       !ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle) ||
+                       !ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth))
+                    {
+                        DebugPrint(StringFormat("❌ Failed to update line properties for %s", lineName), DEBUG_ERRORS);
+                    }
+                    break;
+                }
+            }
+            
+            // Create new line if not found
+            if(!found)
+            {
+                int size = ArraySize(m_chartLines);
+                ArrayResize(m_chartLines, size + 1);
+                m_chartLines[size].name = lineName;
+                m_chartLines[size].price = m_currentKeyLevels[i].price;
+                m_chartLines[size].lastUpdate = currentTime;
+                m_chartLines[size].lineColor = lineColor;
+                m_chartLines[size].isActive = true;
+                
+                // Create and set up new line
+                if(ObjectCreate(0, lineName, OBJ_HLINE, 0, 0, m_currentKeyLevels[i].price))
+                {
+                    ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
+                    ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle);
+                    ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth);
+                    ObjectSetInteger(0, lineName, OBJPROP_BACK, false);  // Draw on top
+                    ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);  // Prevent user selection
+                    ObjectSetString(0, lineName, OBJPROP_TOOLTIP, StringFormat("%s Level (S:%.2f T:%d)", 
+                        m_currentKeyLevels[i].isResistance ? "Resistance" : "Support",
+                        m_currentKeyLevels[i].strength,
+                        m_currentKeyLevels[i].touchCount));
+                }
+                else
+                {
+                    DebugPrint(StringFormat("❌ Failed to create line %s", lineName), DEBUG_ERRORS);
+                }
+            }
+        }
+        
+        m_lastChartUpdate = currentTime;
+        ChartRedraw(0);  // Force chart redraw
+    }
+    
+    void ClearInactiveChartLines()
+    {
+        // First pass: delete objects for inactive lines
+        for(int i = 0; i < ArraySize(m_chartLines); i++)
+        {
+            if(!m_chartLines[i].isActive)
+            {
+                if(!ObjectDelete(0, m_chartLines[i].name))
+                {
+                    DebugPrint(StringFormat("❌ Failed to delete line %s", m_chartLines[i].name), DEBUG_ERRORS);
+                }
+            }
+        }
+        
+        // Second pass: remove inactive lines from array
+        int newSize = 0;
+        SChartLine tempLines[];
+        ArrayResize(tempLines, ArraySize(m_chartLines));
+        
+        // Copy active lines to temporary array
+        for(int i = 0; i < ArraySize(m_chartLines); i++)
+        {
+            if(m_chartLines[i].isActive)
+            {
+                tempLines[newSize] = m_chartLines[i];
+                newSize++;
+            }
+        }
+        
+        // Resize and copy back
+        ArrayResize(tempLines, newSize);
+        ArrayResize(m_chartLines, newSize);
+        for(int i = 0; i < newSize; i++)
+        {
+            m_chartLines[i] = tempLines[i];
+        }
     }
 }; 
