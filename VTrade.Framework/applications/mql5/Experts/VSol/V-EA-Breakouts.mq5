@@ -55,7 +55,6 @@ input double RiskPercentage         = 1.0;     // RiskPercentage: Fixed 1% in P1
 
 // [DISABLED FOR P1] - Advanced Settings
 input bool   UseCandlestickConfirmation = false; // UseCandlestickConfirmation: Disabled in P1
-input double VolumeFactor           = 2.0;     // VolumeFactor: P3 optimization
 input int    MaxRetestBars          = 8;       // MaxRetestBars: P3 optimization
 input int    MaxRetestMinutes       = 480;     // MaxRetestMinutes: Fixed 8h for H1
 
@@ -632,76 +631,8 @@ bool DoesVolumeMeetRequirement(const long &volumes[], const int lookback)
    if(!UseVolumeFilter) 
       return true;
 
-   // Ensure we have enough data
-   if(ArraySize(volumes) < lookback + 2)  // Need one extra bar for previous volume
-   {
-      if(ShowDebugPrints)
-         Print("❌ [Volume Filter] Not enough volume data. Need ", lookback + 2, " bars, got ", ArraySize(volumes));
-      return false;
-   }
-
-   // Calculate average volume excluding current and previous bar
-   long sumVol = 0;
-   int countVol = 0;
-   
-   // Debug: Print first few volume values
-   if(ShowDebugPrints)
-   {
-      string volDebug = "📊 [Volume Data] First 5 volumes: ";
-      for(int i = 0; i < MathMin(5, ArraySize(volumes)); i++)
-         volDebug += StringFormat("v[%d]=%d ", i, volumes[i]);
-      Print(volDebug);
-   }
-   
-   // Start from index 2 to exclude current and previous bar
-   for(int i = 2; i <= lookback + 1; i++)
-   {
-      if(volumes[i] > 0)  // Only count valid volumes
-      {
-         sumVol += volumes[i];
-         countVol++;
-      }
-   }
-   
-   // If we don't have enough valid volume data
-   if(countVol == 0)
-   {
-      if(ShowDebugPrints)
-         Print("❌ [Volume Filter] No valid volume data found in lookback period");
-      return false;
-   }
-      
-   double avgVol = (double)sumVol / (double)countVol;
-   double currentVol = (double)volumes[1];  // Use previous bar's volume for comparison
-
-   // Avoid division by zero
-   if(avgVol <= 0)
-   {
-      if(ShowDebugPrints)
-         Print("❌ [Volume Filter] Average volume is zero or negative: ", avgVol);
-      return false;
-   }
-
-   double volRatio = currentVol / avgVol;
-
-   if(ShowDebugPrints)
-   {
-      static datetime lastVolDebug = 0;
-      datetime now = TimeCurrent();
-      if(now - lastVolDebug >= 3600)  // Log once per hour
-      {
-         Print("ℹ️ [Volume Analysis] ",
-               "\n  Previous Bar Volume: ", currentVol,
-               "\n  Sum Volume: ", sumVol,
-               "\n  Count Valid Bars: ", countVol,
-               "\n  Average Volume: ", avgVol,
-               "\n  Ratio: ", DoubleToString(volRatio, 2), "x",
-               "\n  Required: ", DoubleToString(VolumeFactor, 2), "x");
-         lastVolDebug = now;
-      }
-   }
-
-   return (volRatio >= VolumeFactor);
+   // Use the market data class's volume check instead
+   return CV2EAMarketData::DoesVolumeMeetRequirement(_Symbol, lookback);
 }
 
 // MODULE 5.5: ATR distance check for breakout validation
@@ -1750,6 +1681,12 @@ int OnInit()
          Print("❌ [M10.1.a Initialization] Failed to create ATR indicator handle");
       return INIT_FAILED;
    }
+
+   // Initialize market data class
+   CV2EAMarketData::Init(ShowDebugPrints);
+   
+   // Configure volume analysis with default multiplier (2.0)
+   CV2EAMarketData::ConfigureVolumeAnalysis(2.0, VolumeType);
 
    // Setup timer
    if(!EventSetTimer(TIMER_INTERVAL))

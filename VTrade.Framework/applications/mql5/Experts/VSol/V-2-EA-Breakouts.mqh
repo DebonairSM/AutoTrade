@@ -1,466 +1,558 @@
 //+------------------------------------------------------------------+
 //|                                              V-2-EA-Breakouts.mqh |
-//|                                    Breakout Strategy Implementation|
+//|                                    Key Level Detection Implementation|
 //+------------------------------------------------------------------+
-#property copyright "Your Company"
+#property copyright "Rommel Company"
 #property link      "Your Link"
-#property version   "1.00"
+#property version   "1.01"
 
-// Include required files
 #include <Trade\Trade.mqh>
-#include "V-2-EA-Utils.mqh"
-#include "V-2-EA-MarketData.mqh"
+
+//+------------------------------------------------------------------+
+//| Constants                                                          |
+//+------------------------------------------------------------------+
+#define DEFAULT_BUFFER_SIZE 100 // Default size for price buffers
+#define DEFAULT_DEBUG_INTERVAL 300 // Default debug interval (5 minutes)
 
 //+------------------------------------------------------------------+
 //| Structure Definitions                                              |
 //+------------------------------------------------------------------+
-struct SBreakoutState
+struct SKeyLevel
 {
-    datetime breakoutTime;  
-    double   breakoutLevel; 
-    bool     isBullish;     
-    bool     awaitingRetest; 
-    int      barsWaiting;   
-    datetime retestStartTime;
-    int      retestStartBar;
+    double    price;           // The price level
+    int       touchCount;      // Number of times price touched this level
+    bool      isResistance;    // Whether this is resistance (true) or support (false)
+    datetime  firstTouch;      // Time of first touch
+    datetime  lastTouch;       // Time of last touch
+    double    strength;        // Relative strength of the level
+};
+
+struct SStrategyState
+{
+    bool      keyLevelFound;    // Whether a valid key level was found
+    SKeyLevel activeKeyLevel;   // Currently active key level
+    datetime  lastUpdate;       // Last time the state was updated
+    
+    void Reset()
+    {
+        keyLevelFound = false;
+        lastUpdate = 0;
+    }
 };
 
 //+------------------------------------------------------------------+
-//| Breakout Strategy Class                                            |
+//| Key Level Detection Class                                          |
 //+------------------------------------------------------------------+
 class CV2EABreakouts
 {
 private:
-    // Core handles and objects
-    int           m_handleATR;         // ATR indicator handle
-    CTrade        m_trade;             // Trading object
+    //--- Debug levels
+    enum ENUM_DEBUG_LEVEL
+    {
+        DEBUG_NONE = 0,      // No debug output
+        DEBUG_ERRORS = 1,    // Only errors
+        DEBUG_IMPORTANT = 2, // Important events (trades, major state changes)
+        DEBUG_NORMAL = 3,    // Normal operational events
+        DEBUG_VERBOSE = 4    // All events including validation checks
+    };
     
-    // Strategy parameters from main EA
-    int           m_atrPeriod;         // ATR period
-    double        m_slMultiplier;      // Stop loss multiplier
-    double        m_tpMultiplier;      // Take profit multiplier
-    double        m_riskPercentage;    // Risk per trade
-    bool          m_showDebugPrints;   // Debug mode
-    int           m_magicNumber;       // Magic number for trade identification
+    //--- Key Level Parameters
+    int           m_lookbackPeriod;    // Bars to look back for key levels
+    double        m_minStrength;       // Minimum strength threshold for key levels
+    double        m_touchZone;         // Zone size for touch detection
+    int           m_minTouches;        // Minimum touches required
     
-    // Session control
-    bool          m_restrictTradingHours;
-    int           m_londonOpenHour;
-    int           m_londonCloseHour;
-    int           m_newYorkOpenHour;
-    int           m_newYorkCloseHour;
-    int           m_brokerToLocalOffsetHours;
+    //--- Key Level State
+    SKeyLevel     m_currentKeyLevels[]; // Array of current key levels
+    int           m_keyLevelCount;      // Number of valid key levels
+    datetime      m_lastKeyLevelUpdate; // Last time key levels were updated
     
-    // State variables
-    bool          m_initialized;
-    bool          m_hasPositionOpen;
-    datetime      m_lastBarTime;
-    int           m_lastBarIndex;
+    //--- Strategy State
+    SStrategyState m_state;            // Current strategy state
     
-    // Performance monitoring
-    ulong         m_tickCount;
-    ulong         m_calculationCount;
-    double        m_maxTickTime;
-    double        m_avgTickTime;
-    double        m_totalTickTime;
-    int           m_totalBreakouts;    // Total breakouts detected
-    int           m_validBreakouts;    // Valid breakouts that met all criteria
-    int           m_falseBreakouts;    // Failed breakouts
-    double        m_avgStrength;       // Average level strength
+    //--- Debug settings
+    ENUM_DEBUG_LEVEL m_debugLevel;     // Current debug level
+    datetime         m_lastDebugTime;   // Last debug print time
+    datetime         m_lastHourlyReport;// Last hourly report time
+    int             m_debugInterval;    // Minimum seconds between performance prints
+    bool            m_showDebugPrints; // Debug mode
+    bool            m_initialized;      // Initialization state
     
-    // Breakout state
-    SBreakoutState m_breakoutState;    // Current breakout state
+    //--- Hourly statistics
+    struct SHourlyStats
+    {
+        int totalSwingHighs;
+        int totalSwingLows;
+        int nearExistingLevels;
+        int lowTouchCount;
+        int lowStrength;
+        int validLevels;
+        double strongestLevel;
+        double strongestStrength;
+        int strongestTouches;
+        bool isStrongestResistance;
+        
+        void Reset()
+        {
+            totalSwingHighs = 0;
+            totalSwingLows = 0;
+            nearExistingLevels = 0;
+            lowTouchCount = 0;
+            lowStrength = 0;
+            validLevels = 0;
+            strongestLevel = 0;
+            strongestStrength = 0;
+            strongestTouches = 0;
+            isStrongestResistance = false;
+        }
+    } m_hourlyStats;
 
 public:
     //--- Constructor and destructor
-    CV2EABreakouts(void);
-   ~CV2EABreakouts(void);
-   
-    //--- Initialization and deinitialization
-    bool          Init(int magicNumber, int atrPeriod, double slMultiplier, 
-                      double tpMultiplier, double riskPercentage, bool showDebugPrints);
-    void          Deinit(void);
-    
-    //--- Main strategy methods
-    void          ProcessTick(void);
-    bool          IsTradeAllowed(void);
-    
-    //--- Setters for session control
-    void          SetSessionControl(bool restrictHours, int londonOpen, int londonClose,
-                                  int nyOpen, int nyClose, int brokerOffset)
+    CV2EABreakouts(void) : m_initialized(false),
+                           m_lookbackPeriod(288),
+                           m_minStrength(0.55),     // Reduced from 0.65
+                           m_touchZone(0.0005),     // Increased to 5 pips
+                           m_minTouches(2),         // Reduced from 3
+                           m_keyLevelCount(0),
+                           m_lastKeyLevelUpdate(0),
+                           m_debugLevel(DEBUG_IMPORTANT),
+                           m_lastDebugTime(0),
+                           m_lastHourlyReport(0),
+                           m_debugInterval(300),
+                           m_showDebugPrints(false)
     {
-        CV2EAUtils::SetSessionControl(restrictHours, londonOpen, londonClose,
-                                    nyOpen, nyClose, brokerOffset);
+        ArrayResize(m_currentKeyLevels, DEFAULT_BUFFER_SIZE);
+        m_state.Reset();
     }
     
-    //--- Getters for strategy state
-    bool          HasOpenPosition(void) const { return m_hasPositionOpen; }
-    bool          IsAwaitingRetest(void) const { return m_breakoutState.awaitingRetest; }
-    double        GetBreakoutLevel(void) const { return m_breakoutState.breakoutLevel; }
-    bool          IsBullishBreakout(void) const { return m_breakoutState.isBullish; }
-    datetime      GetBreakoutTime(void) const { return m_breakoutState.breakoutTime; }
-    ulong         GetTickCount(void) const { return m_tickCount; }
-    double        GetAvgProcessingTime(void) const { return m_avgTickTime; }
+    ~CV2EABreakouts(void) {}
+    
+    //--- Initialization
+    bool Init(int lookbackPeriod, double minStrength, double touchZone, 
+              int minTouches, bool showDebugPrints, ENUM_DEBUG_LEVEL debugLevel=DEBUG_IMPORTANT)
+    {
+        m_lookbackPeriod = lookbackPeriod;
+        m_minStrength = minStrength;
+        m_touchZone = touchZone;
+        m_minTouches = minTouches;
+        m_showDebugPrints = showDebugPrints;
+        
+        // Ensure we never set to VERBOSE unless explicitly requested
+        m_debugLevel = (debugLevel == DEBUG_VERBOSE) ? DEBUG_IMPORTANT : debugLevel;
+        
+        m_initialized = true;
+        DebugPrint("✅ Key Level Detection initialized successfully", DEBUG_IMPORTANT);
+        
+        // Print initial configuration only for IMPORTANT level
+        DebugPrint(StringFormat(
+            "📋 Configuration:" +
+            "\n  LookbackPeriod: %d" +
+            "\n  MinStrength: %.2f" +
+            "\n  TouchZone: %.5f" +
+            "\n  MinTouches: %d" +
+            "\n  DebugLevel: %d",
+            m_lookbackPeriod,
+            m_minStrength,
+            m_touchZone,
+            m_minTouches,
+            m_debugLevel
+        ), DEBUG_IMPORTANT);
+        
+        return true;
+    }
+    
+    //--- Main Strategy Method
+    void ProcessStrategy()
+    {
+        if(!m_initialized)
+        {
+            DebugPrint("❌ Strategy not initialized", DEBUG_ERRORS);
+            return;
+        }
+        
+        // Check if it's time for hourly report
+        datetime currentTime = TimeCurrent();
+        
+        // Get current hour components for more explicit hour change detection
+        MqlDateTime dt;
+        TimeToStruct(currentTime, dt);
+        datetime currentHour = currentTime - dt.min * 60 - dt.sec;  // More precise hour rounding
+        
+        // Validate last report time
+        if(m_lastHourlyReport > currentTime)
+        {
+            DebugPrint("⚠️ Invalid last report time detected, resetting", DEBUG_ERRORS);
+            m_lastHourlyReport = 0;
+        }
+        
+        // Only print report at the start of each hour
+        if(m_lastHourlyReport == 0 || currentHour > m_lastHourlyReport)
+        {
+            // Print hourly summary and reset stats
+            PrintHourlySummary();
+            
+            // Ensure complete reset of all stats
+            m_hourlyStats.Reset();
+            m_hourlyStats.lowTouchCount = 0;  // Explicitly reset low touch count
+            m_hourlyStats.lowStrength = 0;    // Explicitly reset low strength
+            m_hourlyStats.validLevels = 0;    // Explicitly reset valid levels
+            
+            m_lastHourlyReport = currentHour;  // Store the hour timestamp
+            
+            DebugPrint(StringFormat("📊 Starting new hourly period at %s", 
+                TimeToString(currentTime, TIME_DATE|TIME_MINUTES)), DEBUG_NORMAL);
+        }
+        
+        // Step 1: Key Level Identification
+        SKeyLevel strongestLevel;
+        bool foundKeyLevel = FindKeyLevels(strongestLevel);
+        
+        // Update hourly statistics
+        if(foundKeyLevel)
+        {
+            // Update strongest level if needed
+            if(strongestLevel.strength > m_hourlyStats.strongestStrength)
+            {
+                m_hourlyStats.strongestLevel = strongestLevel.price;
+                m_hourlyStats.strongestStrength = strongestLevel.strength;
+                m_hourlyStats.strongestTouches = strongestLevel.touchCount;
+                m_hourlyStats.isStrongestResistance = strongestLevel.isResistance;
+            }
+            
+            // If we found a new key level that's significantly different from our active one
+            if(!m_state.keyLevelFound || 
+               MathAbs(strongestLevel.price - m_state.activeKeyLevel.price) > m_touchZone)
+            {
+                // Update strategy state with new key level
+                m_state.keyLevelFound = true;
+                m_state.activeKeyLevel = strongestLevel;
+                m_state.lastUpdate = TimeCurrent();
+                
+            }
+        }
+        else if(m_state.keyLevelFound)
+        {
+            // If we had a key level but can't find it anymore, reset state
+            DebugPrint("ℹ️ Previous key level no longer valid, resetting state", DEBUG_NORMAL);
+            m_state.Reset();
+        }
+        
+        // Future steps will be added here:
+        // Step 2: Breakout Detection
+        // Step 3: Retest Validation
+        // Step 4: Trade Management
+    }
+    
+    void PrintHourlySummary()
+    {
+        string timeStr = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES);
+        
+        DebugPrint(StringFormat(
+            "\n📊 HOURLY LEVEL DETECTION REPORT - %s 📊\n" +
+            "================================================\n" +
+            "SUMMARY STATISTICS:\n" +
+            "🔍 Total Analysis:\n" +
+            "   ↗️ Swing Highs: %d\n" +
+            "   ↘️ Swing Lows: %d\n" +
+            "   🎯 Near Existing: %d\n" +
+            "\n" +
+            "LEVEL QUALITY:\n" +
+            "   ❌ Low Touch Count: %d\n" +
+            "   ❌ Low Strength: %d\n" +
+            "   ✅ Valid Levels: %d\n" +
+            "\n" +
+            "STRONGEST LEVEL:\n" +
+            "   📍 Price: %.5f\n" +
+            "   💪 Strength: %.4f\n" +
+            "   👆 Touches: %d\n" +
+            "   📈 Type: %s\n" +
+            "================================================\n",
+            timeStr,
+            m_hourlyStats.totalSwingHighs,
+            m_hourlyStats.totalSwingLows,
+            m_hourlyStats.nearExistingLevels,
+            m_hourlyStats.lowTouchCount,
+            m_hourlyStats.lowStrength,
+            m_hourlyStats.validLevels,
+            m_hourlyStats.strongestLevel,
+            m_hourlyStats.strongestStrength,
+            m_hourlyStats.strongestTouches,
+            m_hourlyStats.isStrongestResistance ? "RESISTANCE 🔴" : "SUPPORT 🟢"
+        ), DEBUG_IMPORTANT);
+    }
+    
+    //--- Key Level Methods
+    bool FindKeyLevels(SKeyLevel &outStrongestLevel)
+    {
+        if(!m_initialized)
+            return false;
+            
+        // Copy price data
+        double highPrices[];
+        double lowPrices[];
+        double closePrices[];
+        datetime times[];
+        
+        ArraySetAsSeries(highPrices, true);
+        ArraySetAsSeries(lowPrices, true);
+        ArraySetAsSeries(closePrices, true);
+        ArraySetAsSeries(times, true);
+        
+        if(CopyHigh(_Symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, highPrices) <= 0 ||
+           CopyLow(_Symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, lowPrices) <= 0 ||
+           CopyClose(_Symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, closePrices) <= 0 ||
+           CopyTime(_Symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, times) <= 0)
+        {
+            DebugPrint("❌ Failed to copy price data", DEBUG_ERRORS);
+            return false;
+        }
+        
+        // Reset key levels array
+        m_keyLevelCount = 0;
+        
+        // Get current hour for stats tracking
+        datetime currentTime = TimeCurrent();
+        MqlDateTime dt;
+        TimeToStruct(currentTime, dt);
+        datetime currentHour = currentTime - dt.min * 60 - dt.sec;
+        
+        static datetime lastStatReset = 0;
+        
+        // Check if we need to reset hourly stats
+        if(lastStatReset < currentHour)
+        {
+            // Reset hourly stats structure
+            m_hourlyStats.Reset();
+            lastStatReset = currentHour;
+            
+            DebugPrint("🔄 Reset hourly stats for new hour", DEBUG_VERBOSE);
+        }
+        
+        // Find swing highs (resistance levels)
+        for(int i = 2; i < m_lookbackPeriod - 2; i++)
+        {
+            if(IsSwingHigh(highPrices, i))
+            {
+                m_hourlyStats.totalSwingHighs++;
+                double level = highPrices[i];
+                
+                if(!IsNearExistingLevel(level))
+                {
+                    SKeyLevel newLevel;
+                    newLevel.price = level;
+                    newLevel.isResistance = true;
+                    newLevel.firstTouch = times[i];
+                    newLevel.lastTouch = times[i];
+                    newLevel.touchCount = CountTouches(level, true, highPrices, lowPrices, times);
+                    
+                    if(newLevel.touchCount < m_minTouches)
+                    {
+                        m_hourlyStats.lowTouchCount++;
+                        continue;
+                    }
+                    
+                    newLevel.strength = CalculateLevelStrength(newLevel);
+                    
+                    if(newLevel.strength >= m_minStrength)
+                    {
+                        AddKeyLevel(newLevel);
+                        m_hourlyStats.validLevels++;
+                    }
+                    else
+                    {
+                        m_hourlyStats.lowStrength++;
+                    }
+                }
+                else
+                {
+                    m_hourlyStats.nearExistingLevels++;
+                }
+            }
+        }
+        
+        // Find swing lows (support levels)
+        for(int i = 2; i < m_lookbackPeriod - 2; i++)
+        {
+            if(IsSwingLow(lowPrices, i))
+            {
+                m_hourlyStats.totalSwingLows++;
+                double level = lowPrices[i];
+                
+                if(!IsNearExistingLevel(level))
+                {
+                    SKeyLevel newLevel;
+                    newLevel.price = level;
+                    newLevel.isResistance = false;
+                    newLevel.firstTouch = times[i];
+                    newLevel.lastTouch = times[i];
+                    newLevel.touchCount = CountTouches(level, false, highPrices, lowPrices, times);
+                    
+                    if(newLevel.touchCount < m_minTouches)
+                    {
+                        m_hourlyStats.lowTouchCount++;
+                        continue;
+                    }
+                    
+                    newLevel.strength = CalculateLevelStrength(newLevel);
+                    
+                    if(newLevel.strength >= m_minStrength)
+                    {
+                        AddKeyLevel(newLevel);
+                        m_hourlyStats.validLevels++;
+                    }
+                    else
+                    {
+                        m_hourlyStats.lowStrength++;
+                    }
+                }
+                else
+                {
+                    m_hourlyStats.nearExistingLevels++;
+                }
+            }
+        }
+        
+        // Find strongest level
+        if(m_keyLevelCount > 0)
+        {
+            int strongestIdx = 0;
+            double maxStrength = m_currentKeyLevels[0].strength;
+            
+            for(int i = 1; i < m_keyLevelCount; i++)
+            {
+                if(m_currentKeyLevels[i].strength > maxStrength)
+                {
+                    maxStrength = m_currentKeyLevels[i].strength;
+                    strongestIdx = i;
+                }
+            }
+            
+            outStrongestLevel = m_currentKeyLevels[strongestIdx];
+            m_lastKeyLevelUpdate = TimeCurrent();
+            
+            return true;
+        }
+        
+        return false;
+    }
 
 private:
-    //--- Internal helper methods
-    bool          ValidateParameters(void);
-    bool          InitIndicators(void);
-    void          UpdateState(void);
-    bool          CheckNewBar(void);
-    void          ExecuteBreakoutStrategy(void);
-    bool          ApplyDailyPivotSLTP(bool isBullish, double &entryPrice, double &slPrice, double &tpPrice);
-    bool          DetectBreakoutAndInitRetest(void);
-    void          ResetBreakoutState(void);
-};
-
-//+------------------------------------------------------------------+
-//| Constructor                                                        |
-//+------------------------------------------------------------------+
-CV2EABreakouts::CV2EABreakouts(void) : m_initialized(false),
-                                       m_handleATR(INVALID_HANDLE),
-                                       m_hasPositionOpen(false),
-                                       m_lastBarTime(0),
-                                       m_lastBarIndex(-1),
-                                       m_tickCount(0),
-                                       m_calculationCount(0),
-                                       m_maxTickTime(0.0),
-                                       m_avgTickTime(0.0),
-                                       m_totalTickTime(0.0),
-                                       m_totalBreakouts(0),
-                                       m_validBreakouts(0),
-                                       m_falseBreakouts(0),
-                                       m_avgStrength(0.0)
-{
-    ResetBreakoutState();
-}
-
-//+------------------------------------------------------------------+
-//| Destructor                                                         |
-//+------------------------------------------------------------------+
-CV2EABreakouts::~CV2EABreakouts(void)
-{
-    Deinit();
-}
-
-//+------------------------------------------------------------------+
-//| Initialize the strategy                                            |
-//+------------------------------------------------------------------+
-bool CV2EABreakouts::Init(int magicNumber, int atrPeriod, double slMultiplier, 
-                         double tpMultiplier, double riskPercentage, bool showDebugPrints)
-{
-    // Store parameters
-    m_magicNumber = magicNumber;
-    m_atrPeriod = atrPeriod;
-    m_slMultiplier = slMultiplier;
-    m_tpMultiplier = tpMultiplier;
-    m_riskPercentage = riskPercentage;
-    m_showDebugPrints = showDebugPrints;
-    
-    // Initialize utils and market data
-    CV2EAUtils::Init(showDebugPrints);
-    CV2EAUtils::SetMagicNumber(magicNumber);
-    CV2EAMarketData::Init(showDebugPrints);
-    
-    // Validate parameters
-    if(!ValidateParameters())
-        return false;
-        
-    // Initialize indicators
-    if(!InitIndicators())
-        return false;
-        
-    // Set trade object parameters
-    m_trade.SetExpertMagicNumber(m_magicNumber);
-    
-    m_initialized = true;
-    if(m_showDebugPrints)
-        Print("✅ [V-2-EA-Breakouts] Strategy initialized successfully");
-        
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Deinitialize the strategy                                         |
-//+------------------------------------------------------------------+
-void CV2EABreakouts::Deinit(void)
-{
-    if(m_handleATR != INVALID_HANDLE)
+    //--- Key Level Helper Methods
+    bool IsSwingHigh(const double &prices[], int index)
     {
-        IndicatorRelease(m_handleATR);
-        m_handleATR = INVALID_HANDLE;
-    }
-    m_initialized = false;
-}
-
-//+------------------------------------------------------------------+
-//| Validate strategy parameters                                       |
-//+------------------------------------------------------------------+
-bool CV2EABreakouts::ValidateParameters(void)
-{
-    if(m_atrPeriod <= 0)
-    {
-        if(m_showDebugPrints)
-            Print("❌ [V-2-EA-Breakouts] Invalid ATR period");
-        return false;
+        return prices[index] > prices[index-1] && 
+               prices[index] > prices[index-2] &&
+               prices[index] > prices[index+1] && 
+               prices[index] > prices[index+2];
     }
     
-    if(m_slMultiplier <= 0 || m_tpMultiplier <= 0)
+    bool IsSwingLow(const double &prices[], int index)
     {
-        if(m_showDebugPrints)
-            Print("❌ [V-2-EA-Breakouts] Invalid SL/TP multipliers");
-        return false;
+        return prices[index] < prices[index-1] && 
+               prices[index] < prices[index-2] &&
+               prices[index] < prices[index+1] && 
+               prices[index] < prices[index+2];
     }
     
-    if(m_riskPercentage <= 0 || m_riskPercentage > 5)
+    bool IsNearExistingLevel(double price)
     {
-        if(m_showDebugPrints)
-            Print("❌ [V-2-EA-Breakouts] Invalid risk percentage");
-        return false;
-    }
-    
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Initialize required indicators                                     |
-//+------------------------------------------------------------------+
-bool CV2EABreakouts::InitIndicators(void)
-{
-    // Initialize ATR
-    m_handleATR = iATR(_Symbol, PERIOD_CURRENT, m_atrPeriod);
-    if(m_handleATR == INVALID_HANDLE)
-    {
-        if(m_showDebugPrints)
-            Print("❌ [V-2-EA-Breakouts] Failed to create ATR indicator");
-        return false;
-    }
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Process new tick                                                  |
-//+------------------------------------------------------------------+
-void CV2EABreakouts::ProcessTick(void)
-{
-    if(!m_initialized)
-        return;
-        
-    ulong startTime = GetTickCount64();
-    m_tickCount++;
-    
-    UpdateState();
-    
-    if(CheckNewBar())
-    {
-        ExecuteBreakoutStrategy();
-        m_calculationCount++;
-    }
-    
-    // Performance monitoring
-    ulong endTime = GetTickCount64();
-    double tickTime = (endTime - startTime) / 1000.0;
-    m_totalTickTime += tickTime;
-    m_avgTickTime = m_totalTickTime / m_tickCount;
-    
-    if(tickTime > m_maxTickTime)
-        m_maxTickTime = tickTime;
-        
-    if(m_showDebugPrints && m_tickCount % 1000 == 0)
-    {
-        Print("📊 [V-2-EA-Breakouts] Performance Metrics:");
-        Print("   Ticks Processed: ", m_tickCount);
-        Print("   Calculations: ", m_calculationCount);
-        Print("   Average Time: ", DoubleToString(m_avgTickTime, 6), " sec");
-        Print("   Max Time: ", DoubleToString(m_maxTickTime, 6), " sec");
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Update strategy state                                             |
-//+------------------------------------------------------------------+
-void CV2EABreakouts::UpdateState(void)
-{
-    // Update bar tracking
-    CheckNewBar();
-    
-    // Update position state
-    m_hasPositionOpen = CV2EAUtils::HasOpenPosition(_Symbol, m_magicNumber);
-}
-
-//+------------------------------------------------------------------+
-//| Check for new bar                                                 |
-//+------------------------------------------------------------------+
-bool CV2EABreakouts::CheckNewBar(void)
-{
-    return CV2EAUtils::CheckNewBar(_Symbol, PERIOD_CURRENT, m_lastBarTime, m_lastBarIndex);
-}
-
-//+------------------------------------------------------------------+
-//| Check if trading is allowed                                       |
-//+------------------------------------------------------------------+
-bool CV2EABreakouts::IsTradeAllowed(void)
-{
-    return CV2EAUtils::IsTradeAllowed();
-}
-
-//+------------------------------------------------------------------+
-//| Apply pivot-based SL/TP                                            |
-//+------------------------------------------------------------------+
-bool CV2EABreakouts::ApplyDailyPivotSLTP(bool isBullish, double &entryPrice, double &slPrice, double &tpPrice)
-{
-    double pivot=0, r1=0, r2=0, s1=0, s2=0;
-    if(!CV2EAMarketData::GetDailyPivotPoints(_Symbol, pivot, r1, r2, s1, s2))
-    {
-        if(m_showDebugPrints)
-            Print("❌ [ApplyDailyPivotSLTP] Using fallback because pivot retrieval failed.");
-        return false;
-    }
-
-    // Strategy-specific logic for using pivot points
-    double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-
-    if(isBullish)
-    {
-        slPrice = MathMin(s1, entryPrice - (m_slMultiplier * 50 * pointSize));
-        tpPrice = MathMax(r1, entryPrice + (m_tpMultiplier * 50 * pointSize));
-    }
-    else
-    {
-        slPrice = MathMax(r1, entryPrice + (m_slMultiplier * 50 * pointSize));
-        tpPrice = MathMin(s1, entryPrice - (m_tpMultiplier * 50 * pointSize));
-    }
-
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Execute breakout strategy                                          |
-//+------------------------------------------------------------------+
-void CV2EABreakouts::ExecuteBreakoutStrategy(void)
-{
-    if(!m_initialized || !IsTradeAllowed() || m_hasPositionOpen)
-        return;
-        
-    // Get ATR using market data class
-    double atr = CV2EAMarketData::GetATR(_Symbol, PERIOD_CURRENT, m_atrPeriod);
-    if(atr <= 0)
-        return;
-        
-    double high = iHigh(_Symbol, PERIOD_CURRENT, 1);
-    double low = iLow(_Symbol, PERIOD_CURRENT, 1);
-    double close = iClose(_Symbol, PERIOD_CURRENT, 1);
-    
-    double stopLoss = m_slMultiplier * atr;
-    double takeProfit = m_tpMultiplier * atr;
-    
-    // Buy condition
-    if(close > high)
-    {
-        double sl = NormalizeDouble(close - stopLoss, _Digits);
-        double tp = NormalizeDouble(close + takeProfit, _Digits);
-        
-        // Try to apply pivot-based SL/TP adjustments
-        double pivotSL = sl, pivotTP = tp;
-        if(ApplyDailyPivotSLTP(true, close, pivotSL, pivotTP))
+        for(int i = 0; i < m_keyLevelCount; i++)
         {
-            sl = pivotSL;  // Use pivot-adjusted stop loss
-            tp = pivotTP;  // Use pivot-adjusted take profit
+            if(MathAbs(price - m_currentKeyLevels[i].price) <= m_touchZone)
+                return true;
+        }
+        return false;
+    }
+    
+    int CountTouches(double level, bool isResistance, const double &highs[], 
+                     const double &lows[], const datetime &times[])
+    {
+        int touches = 0;
+        double lastPrice = 0;
+        
+        for(int i = 0; i < m_lookbackPeriod; i++)
+        {
+            if(isResistance)
+            {
+                if(MathAbs(highs[i] - level) <= m_touchZone)
+                {
+                    // Only count as new touch if price moved away from level
+                    if(lastPrice == 0 || MathAbs(highs[i] - lastPrice) > m_touchZone * 2)
+                    {
+                        touches++;
+                        lastPrice = highs[i];
+                    }
+                }
+                else if(MathAbs(highs[i] - level) > m_touchZone * 3)
+                {
+                    // Reset last price if moved far enough away
+                    lastPrice = 0;
+                }
+            }
+            else
+            {
+                if(MathAbs(lows[i] - level) <= m_touchZone)
+                {
+                    if(lastPrice == 0 || MathAbs(lows[i] - lastPrice) > m_touchZone * 2)
+                    {
+                        touches++;
+                        lastPrice = lows[i];
+                    }
+                }
+                else if(MathAbs(lows[i] - level) > m_touchZone * 3)
+                {
+                    lastPrice = 0;
+                }
+            }
         }
         
-        double lotSize = CV2EAUtils::CalculateLotSize(sl, close, m_riskPercentage, _Symbol);
-        
-        if(lotSize > 0)
-        {
-            CV2EAUtils::PlaceTrade(true, close, sl, tp, lotSize, _Symbol, "V2EA Breakout Buy");
-        }
+        return touches;
     }
-    // Sell condition
-    else if(close < low)
+    
+    double CalculateLevelStrength(const SKeyLevel &level)
     {
-        double sl = NormalizeDouble(close + stopLoss, _Digits);
-        double tp = NormalizeDouble(close - takeProfit, _Digits);
+        // Touch score (0.4 weight)
+        double touchScore = MathMin((double)level.touchCount / m_minTouches, 1.5);
         
-        // Try to apply pivot-based SL/TP adjustments
-        double pivotSL = sl, pivotTP = tp;
-        if(ApplyDailyPivotSLTP(false, close, pivotSL, pivotTP))
+        // Recency score (0.3 weight)
+        double hoursElapsed = (double)(TimeCurrent() - level.lastTouch) / 3600.0;
+        double recencyScore = MathExp(-hoursElapsed / (m_lookbackPeriod * 12.0));
+        
+        // Duration score (0.3 weight)
+        double hoursDuration = (double)(level.lastTouch - level.firstTouch) / 3600.0;
+        double durationScore = MathMin(hoursDuration / 24.0, 1.0);
+        
+        return (touchScore * 0.4 + recencyScore * 0.3 + durationScore * 0.3);
+    }
+    
+    void AddKeyLevel(const SKeyLevel &level)
+    {
+        if(m_keyLevelCount < ArraySize(m_currentKeyLevels))
         {
-            sl = pivotSL;  // Use pivot-adjusted stop loss
-            tp = pivotTP;  // Use pivot-adjusted take profit
-        }
-        
-        double lotSize = CV2EAUtils::CalculateLotSize(sl, close, m_riskPercentage, _Symbol);
-        
-        if(lotSize > 0)
-        {
-            CV2EAUtils::PlaceTrade(false, close, sl, tp, lotSize, _Symbol, "V2EA Breakout Sell");
+            m_currentKeyLevels[m_keyLevelCount] = level;
+            m_keyLevelCount++;
+            
+            // Change debug level to VERBOSE so it only shows in full debug mode
+            DebugPrint(StringFormat(
+                "✅ Added %s level at %.5f with strength %.4f",
+                level.isResistance ? "resistance" : "support",
+                level.price,
+                level.strength
+            ), DEBUG_VERBOSE);  // Changed from DEBUG_NORMAL to DEBUG_VERBOSE
         }
     }
-}
-
-// Example of how to use utils in strategy code (add this as a comment for reference)
-/*
-void CV2EABreakouts::ExecuteBreakoutTrade(bool isBullish, double entryPrice)
-{
-    double slPrice = 0, tpPrice = 0;
     
-    // Get SL/TP levels
-    if(!ApplyDailyPivotSLTP(isBullish, entryPrice, slPrice, tpPrice))
-        return;
+    //--- Debug print method
+    void DebugPrint(string message, ENUM_DEBUG_LEVEL level = DEBUG_NORMAL)
+    {
+        if(!m_showDebugPrints || level > m_debugLevel)
+            return;
+            
+        // Add timestamp and current price to debug messages
+        string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
+        double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
         
-    // Calculate position size
-    double lots = CV2EAUtils::CalculateLotSize(slPrice, entryPrice, m_riskPercentage);
-    if(lots <= 0)
-        return;
-        
-    // Place the trade
-    CV2EAUtils::PlaceTrade(isBullish, entryPrice, slPrice, tpPrice, lots);
-}
-*/
-
-//+------------------------------------------------------------------+
-//| Detect breakout and initialize retest                              |
-//+------------------------------------------------------------------+
-bool CV2EABreakouts::DetectBreakoutAndInitRetest(void)
-{
-    // Find key levels first
-    SKeyLevel strongestLevel;
-    if(!CV2EAMarketData::FindKeyLevels(_Symbol, strongestLevel))
-        return false;
-
-    // Check if price has broken the level
-    bool isBullish;
-    if(!CV2EAMarketData::IsBreakoutCandidate(_Symbol, strongestLevel, isBullish))
-        return false;
-        
-    // Update breakout state
-    m_breakoutState.breakoutTime = TimeCurrent();
-    m_breakoutState.breakoutLevel = strongestLevel.price;
-    m_breakoutState.isBullish = isBullish;
-    m_breakoutState.awaitingRetest = true;
-    m_breakoutState.barsWaiting = 0;
-    m_breakoutState.retestStartTime = TimeCurrent();
-    m_breakoutState.retestStartBar = iBarShift(_Symbol, PERIOD_CURRENT, TimeCurrent(), false);
-    
-    m_validBreakouts++;
-    
-    if(m_showDebugPrints)
-        Print("✅ [DetectBreakout] ", (isBullish ? "Bullish" : "Bearish"), 
-              " breakout detected at level ", strongestLevel.price);
-              
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Reset breakout state                                               |
-//+------------------------------------------------------------------+
-void CV2EABreakouts::ResetBreakoutState(void)
-{
-    m_breakoutState.breakoutTime = 0;
-    m_breakoutState.breakoutLevel = 0;
-    m_breakoutState.isBullish = false;
-    m_breakoutState.awaitingRetest = false;
-    m_breakoutState.barsWaiting = 0;
-    m_breakoutState.retestStartTime = 0;
-    m_breakoutState.retestStartBar = 0;
-} 
+        Print(StringFormat("[%s] [%.5f] %s", timestamp, currentPrice, message));
+    }
+}; 

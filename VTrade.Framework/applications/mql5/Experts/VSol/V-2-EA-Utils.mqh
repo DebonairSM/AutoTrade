@@ -1,44 +1,64 @@
 //+------------------------------------------------------------------+
-//|                                                 V-2-EA-Utils.mqh |
-//|                                    Common Trading Utility Functions|
+//|                                                   V-2-EA-Utils.mqh |
+//|                                                                    |
+//| Purpose: Common Trading Utility Functions for VSol Trading Systems |
+//| Version: 1.00                                                      |
+//| Author:  VSol Trading Systems                                      |
+//| Website: https://vsol-systems.com                                 |
 //+------------------------------------------------------------------+
-#property copyright "Your Company"
-#property link      "Your Link"
+#property copyright "VSol Trading Systems"
+#property link      "https://vsol-systems.com"
 #property version   "1.00"
+#property strict
 
+// Standard includes
 #include <Trade\Trade.mqh>
 
 //+------------------------------------------------------------------+
-//| Trading Utility Class                                              |
+//| CV2EAUtils - Core Trading Utility Class                            |
+//|                                                                    |
+//| Provides essential trading utilities including:                    |
+//| - Position sizing and risk management                             |
+//| - Trade execution with validation                                 |
+//| - Session management and time control                             |
+//| - Position tracking and management                                |
 //+------------------------------------------------------------------+
 class CV2EAUtils
 {
 private:
-    static CTrade     m_trade;           // Trading object
-    static bool       m_showDebugPrints; // Debug mode
+    //--- Trading Objects
+    static CTrade     m_trade;                    // Trading object for order execution
     
-    // Session control defaults
-    static bool       m_restrictTradingHours;
-    static int        m_londonOpenHour;
-    static int        m_londonCloseHour;
-    static int        m_newYorkOpenHour;
-    static int        m_newYorkCloseHour;
-    static int        m_brokerToLocalOffsetHours;
+    //--- Configuration Flags
+    static bool       m_showDebugPrints;          // Enable/disable debug printing
+    static bool       m_restrictTradingHours;     // Enable/disable trading hour restrictions
+    
+    //--- Session Control Parameters
+    static int        m_londonOpenHour;           // London session open hour (ET)
+    static int        m_londonCloseHour;          // London session close hour (ET)
+    static int        m_newYorkOpenHour;          // NY session open hour (ET)
+    static int        m_newYorkCloseHour;         // NY session close hour (ET)
+    static int        m_brokerToLocalOffsetHours; // Broker to ET time offset
 
 public:
-    //--- Initialization
+    //+------------------------------------------------------------------+
+    //| Initialization Methods                                             |
+    //+------------------------------------------------------------------+
     static void Init(bool showDebugPrints)
     {
         m_showDebugPrints = showDebugPrints;
     }
     
-    //--- Set magic number for trades
     static void SetMagicNumber(int magicNumber)
     {
+        if(magicNumber <= 0)
+        {
+            if(m_showDebugPrints) Print("⚠️ Invalid magic number. Using default value 1");
+            magicNumber = 1;
+        }
         m_trade.SetExpertMagicNumber(magicNumber);
     }
     
-    //--- Session Control Setup
     static void SetSessionControl(bool restrictHours, 
                                 int londonOpen, 
                                 int londonClose,
@@ -81,7 +101,7 @@ public:
     static int  GetOpenPositionsCount(string symbol, int magicNumber);
 };
 
-// Initialize static members
+//--- Initialize static class members
 CTrade CV2EAUtils::m_trade;
 bool   CV2EAUtils::m_showDebugPrints = false;
 bool   CV2EAUtils::m_restrictTradingHours = true;
@@ -99,6 +119,13 @@ double CV2EAUtils::CalculateLotSize(double stopLossPrice,
                                    double riskPercentage,
                                    string symbol = NULL)
 {
+    // Input validation
+    if(stopLossPrice <= 0 || entryPrice <= 0 || riskPercentage <= 0)
+    {
+        if(m_showDebugPrints) Print("⚠️ Invalid input parameters for lot size calculation");
+        return SymbolInfoDouble(symbol == NULL ? _Symbol : symbol, SYMBOL_VOLUME_MIN);
+    }
+
     if(symbol == NULL) symbol = _Symbol;
     
     // 1) Determine the account balance and base risk amount
@@ -181,6 +208,13 @@ bool CV2EAUtils::PlaceTrade(bool isBullish,
                            string symbol = NULL,
                            string comment = "")
 {
+    // Input validation
+    if(lots <= 0 || entryPrice <= 0 || slPrice <= 0 || tpPrice <= 0)
+    {
+        if(m_showDebugPrints) Print("⚠️ Invalid trade parameters");
+        return false;
+    }
+
     if(symbol == NULL) symbol = _Symbol;
     if(comment == "") comment = isBullish ? "Long Entry" : "Short Entry";
 
@@ -263,6 +297,8 @@ bool CV2EAUtils::CheckNewBar(string symbol, ENUM_TIMEFRAMES timeframe,
 //+------------------------------------------------------------------+
 bool CV2EAUtils::HasOpenPosition(string symbol, int magicNumber)
 {
+    if(symbol == NULL) symbol = _Symbol;
+    
     for(int i = 0; i < PositionsTotal(); i++)
     {
         if(PositionGetSymbol(i) == symbol && 
