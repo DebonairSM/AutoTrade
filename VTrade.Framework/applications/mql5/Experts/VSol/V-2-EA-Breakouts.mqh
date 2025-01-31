@@ -564,6 +564,29 @@ public:
         return false;
     }
 
+    //--- Add to public methods section
+    void ClearChartObjects()
+    {
+        // Clear all existing chart lines
+        for(int i = 0; i < ArraySize(m_chartLines); i++)
+        {
+            if(!ObjectDelete(0, m_chartLines[i].name))
+            {
+                DebugPrint(StringFormat("❌ Failed to delete line %s", m_chartLines[i].name));
+            }
+        }
+        
+        // Reset chart lines array
+        ArrayResize(m_chartLines, 0);
+        m_lastChartUpdate = 0;
+        
+        // Force chart redraw
+        ChartRedraw(0);
+        
+        if(m_showDebugPrints)
+            DebugPrint("🧹 Cleared all chart objects");
+    }
+
 private:
     //--- Key Level Helper Methods
     bool IsSwingHigh(const double &prices[], int index)
@@ -983,15 +1006,16 @@ private:
     void UpdateChartLines()
     {
         datetime currentTime = TimeCurrent();
+        double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
         
         // Update if an hour has passed or if it's the first update
         bool shouldUpdate = (m_lastChartUpdate == 0) || 
-                          (currentTime - m_lastChartUpdate >= 3600) ||
-                          (m_keyLevelCount != ArraySize(m_chartLines));  // Also update if level count changed
-            
+                           (currentTime - m_lastChartUpdate >= 3600) ||
+                           (m_keyLevelCount != ArraySize(m_chartLines));
+                
         if(!shouldUpdate)
             return;
-            
+                
         // Clear old lines
         ClearInactiveChartLines();
         
@@ -1005,24 +1029,42 @@ private:
             string lineName = StringFormat("KL_%s_%.5f", 
                 m_currentKeyLevels[i].isResistance ? "R" : "S",
                 m_currentKeyLevels[i].price);
-                
-            // Determine line color and style based on strength
+                    
+            // First determine if this is above or below current price
+            bool isAbovePrice = m_currentKeyLevels[i].price > currentPrice;
+            
+            // Determine line properties based on position and strength
             color lineColor;
             ENUM_LINE_STYLE lineStyle;
             int lineWidth;
             
+            // Strong levels (>= 0.85)
             if(m_currentKeyLevels[i].strength >= 0.85) {
-                lineColor = m_currentKeyLevels[i].isResistance ? clrCrimson : clrForestGreen;  // Strong levels
+                if(isAbovePrice) {
+                    lineColor = clrCrimson;      // Strong resistance = dark red
+                } else {
+                    lineColor = clrForestGreen;  // Strong support = dark green
+                }
                 lineStyle = STYLE_SOLID;
                 lineWidth = 2;
             }
+            // Medium levels (>= 0.70)
             else if(m_currentKeyLevels[i].strength >= 0.70) {
-                lineColor = m_currentKeyLevels[i].isResistance ? clrLightCoral : clrMediumSeaGreen;  // Medium levels
+                if(isAbovePrice) {
+                    lineColor = clrLightCoral;      // Medium resistance = lighter red
+                } else {
+                    lineColor = clrMediumSeaGreen;  // Medium support = lighter green
+                }
                 lineStyle = STYLE_SOLID;
                 lineWidth = 1;
             }
+            // Weak levels (< 0.70)
             else {
-                lineColor = m_currentKeyLevels[i].isResistance ? clrPink : clrPaleGreen;  // Weak levels
+                if(isAbovePrice) {
+                    lineColor = clrPink;       // Weak resistance = very light red
+                } else {
+                    lineColor = clrPaleGreen;  // Weak support = very light green
+                }
                 lineStyle = STYLE_DOT;
                 lineWidth = 1;
             }
@@ -1040,12 +1082,17 @@ private:
                     found = true;
                     
                     // Update line properties
-                    if(!ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor) ||
-                       !ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle) ||
-                       !ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth))
-                    {
-                        DebugPrint(StringFormat("❌ Failed to update line properties for %s", lineName));
-                    }
+                    ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
+                    ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle);
+                    ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth);
+                    
+                    // Update tooltip with more information
+                    string tooltip = StringFormat("%s Level\nStrength: %.2f\nTouches: %d\nDistance: %d pips", 
+                        isAbovePrice ? "Resistance" : "Support",
+                        m_currentKeyLevels[i].strength,
+                        m_currentKeyLevels[i].touchCount,
+                        (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point));
+                    ObjectSetString(0, lineName, OBJPROP_TOOLTIP, tooltip);
                     break;
                 }
             }
@@ -1067,12 +1114,16 @@ private:
                     ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
                     ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle);
                     ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth);
-                    ObjectSetInteger(0, lineName, OBJPROP_BACK, false);  // Draw on top
-                    ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);  // Prevent user selection
-                    ObjectSetString(0, lineName, OBJPROP_TOOLTIP, StringFormat("%s Level (S:%.2f T:%d)", 
-                        m_currentKeyLevels[i].isResistance ? "Resistance" : "Support",
+                    ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
+                    ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
+                    
+                    // Enhanced tooltip with more information
+                    string tooltip = StringFormat("%s Level\nStrength: %.2f\nTouches: %d\nDistance: %d pips", 
+                        isAbovePrice ? "Resistance" : "Support",
                         m_currentKeyLevels[i].strength,
-                        m_currentKeyLevels[i].touchCount));
+                        m_currentKeyLevels[i].touchCount,
+                        (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point));
+                    ObjectSetString(0, lineName, OBJPROP_TOOLTIP, tooltip);
                 }
                 else
                 {

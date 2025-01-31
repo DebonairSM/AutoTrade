@@ -15,19 +15,23 @@ input bool   ShowDebugPrints   = true; // Show debug messages
 
 //--- Global Variables
 CV2EABreakouts g_strategy;  // Strategy instance
+datetime g_lastBarTime = 0; // Track last processed bar time
+ENUM_TIMEFRAMES g_lastTimeframe = PERIOD_CURRENT; // Track last timeframe
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
+    // Store initial timeframe
+    g_lastTimeframe = Period();
+    
     // Print timeframe info
-    ENUM_TIMEFRAMES tf = Period();
-    int periodMinutes = PeriodSeconds(tf) / 60;
+    int periodMinutes = PeriodSeconds(g_lastTimeframe) / 60;
     
     Print(StringFormat(
         "Initializing EA on %s timeframe (%d minutes)",
-        EnumToString(tf),
+        EnumToString(g_lastTimeframe),
         periodMinutes
     ));
     
@@ -54,6 +58,38 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    // Process the strategy on each tick
-    g_strategy.ProcessStrategy();
+    // Check if timeframe has changed
+    ENUM_TIMEFRAMES currentTimeframe = Period();
+    if(currentTimeframe != g_lastTimeframe)
+    {
+        Print(StringFormat("Timeframe changed from %s to %s - Reinitializing EA...",
+            EnumToString(g_lastTimeframe),
+            EnumToString(currentTimeframe)));
+            
+        // Clear existing chart objects
+        g_strategy.ClearChartObjects();
+        
+        // Reinitialize with new timeframe settings
+        if(!g_strategy.Init(0, 0.55, 0, MinTouches, ShowDebugPrints))
+        {
+            Print("❌ Failed to reinitialize after timeframe change");
+            return;
+        }
+        
+        g_lastTimeframe = currentTimeframe;
+        g_lastBarTime = 0; // Force immediate processing
+    }
+    
+    // Get the current bar's open time
+    datetime currentBarTime = iTime(_Symbol, Period(), 0);
+    
+    // Only process if this is a new bar
+    if(currentBarTime != g_lastBarTime)
+    {
+        // Process the strategy on bar close
+        g_strategy.ProcessStrategy();
+        
+        // Update last processed bar time
+        g_lastBarTime = currentBarTime;
+    }
 }
