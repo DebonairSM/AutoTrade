@@ -7,6 +7,7 @@
 #property version   "1.01"
 
 #include <Trade\Trade.mqh>
+#include "V-2-EA-Utils.mqh"
 
 //+------------------------------------------------------------------+
 //| Constants                                                          |
@@ -100,6 +101,11 @@ private:
     double        m_touchZone;         // Zone size for touch detection
     int           m_minTouches;        // Minimum touches required
     
+    //--- Moving Average Parameters
+    int           m_maHandle;          // Handle for the moving average indicator
+    int           m_maPeriod;          // Period for the moving average
+    bool          m_useMA;             // Whether to use MA for confirmation
+    
     //--- Key Level State
     SKeyLevel     m_currentKeyLevels[]; // Array of current key levels
     int           m_keyLevelCount;      // Number of valid key levels
@@ -170,7 +176,10 @@ public:
                            m_minTouches(2),
                            m_keyLevelCount(0),
                            m_lastKeyLevelUpdate(0),
-                           m_showDebugPrints(false)
+                           m_showDebugPrints(false),
+                           m_maHandle(INVALID_HANDLE),
+                           m_maPeriod(20),          // Default MA period
+                           m_useMA(false)           // MA disabled by default
     {
         ArrayResize(m_currentKeyLevels, DEFAULT_BUFFER_SIZE);
         m_state.Reset();
@@ -183,21 +192,114 @@ public:
         {
             ObjectDelete(0, m_chartLines[i].name);
         }
+        
+        // Release MA indicator handle
+        if(m_maHandle != INVALID_HANDLE)
+            IndicatorRelease(m_maHandle);
     }
     
     //--- Initialization
     bool Init(int lookbackPeriod, double minStrength, double touchZone, 
-              int minTouches, bool showDebugPrints)
+              int minTouches, bool showDebugPrints, bool useMA = true, int maPeriod = 20)
+    {
+        // Initialize existing parameters
+        if(!InitBase(lookbackPeriod, minStrength, touchZone, minTouches, showDebugPrints))
+            return false;
+            
+        // Initialize MA parameters
+        m_useMA = useMA;
+        m_maPeriod = maPeriod;
+        
+        // Create MA indicator if enabled
+        if(m_useMA)
+        {
+            m_maHandle = iMA(_Symbol, PERIOD_CURRENT, m_maPeriod, 0, MODE_SMA, PRICE_CLOSE);
+            if(m_maHandle == INVALID_HANDLE)
+            {
+                CV2EAUtils::LogError("❌ Failed to create MA indicator");
+                return false;
+            }
+            CV2EAUtils::LogSuccess(StringFormat("✅ MA validation enabled (Period: %d)", m_maPeriod));
+        }
+        
+        m_initialized = true;
+        return true;
+    }
+    
+    //--- Moving Average Methods
+    double GetMovingAverage(int shift = 0)
+    {
+        if(!m_useMA || m_maHandle == INVALID_HANDLE)
+            return 0;
+            
+        double ma_value[];
+        if(CopyBuffer(m_maHandle, 0, shift, 1, ma_value) > 0)
+            return ma_value[0];
+            
+        CV2EAUtils::LogError("❌ Failed to get MA value");
+        return 0;
+    }
+    
+    //--- Helper method to check if price is above/below MA
+    bool IsPriceAboveMA(double price, int shift = 0)
+    {
+        if(!m_useMA)
+            return true;  // Return true if MA not used
+            
+        double ma = GetMovingAverage(shift);
+        return ma != 0 && price > ma;
+    }
+    
+    bool IsPriceBelowMA(double price, int shift = 0)
+    {
+        if(!m_useMA)
+            return true;  // Return true if MA not used
+            
+        double ma = GetMovingAverage(shift);
+        return ma != 0 && price < ma;
+    }
+    
+    //--- Helper method to validate level with MA
+    bool IsLevelValidWithMA(const SKeyLevel &level)
+    {
+        if(!m_useMA)
+            return true;  // Return true if MA not used
+            
+        double ma = GetMovingAverage();
+        if(ma == 0)
+            return true;  // Return true if MA calculation failed
+            
+        // For resistance levels, price should be below MA
+        if(level.isResistance)
+            return IsPriceBelowMA(level.price);
+            
+        // For support levels, price should be above MA
+        return IsPriceAboveMA(level.price);
+    }
+    
+    //--- Private initialization helper
+    bool InitBase(int lookbackPeriod, double minStrength, double touchZone, 
+                 int minTouches, bool showDebugPrints)
     {
         // Adjust lookback period based on timeframe
         ENUM_TIMEFRAMES tf = Period();
         int periodMinutes = PeriodSeconds(tf) / 60;
         
-        // Set default lookback to cover approximately 5 days of data
         if(lookbackPeriod == 0)
         {
-            int barsPerDay = 1440 / periodMinutes;  // 1440 minutes in a day
-            m_lookbackPeriod = barsPerDay * 5;      // 5 days of data
+            // For higher timeframes, we need more historical bars
+            switch(tf)
+            {
+                case PERIOD_H1:  m_lookbackPeriod = 120;  break;  // ~5 days
+                case PERIOD_H4:  m_lookbackPeriod = 180;  break;  // ~30 days
+                case PERIOD_D1:  m_lookbackPeriod = 90;   break;  // ~3 months
+                default:
+                {
+                    int barsPerDay = 1440 / periodMinutes;  // 1440 minutes in a day
+                    m_lookbackPeriod = barsPerDay * 5;      // 5 days of data
+                    break;
+                }
+            }
         }
         else
         {
@@ -213,9 +315,9 @@ public:
                 case PERIOD_M5:  m_touchZone = 0.0005; break; // 5 pips
                 case PERIOD_M15: m_touchZone = 0.0007; break; // 7 pips
                 case PERIOD_M30: m_touchZone = 0.0010; break; // 10 pips
-                case PERIOD_H1:  m_touchZone = 0.0015; break; // 15 pips
-                case PERIOD_H4:  m_touchZone = 0.0020; break; // 20 pips
-                case PERIOD_D1:  m_touchZone = 0.0030; break; // 30 pips
+                case PERIOD_H1:  m_touchZone = 0.0025; break; // 25 pips
+                case PERIOD_H4:  m_touchZone = 0.0040; break; // 40 pips
+                case PERIOD_D1:  m_touchZone = 0.0060; break; // 60 pips
                 default:         m_touchZone = 0.0005;        // Default 5 pips
             }
         }
@@ -228,37 +330,6 @@ public:
         m_minTouches = minTouches;
         m_showDebugPrints = showDebugPrints;
         
-        m_initialized = true;
-        
-        // Enhanced debug information for timeframe verification
-        string timeframeInfo = StringFormat(
-            "\n=== TIMEFRAME CONFIGURATION DETAILS ===\n" +
-            "Timeframe: %s\n" +
-            "Period Minutes: %d\n" +
-            "Bars per Day: %d\n" +
-            "Lookback Period: %d bars (%.1f days)\n" +
-            "Touch Zone: %.5f (%d pips)\n" +
-            "Touch Zone Range in Points: %.1f to %.1f\n" +
-            "Min Strength Threshold: %.2f\n" +
-            "Min Touches Required: %d\n" +
-            "Current Symbol Point: %.5f\n" +
-            "=== END CONFIGURATION ===",
-            EnumToString(tf),
-            periodMinutes,
-            1440 / periodMinutes,
-            m_lookbackPeriod,
-            (double)m_lookbackPeriod * periodMinutes / 1440,
-            m_touchZone,
-            (int)(m_touchZone * 10000),
-            m_touchZone / _Point,
-            m_touchZone * 3 / _Point,  // Max range for touch validation
-            m_minStrength,
-            m_minTouches,
-            _Point
-        );
-        
-        Print(timeframeInfo);
-        
         return true;
     }
     
@@ -267,7 +338,7 @@ public:
     {
         if(!m_initialized)
         {
-            DebugPrint("❌ Strategy not initialized");
+            CV2EAUtils::LogError("❌ Strategy not initialized");
             return;
         }
         
@@ -296,7 +367,7 @@ public:
         else if(m_state.keyLevelFound)
         {
             // If we had a key level but can't find it anymore, reset state
-            DebugPrint("ℹ️ Previous key level no longer valid, resetting state");
+            CV2EAUtils::LogInfo("ℹ️ Previous key level no longer valid, resetting state");
             m_state.Reset();
         }
         
@@ -375,7 +446,7 @@ public:
     {
         string timeStr = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES);
         
-        DebugPrint(StringFormat(
+        CV2EAUtils::LogInfo(StringFormat(
             "\n📊 HOURLY LEVEL DETECTION REPORT - %s 📊\n" +
             "================================================\n" +
             "SUMMARY STATISTICS:\n" +
@@ -431,7 +502,7 @@ public:
            CopyClose(_Symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, closePrices) <= 0 ||
            CopyTime(_Symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, times) <= 0)
         {
-            DebugPrint("❌ Failed to copy price data");
+            CV2EAUtils::LogError("❌ Failed to copy price data");
             return false;
         }
         
@@ -453,7 +524,7 @@ public:
             m_hourlyStats.Reset();
             lastStatReset = currentHour;
             
-            DebugPrint("🔄 Reset hourly stats for new hour");
+            CV2EAUtils::LogInfo(" Reset hourly stats for new hour");
         }
         
         // Find swing highs (resistance levels)
@@ -604,19 +675,33 @@ private:
         int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
         if(digits == 3 || digits == 5)  // JPY pairs or 3-digit pairs
             pipSize = _Point * 10;
+            
+        // Adjust movement threshold based on timeframe
+        ENUM_TIMEFRAMES tf = Period();
+        double movementMultiplier;
+        switch(tf)
+        {
+            case PERIOD_H1:  movementMultiplier = 3.0; break;
+            case PERIOD_H4:  movementMultiplier = 4.0; break;
+            case PERIOD_D1:  movementMultiplier = 5.0; break;
+            default:         movementMultiplier = 2.0;
+        }
         
         // Debug info for touch zone
         if(m_showDebugPrints)
         {
-            Print(StringFormat(
+            CV2EAUtils::LogInfo(StringFormat(
                 "\n=== TOUCH DETECTION FOR LEVEL %.5f ===\n" +
                 "Type: %s\n" +
                 "Touch Zone Size: %.5f (%d pips)\n" +
+                "Movement Threshold: %.5f (%d pips)\n" +
                 "Valid Range: %.5f to %.5f",
                 level,
                 isResistance ? "RESISTANCE" : "SUPPORT",
                 m_touchZone,
-                (int)(m_touchZone / pipSize),  // Convert to actual pips
+                (int)(m_touchZone / pipSize),
+                m_touchZone * movementMultiplier,
+                (int)(m_touchZone * movementMultiplier / pipSize),
                 level - m_touchZone,
                 level + m_touchZone
             ));
@@ -629,7 +714,7 @@ private:
                 if(MathAbs(highs[i] - level) <= m_touchZone)
                 {
                     // Only count as new touch if price moved away from level
-                    if(lastPrice == 0 || MathAbs(highs[i] - lastPrice) > m_touchZone * 2)
+                    if(lastPrice == 0 || MathAbs(highs[i] - lastPrice) > m_touchZone * movementMultiplier)
                     {
                         touches++;
                         lastPrice = highs[i];
@@ -641,7 +726,7 @@ private:
                                            StringFormat("%.1f hours from last", 
                                            (double)(touchTime - lastTouchTime) / 3600);
                                            
-                            Print(StringFormat(
+                            CV2EAUtils::LogInfo(StringFormat(
                                 "✓ Touch %d at %.5f (%.1f pips from level) - %s",
                                 touches,
                                 highs[i],
@@ -653,7 +738,7 @@ private:
                         }
                     }
                 }
-                else if(MathAbs(highs[i] - level) > m_touchZone * 3)
+                else if(MathAbs(highs[i] - level) > m_touchZone * (movementMultiplier + 1))
                 {
                     // Reset last price if moved far enough away
                     lastPrice = 0;
@@ -663,7 +748,7 @@ private:
             {
                 if(MathAbs(lows[i] - level) <= m_touchZone)
                 {
-                    if(lastPrice == 0 || MathAbs(lows[i] - lastPrice) > m_touchZone * 2)
+                    if(lastPrice == 0 || MathAbs(lows[i] - lastPrice) > m_touchZone * movementMultiplier)
                     {
                         touches++;
                         lastPrice = lows[i];
@@ -675,7 +760,7 @@ private:
                                            StringFormat("%.1f hours from last", 
                                            (double)(touchTime - lastTouchTime) / 3600);
                                            
-                            Print(StringFormat(
+                            CV2EAUtils::LogInfo(StringFormat(
                                 "✓ Touch %d at %.5f (%.1f pips from level) - %s",
                                 touches,
                                 lows[i],
@@ -687,7 +772,7 @@ private:
                         }
                     }
                 }
-                else if(MathAbs(lows[i] - level) > m_touchZone * 3)
+                else if(MathAbs(lows[i] - level) > m_touchZone * (movementMultiplier + 1))
                 {
                     lastPrice = 0;
                 }
@@ -696,7 +781,7 @@ private:
         
         if(m_showDebugPrints && touches > 0)
         {
-            Print(StringFormat(
+            CV2EAUtils::LogInfo(StringFormat(
                 "=== TOTAL TOUCHES: %d ===\n",
                 touches
             ));
@@ -707,16 +792,16 @@ private:
     
     double CalculateLevelStrength(const SKeyLevel &level)
     {
-        // Base strength from touch count (0.50-0.95 range)
+        // Base strength from touch count (0.40-0.80 range, lowered from 0.50-0.95)
         double touchBase = 0;
         switch(level.touchCount) {
-            case 2: touchBase = 0.50; break;  // Base level
-            case 3: touchBase = 0.70; break;  // Significant jump
-            case 4: touchBase = 0.85; break;  // Strong level
-            default: touchBase = MathMin(0.90 + ((level.touchCount - 5) * 0.01), 0.95); // Cap at 0.95
+            case 2: touchBase = 0.40; break;  // Base level (lowered from 0.50)
+            case 3: touchBase = 0.55; break;  // Moderate level (lowered from 0.70)
+            case 4: touchBase = 0.65; break;  // Strong level (lowered from 0.85)
+            default: touchBase = MathMin(0.70 + ((level.touchCount - 5) * 0.02), 0.80); // Cap at 0.80 (lowered from 0.95)
         }
         
-        // Recency modifier (-60% to +30% of base)
+        // Recency modifier (-60% to +20% of base, reduced from +30%)
         ENUM_TIMEFRAMES tf = Period();
         int periodMinutes = PeriodSeconds(tf) / 60;
         double barsElapsed = (double)(TimeCurrent() - level.lastTouch) / (periodMinutes * 60);
@@ -724,65 +809,63 @@ private:
         
         // Adjust recency based on timeframe
         if(barsElapsed <= m_lookbackPeriod / 4) {  // Very recent (within 1/4 of lookback)
-            recencyMod = 0.30;
+            recencyMod = 0.20;  // Reduced from 0.30
         } else if(barsElapsed <= m_lookbackPeriod / 2) {  // Recent (within 1/2 of lookback)
-            recencyMod = 0.15;
+            recencyMod = 0.10;  // Reduced from 0.15
         } else if(barsElapsed <= m_lookbackPeriod) {  // Within lookback
             recencyMod = 0;
         } else {  // Old
             recencyMod = -0.60;
         }
         
-        // Duration bonus (up to +35% of base)
+        // Duration bonus (up to +25% of base, reduced from +35%)
         double barsDuration = (double)(level.lastTouch - level.firstTouch) / (periodMinutes * 60);
         double durationMod = 0;
         
         if(barsDuration >= m_lookbackPeriod / 2) {  // Long-lasting
-            durationMod = 0.35;
+            durationMod = 0.25;  // Reduced from 0.35
         } else if(barsDuration >= m_lookbackPeriod / 4) {  // Medium duration
-            durationMod = 0.20;
+            durationMod = 0.15;  // Reduced from 0.20
         } else if(barsDuration >= m_lookbackPeriod / 8) {  // Short duration
-            durationMod = 0.10;
+            durationMod = 0.05;  // Reduced from 0.10
         }
         
         // Calculate final strength with modifiers
         double strength = touchBase * (1.0 + recencyMod + durationMod);
         
-        // Add tiny random variation (0.05% max)
-        strength += 0.0005 * MathMod(level.price * 10000, 10) / 10;
+        // Add tiny random variation (0.02% max, reduced from 0.05%)
+        strength += 0.0002 * MathMod(level.price * 10000, 10) / 10;
         
-        // Ensure bounds
-        return MathMin(MathMax(strength, 0.45), 0.98);
+        // Ensure bounds (lowered upper bound from 0.98 to 0.95)
+        return MathMin(MathMax(strength, 0.35), 0.95);
     }
     
     void AddKeyLevel(const SKeyLevel &level)
     {
+        // First validate the level against MA if enabled
+        if(!IsLevelValidWithMA(level))
+        {
+            // Remove error logging since this is a normal validation check
+            return;
+        }
+        
         if(m_keyLevelCount < ArraySize(m_currentKeyLevels))
         {
             m_currentKeyLevels[m_keyLevelCount] = level;
             m_keyLevelCount++;
             
-            // Change debug level to VERBOSE so it only shows in full debug mode
-            DebugPrint(StringFormat(
-                "✅ Added %s level at %.5f with strength %.4f",
+            CV2EAUtils::LogSuccess(StringFormat("Added %s level at %.5f with strength %.4f",
                 level.isResistance ? "resistance" : "support",
                 level.price,
                 level.strength
-            ));  // Changed from DEBUG_NORMAL to DEBUG_VERBOSE
+            ));
         }
     }
     
     //--- Debug print method
     void DebugPrint(string message)
     {
-        if(!m_showDebugPrints)
-            return;
-            
-        // Add timestamp and current price to debug messages
-        string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
-        double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-        
-        Print(StringFormat("[%s] [%.5f] %s", timestamp, currentPrice, message));
+        CV2EAUtils::LogInfo(message);
     }
 
     void PrintKeyLevelsReport()
@@ -837,12 +920,12 @@ private:
         }
         
         // Print header without timestamp in each line
-        DebugPrint(StringFormat("=== KEY LEVELS REPORT [%s] ===\nPrice: %.5f", timeStr, currentPrice));
+        CV2EAUtils::LogInfo(StringFormat("=== KEY LEVELS REPORT [%s] ===\nPrice: %.5f", timeStr, currentPrice));
         
         // Print Support Levels
         if(supportCount > 0)
         {
-            DebugPrint("\nSUPPORT:");
+            CV2EAUtils::LogInfo("\nSUPPORT:");
             for(int i = 0; i < supportCount; i++)
             {
                 double distance = MathAbs(currentPrice - supportLevels[i].price);
@@ -850,7 +933,7 @@ private:
                 string arrow = (currentPrice > supportLevels[i].price) ? "↓" : " ";
                 string distanceStr = StringFormat("%d pips", (int)(distance / _Point));
                 
-                DebugPrint(StringFormat("%s %.5f (%s) | S:%.2f T:%d %s",
+                CV2EAUtils::LogInfo(StringFormat("%s %.5f (%s) | S:%.2f T:%d %s",
                     arrow,
                     supportLevels[i].price,
                     distanceStr,
@@ -863,7 +946,7 @@ private:
         // Print Resistance Levels
         if(resistanceCount > 0)
         {
-            DebugPrint("\nRESISTANCE:");
+            CV2EAUtils::LogInfo("\nRESISTANCE:");
             for(int i = 0; i < resistanceCount; i++)
             {
                 double distance = MathAbs(currentPrice - resistanceLevels[i].price);
@@ -871,7 +954,7 @@ private:
                 string arrow = (currentPrice < resistanceLevels[i].price) ? "↑" : " ";
                 string distanceStr = StringFormat("%d pips", (int)(distance / _Point));
                 
-                DebugPrint(StringFormat("%s %.5f (%s) | S:%.2f T:%d %s",
+                CV2EAUtils::LogInfo(StringFormat("%s %.5f (%s) | S:%.2f T:%d %s",
                     arrow,
                     resistanceLevels[i].price,
                     distanceStr,
@@ -884,10 +967,10 @@ private:
         // Print Recent Breaks if any (limit to last 3)
         if(m_recentBreakCount > 0)
         {
-            DebugPrint("\nRECENT BREAKS:");
+            CV2EAUtils::LogInfo("\nRECENT BREAKS:");
             for(int i = MathMax(0, m_recentBreakCount - 3); i < m_recentBreakCount; i++)
             {
-                DebugPrint(StringFormat("%.5f @ %s",
+                CV2EAUtils::LogInfo(StringFormat("%.5f @ %s",
                     m_recentBreaks[i],
                     TimeToString(m_recentBreakTimes[i], TIME_MINUTES)));
             }
@@ -902,7 +985,7 @@ private:
         datetime currentTime = TimeCurrent();
         if(currentTime - m_systemHealth.lastUpdate < 3600) return; // Only update hourly
         
-        DebugPrint(StringFormat(
+        CV2EAUtils::LogInfo(StringFormat(
             "\n=== SYSTEM HEALTH REPORT ===\n" +
             "Detection Rate: %.1f%%\n" +
             "Noise Ratio: %.1f%%\n" +
@@ -944,7 +1027,7 @@ private:
         // Only alert if level has some proven success
         if(m_levelPerformance.successRate < 0.30) return;
         
-        DebugPrint(StringFormat(
+        CV2EAUtils::LogInfo(StringFormat(
             "\n🔔 TRADE SETUP ALERT\n" +
             "Price approaching %s @ %.5f\n" +
             "Distance: %.1f pips\n" +
@@ -1039,12 +1122,18 @@ private:
                     m_chartLines[j].lastUpdate = currentTime;
                     found = true;
                     
-                    // Update line properties
-                    if(!ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor) ||
-                       !ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle) ||
-                       !ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth))
+                    // Update line properties and verify success
+                    bool updateSuccess = true;
+                    updateSuccess &= ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
+                    updateSuccess &= ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle);
+                    updateSuccess &= ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth);
+                    updateSuccess &= ObjectSetDouble(0, lineName, OBJPROP_PRICE, m_currentKeyLevels[i].price);
+                    
+                    if(!updateSuccess)
                     {
-                        DebugPrint(StringFormat("❌ Failed to update line properties for %s", lineName));
+                        CV2EAUtils::LogError(StringFormat("Failed to update properties for line %s - recreating", lineName));
+                        ObjectDelete(0, lineName);
+                        found = false;  // Force recreation
                     }
                     break;
                 }
@@ -1061,22 +1150,34 @@ private:
                 m_chartLines[size].lineColor = lineColor;
                 m_chartLines[size].isActive = true;
                 
-                // Create and set up new line
+                // Delete any existing line with same name (cleanup)
+                ObjectDelete(0, lineName);
+                
+                // Create and set up new line with error checking
                 if(ObjectCreate(0, lineName, OBJ_HLINE, 0, 0, m_currentKeyLevels[i].price))
                 {
-                    ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
-                    ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle);
-                    ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth);
-                    ObjectSetInteger(0, lineName, OBJPROP_BACK, false);  // Draw on top
-                    ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);  // Prevent user selection
-                    ObjectSetString(0, lineName, OBJPROP_TOOLTIP, StringFormat("%s Level (S:%.2f T:%d)", 
+                    bool setupSuccess = true;
+                    setupSuccess &= ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
+                    setupSuccess &= ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle);
+                    setupSuccess &= ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth);
+                    setupSuccess &= ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
+                    setupSuccess &= ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
+                    setupSuccess &= ObjectSetString(0, lineName, OBJPROP_TOOLTIP, StringFormat("%s Level (S:%.2f T:%d)", 
                         m_currentKeyLevels[i].isResistance ? "Resistance" : "Support",
                         m_currentKeyLevels[i].strength,
                         m_currentKeyLevels[i].touchCount));
+                        
+                    if(!setupSuccess)
+                    {
+                        CV2EAUtils::LogError(StringFormat("Failed to set properties for new line %s", lineName));
+                        ObjectDelete(0, lineName);
+                        m_chartLines[size].isActive = false;  // Mark as inactive
+                    }
                 }
                 else
                 {
-                    DebugPrint(StringFormat("❌ Failed to create line %s", lineName));
+                    CV2EAUtils::LogError(StringFormat("Failed to create line %s", lineName));
+                    m_chartLines[size].isActive = false;  // Mark as inactive
                 }
             }
         }
@@ -1094,7 +1195,7 @@ private:
             {
                 if(!ObjectDelete(0, m_chartLines[i].name))
                 {
-                    DebugPrint(StringFormat("❌ Failed to delete line %s", m_chartLines[i].name));
+                    CV2EAUtils::LogError(StringFormat("Failed to delete line %s", m_chartLines[i].name));
                 }
             }
         }
