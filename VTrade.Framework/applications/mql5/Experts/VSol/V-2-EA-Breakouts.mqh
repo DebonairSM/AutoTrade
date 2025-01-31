@@ -196,8 +196,20 @@ public:
         // Set default lookback to cover approximately 5 days of data
         if(lookbackPeriod == 0)
         {
-            int barsPerDay = 1440 / periodMinutes;  // 1440 minutes in a day
-            m_lookbackPeriod = barsPerDay * 5;      // 5 days of data
+            switch(tf)
+            {
+                case PERIOD_MN1: m_lookbackPeriod = 36;   break;  // 3 years of monthly data
+                case PERIOD_W1:  m_lookbackPeriod = 52;   break;  // ~1 year of weekly data
+                case PERIOD_D1:  m_lookbackPeriod = 90;   break;  // ~3 months
+                case PERIOD_H4:  m_lookbackPeriod = 180;  break;  // ~30 days
+                case PERIOD_H2:  m_lookbackPeriod = 150;  break;  // ~12.5 days
+                case PERIOD_H1:  m_lookbackPeriod = 120;  break;  // ~5 days
+                default:
+                {
+                    int barsPerDay = 1440 / periodMinutes;  // 1440 minutes in a day
+                    m_lookbackPeriod = barsPerDay * 5;      // 5 days of data
+                }
+            }
         }
         else
         {
@@ -209,13 +221,16 @@ public:
         {
             switch(tf)
             {
-                case PERIOD_M1:  m_touchZone = 0.0003; break; // 3 pips
-                case PERIOD_M5:  m_touchZone = 0.0005; break; // 5 pips
-                case PERIOD_M15: m_touchZone = 0.0007; break; // 7 pips
+                case PERIOD_MN1: m_touchZone = 0.0200; break; // 200 pips for monthly
+                case PERIOD_W1:  m_touchZone = 0.0100; break; // 100 pips for weekly
+                case PERIOD_D1:  m_touchZone = 0.0060; break; // 60 pips
+                case PERIOD_H4:  m_touchZone = 0.0040; break; // 40 pips
+                case PERIOD_H2:  m_touchZone = 0.0032; break; // 32 pips (between H1 and H4)
+                case PERIOD_H1:  m_touchZone = 0.0025; break; // 25 pips
                 case PERIOD_M30: m_touchZone = 0.0010; break; // 10 pips
-                case PERIOD_H1:  m_touchZone = 0.0015; break; // 15 pips
-                case PERIOD_H4:  m_touchZone = 0.0020; break; // 20 pips
-                case PERIOD_D1:  m_touchZone = 0.0030; break; // 30 pips
+                case PERIOD_M15: m_touchZone = 0.0007; break; // 7 pips
+                case PERIOD_M5:  m_touchZone = 0.0005; break; // 5 pips
+                case PERIOD_M1:  m_touchZone = 0.0003; break; // 3 pips
                 default:         m_touchZone = 0.0005;        // Default 5 pips
             }
         }
@@ -426,12 +441,36 @@ public:
         ArraySetAsSeries(closePrices, true);
         ArraySetAsSeries(times, true);
         
-        if(CopyHigh(_Symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, highPrices) <= 0 ||
-           CopyLow(_Symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, lowPrices) <= 0 ||
-           CopyClose(_Symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, closePrices) <= 0 ||
-           CopyTime(_Symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, times) <= 0)
+        // Get available bars for the current timeframe
+        long availableBars = SeriesInfoInteger(_Symbol, Period(), SERIES_BARS_COUNT);
+        
+        // Adjust minimum bars requirement based on timeframe
+        int minRequiredBars;
+        switch(Period())
         {
-            DebugPrint("❌ Failed to copy price data");
+            case PERIOD_MN1: minRequiredBars = 6;  break; // 6 months minimum
+            case PERIOD_W1:  minRequiredBars = 8;  break; // 8 weeks minimum
+            case PERIOD_D1:  minRequiredBars = 10; break; // 10 days minimum
+            default:         minRequiredBars = 10; break; // Default 10 bars
+        }
+        
+        long barsToUse = MathMin((long)m_lookbackPeriod, availableBars - 5); // Leave room for swing detection
+        
+        if(barsToUse < minRequiredBars)
+        {
+            DebugPrint(StringFormat("❌ Insufficient bars available: %d (needed at least %d for %s timeframe)", 
+                (int)availableBars, minRequiredBars, EnumToString(Period())));
+            return false;
+        }
+        
+        // Copy with error handling
+        if(CopyHigh(_Symbol, Period(), 0, (int)barsToUse, highPrices) <= 0 ||
+           CopyLow(_Symbol, Period(), 0, (int)barsToUse, lowPrices) <= 0 ||
+           CopyClose(_Symbol, Period(), 0, (int)barsToUse, closePrices) <= 0 ||
+           CopyTime(_Symbol, Period(), 0, (int)barsToUse, times) <= 0)
+        {
+            DebugPrint(StringFormat("❌ Failed to copy price data. Available bars: %d, Requested: %d, Error: %d", 
+                (int)availableBars, (int)barsToUse, GetLastError()));
             return false;
         }
         
