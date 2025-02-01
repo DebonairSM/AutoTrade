@@ -1,46 +1,67 @@
 //+------------------------------------------------------------------+
-//|                                               V-2-EA-Main.mq5     |
-//|                         Key Level Detection Implementation        |
+//|                                                   V-2-EA-Main.mq5 |
+//|                                                     Rommel Company |
+//|                                                     Your Link |
 //+------------------------------------------------------------------+
-#property copyright "Your Company"
+#property copyright "Rommel Company"
 #property link      "Your Link"
-#property version   "1.0"
-#property strict
+#property version   "1.00"
 
 #include "V-2-EA-Breakouts.mqh"
+#include "V-2-EA-MarketData.mqh"
+#include "V-2-EA-Utils.mqh"
 
-//--- Level Detection Parameters
-input int    MinTouches        = 2;     // Minimum touches required
-input bool   ShowDebugPrints   = true; // Show debug messages
+// Input parameters
+input int InpLookbackPeriod = 0;      // Lookback period (0 = auto based on timeframe)
+input double InpMinStrength = 0.55;    // Minimum strength for key levels (0.45-0.98)
+input double InpTouchZone = 0;         // Touch zone size (0 = auto based on timeframe)
+input int InpMinTouches = 2;           // Minimum touches required
+input bool InpShowDebug = false;       // Show debug output
 
-//--- Global Variables
-CV2EABreakouts g_strategy;  // Strategy instance
+// Global variables
+VSol::CV2EABreakouts* g_strategy = NULL;  // Strategy instance
+VSol::CV2EAUtils g_utils;                 // Utils instance
+VSol::CV2EAMarketData g_marketData;       // Market data instance
 datetime g_lastBarTime = 0; // Track last processed bar time
 ENUM_TIMEFRAMES g_lastTimeframe = PERIOD_CURRENT; // Track last timeframe
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                     |
+//| Expert initialization function                                      |
 //+------------------------------------------------------------------+
 int OnInit()
 {
+    // Initialize utils and market data
+    VSol::CV2EAUtils::Init(InpShowDebug);
+    VSol::CV2EAMarketData::Init(InpShowDebug);
+    
+    // Create strategy instance
+    if(g_strategy != NULL)
+    {
+        delete g_strategy;
+        g_strategy = NULL;
+    }
+    
+    g_strategy = new VSol::CV2EABreakouts();
+    
+    // Initialize strategy
+    if(!g_strategy.Init(InpLookbackPeriod, InpMinStrength, InpTouchZone, 
+                        InpMinTouches, InpShowDebug))
+    {
+        VSol::CV2EAUtils::LogError("Failed to initialize strategy");
+        return INIT_FAILED;
+    }
+    
     // Store initial timeframe
     g_lastTimeframe = Period();
     
     // Print timeframe info
     int periodMinutes = PeriodSeconds(g_lastTimeframe) / 60;
     
-    Print(StringFormat(
+    VSol::CV2EAUtils::LogInfo(StringFormat(
         "Initializing EA on %s timeframe (%d minutes)",
         EnumToString(g_lastTimeframe),
         periodMinutes
     ));
-    
-    // Initialize key level detection with auto-calculated settings
-    if(!g_strategy.Init(0, 0.55, 0, MinTouches, ShowDebugPrints))
-    {
-        Print("❌ Failed to initialize key level detection");
-        return INIT_FAILED;
-    }
     
     return INIT_SUCCEEDED;
 }
@@ -50,19 +71,30 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-    // Cleanup is handled by CV2EABreakouts destructor
+    // Clean up all components in reverse order of initialization
+    g_strategy.Cleanup();  // Clean up Breakouts strategy
+    VSol::CV2EAMarketData::Cleanup();  // Clean up MarketData
+    VSol::CV2EAUtils::Cleanup();  // Clean up Utils
+    
+    // Log deinitialization
+    VSol::CV2EAUtils::LogInfo(StringFormat("EA Deinitialized (reason: %d)", reason));
+    
+    // Force chart redraw to ensure all objects are removed
+    ChartRedraw(0);
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                              |
+//| Expert tick function                                               |
 //+------------------------------------------------------------------+
 void OnTick()
 {
+    if(g_strategy == NULL) return;
+    
     // Check if timeframe has changed
     ENUM_TIMEFRAMES currentTimeframe = Period();
     if(currentTimeframe != g_lastTimeframe)
     {
-        Print(StringFormat("Timeframe changed from %s to %s - Reinitializing EA...",
+        VSol::CV2EAUtils::LogInfo(StringFormat("Timeframe changed from %s to %s - Reinitializing EA...",
             EnumToString(g_lastTimeframe),
             EnumToString(currentTimeframe)));
             
@@ -70,9 +102,10 @@ void OnTick()
         g_strategy.ClearChartObjects();
         
         // Reinitialize with new timeframe settings
-        if(!g_strategy.Init(0, 0.55, 0, MinTouches, ShowDebugPrints))
+        if(!g_strategy.Init(InpLookbackPeriod, InpMinStrength, InpTouchZone, 
+                            InpMinTouches, InpShowDebug))
         {
-            Print("❌ Failed to reinitialize after timeframe change");
+            VSol::CV2EAUtils::LogError("Failed to reinitialize after timeframe change");
             return;
         }
         
