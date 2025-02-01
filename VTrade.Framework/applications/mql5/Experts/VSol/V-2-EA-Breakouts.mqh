@@ -195,7 +195,12 @@ namespace VSol
                                m_showDebugPrints(false),
                                m_maxBounceDelay(8)  // Default max bounce delay
         {
-            ArrayResize(m_currentKeyLevels, DEFAULT_BUFFER_SIZE);
+            // Initialize arrays with error handling
+            if(!ArrayResize(m_currentKeyLevels, DEFAULT_BUFFER_SIZE))
+            {
+                Print("❌ [CV2EABreakouts] Failed to initialize key levels array");
+                return;
+            }
             m_state.Reset();
         }
         
@@ -263,6 +268,37 @@ namespace VSol
             m_minTouches = minTouches;
             m_showDebugPrints = showDebugPrints;
             
+            // Initialize arrays with error handling
+            if(!ArrayResize(m_currentKeyLevels, DEFAULT_BUFFER_SIZE))
+            {
+                Print("❌ [Init] Failed to resize key levels array");
+                return false;
+            }
+            
+            if(!ArrayResize(m_recentBreaks, DEFAULT_BUFFER_SIZE))
+            {
+                Print("❌ [Init] Failed to resize recent breaks array");
+                return false;
+            }
+            
+            if(!ArrayResize(m_recentBreakTimes, DEFAULT_BUFFER_SIZE))
+            {
+                Print("❌ [Init] Failed to resize recent break times array");
+                return false;
+            }
+            
+            if(!ArrayResize(m_lastAlerts, DEFAULT_BUFFER_SIZE))
+            {
+                Print("❌ [Init] Failed to resize last alerts array");
+                return false;
+            }
+            
+            if(!ArrayResize(m_chartLines, 0))
+            {
+                Print("❌ [Init] Failed to initialize chart lines array");
+                return false;
+            }
+            
             m_initialized = true;
             
             // Enhanced debug information for timeframe verification
@@ -284,7 +320,6 @@ namespace VSol
                 m_lookbackPeriod,
                 (double)m_lookbackPeriod * periodMinutes / 1440,
                 m_touchZone,
-                (int)(m_touchZone * 10000),
                 m_touchZone / _Point,
                 m_touchZone * 3 / _Point,  // Max range for touch validation
                 m_minStrength,
@@ -456,10 +491,15 @@ namespace VSol
             double closePrices[];
             datetime times[];
             
-            ArraySetAsSeries(highPrices, true);
-            ArraySetAsSeries(lowPrices, true);
-            ArraySetAsSeries(closePrices, true);
-            ArraySetAsSeries(times, true);
+            // Set arrays as series with error handling
+            if(!ArraySetAsSeries(highPrices, true) || 
+               !ArraySetAsSeries(lowPrices, true) || 
+               !ArraySetAsSeries(closePrices, true) || 
+               !ArraySetAsSeries(times, true))
+            {
+                Print("❌ [FindKeyLevels] Failed to set arrays as series");
+                return false;
+            }
             
             // Get available bars for the current timeframe
             long availableBars = SeriesInfoInteger(_Symbol, Period(), SERIES_BARS_COUNT);
@@ -478,8 +518,8 @@ namespace VSol
             
             if(barsToUse < minRequiredBars)
             {
-                DebugPrint(StringFormat("❌ Insufficient bars available: %d (needed at least %d for %s timeframe)", 
-                    (int)availableBars, minRequiredBars, EnumToString(Period())));
+                Print("❌ [FindKeyLevels] Insufficient bars available: ", (int)availableBars, 
+                      " (needed at least ", minRequiredBars, " for ", EnumToString(Period()), " timeframe)");
                 return false;
             }
             
@@ -489,8 +529,8 @@ namespace VSol
                CopyClose(_Symbol, Period(), 0, (int)barsToUse, closePrices) <= 0 ||
                CopyTime(_Symbol, Period(), 0, (int)barsToUse, times) <= 0)
             {
-                DebugPrint(StringFormat("❌ Failed to copy price data. Available bars: %d, Requested: %d, Error: %d", 
-                    (int)availableBars, (int)barsToUse, GetLastError()));
+                Print("❌ [FindKeyLevels] Failed to copy price data. Available bars: ", (int)availableBars, 
+                      ", Requested: ", (int)barsToUse, ", Error: ", GetLastError());
                 return false;
             }
             
@@ -1281,15 +1321,12 @@ namespace VSol
             // Validate level
             if(level.price <= 0 || level.touchCount < m_minTouches || level.strength < m_minStrength)
             {
-                if(m_showDebugPrints)
-                {
-                    Print(StringFormat(
-                        "❌ Invalid level rejected: Price=%.5f, Touches=%d, Strength=%.4f",
-                        level.price,
-                        level.touchCount,
-                        level.strength
-                    ));
-                }
+                Print(StringFormat(
+                    "❌ [AddKeyLevel] Invalid level rejected: Price=%.5f, Touches=%d, Strength=%.4f",
+                    level.price,
+                    level.touchCount,
+                    level.strength
+                ));
                 return;
             }
             
@@ -1299,7 +1336,7 @@ namespace VSol
                 int newSize = MathMax(10, ArraySize(m_currentKeyLevels) * 2);
                 if(!ArrayResize(m_currentKeyLevels, newSize))
                 {
-                    Print("❌ Failed to resize key levels array");
+                    Print("❌ [AddKeyLevel] Failed to resize key levels array");
                     return;
                 }
             }
@@ -1390,12 +1427,20 @@ namespace VSol
             {
                 if(m_currentKeyLevels[i].isResistance)
                 {
-                    ArrayResize(resistanceLevels, resistanceCount + 1);
+                    if(!ArrayResize(resistanceLevels, resistanceCount + 1))
+                    {
+                        Print("❌ [RemoveWeakestLevels] Failed to resize resistance levels array");
+                        return;
+                    }
                     resistanceLevels[resistanceCount++] = m_currentKeyLevels[i];
                 }
                 else
                 {
-                    ArrayResize(supportLevels, supportCount + 1);
+                    if(!ArrayResize(supportLevels, supportCount + 1))
+                    {
+                        Print("❌ [RemoveWeakestLevels] Failed to resize support levels array");
+                        return;
+                    }
                     supportLevels[supportCount++] = m_currentKeyLevels[i];
                 }
             }
@@ -1429,6 +1474,21 @@ namespace VSol
             
             // Keep only the strongest levels
             m_keyLevelCount = 0;
+            
+            // Resize arrays to keep only the strongest levels
+            if(!ArrayResize(supportLevels, MathMin(maxPerType, supportCount)))
+            {
+                Print("❌ [RemoveWeakestLevels] Failed to resize final support levels array");
+                return;
+            }
+            
+            if(!ArrayResize(resistanceLevels, MathMin(maxPerType, resistanceCount)))
+            {
+                Print("❌ [RemoveWeakestLevels] Failed to resize final resistance levels array");
+                return;
+            }
+            
+            // Copy back the strongest levels
             for(int i = 0; i < MathMin(maxPerType, resistanceCount); i++)
             {
                 m_currentKeyLevels[m_keyLevelCount++] = resistanceLevels[i];
@@ -1754,7 +1814,11 @@ namespace VSol
                 if(!found)
                 {
                     int size = ArraySize(m_chartLines);
-                    ArrayResize(m_chartLines, size + 1);
+                    if(!ArrayResize(m_chartLines, size + 1))
+                    {
+                        Print("❌ [UpdateChartLines] Failed to resize chart lines array");
+                        return;
+                    }
                     m_chartLines[size].name = lineName;
                     m_chartLines[size].price = m_currentKeyLevels[i].price;
                     m_chartLines[size].lastUpdate = currentTime;
@@ -1780,7 +1844,7 @@ namespace VSol
                     }
                     else
                     {
-                        DebugPrint(StringFormat("❌ Failed to create line %s", lineName));
+                        Print("❌ [UpdateChartLines] Failed to create line ", lineName);
                     }
                 }
             }
@@ -1798,7 +1862,11 @@ namespace VSol
                 {
                     if(!ObjectDelete(0, m_chartLines[i].name))
                     {
-                        DebugPrint(StringFormat("❌ Failed to delete line %s", m_chartLines[i].name));
+                        int error = GetLastError();
+                        if(error != ERR_OBJECT_DOES_NOT_EXIST)  // Ignore if object doesn't exist
+                        {
+                            Print("❌ [ClearInactiveChartLines] Failed to delete line ", m_chartLines[i].name, ", error: ", error);
+                        }
                     }
                 }
             }
@@ -1806,7 +1874,13 @@ namespace VSol
             // Second pass: remove inactive lines from array
             int newSize = 0;
             SChartLine tempLines[];
-            ArrayResize(tempLines, ArraySize(m_chartLines));
+            
+            // Initialize temporary array with error handling
+            if(!ArrayResize(tempLines, ArraySize(m_chartLines)))
+            {
+                Print("❌ [ClearInactiveChartLines] Failed to resize temporary lines array");
+                return;
+            }
             
             // Copy active lines to temporary array
             for(int i = 0; i < ArraySize(m_chartLines); i++)
@@ -1818,9 +1892,20 @@ namespace VSol
                 }
             }
             
-            // Resize and copy back
-            ArrayResize(tempLines, newSize);
-            ArrayResize(m_chartLines, newSize);
+            // Resize arrays with error handling
+            if(!ArrayResize(tempLines, newSize))
+            {
+                Print("❌ [ClearInactiveChartLines] Failed to resize temporary array to final size");
+                return;
+            }
+            
+            if(!ArrayResize(m_chartLines, newSize))
+            {
+                Print("❌ [ClearInactiveChartLines] Failed to resize chart lines array to final size");
+                return;
+            }
+            
+            // Copy back the active lines
             for(int i = 0; i < newSize; i++)
             {
                 m_chartLines[i] = tempLines[i];

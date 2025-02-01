@@ -244,8 +244,7 @@ namespace VSol
         ArraySetAsSeries(dailyRates, true);
         if(CopyRates(symbol, PERIOD_D1, 0, 2, dailyRates) < 2)
         {
-            if(m_showDebugPrints)
-                Print("❌ [GetDailyPivotPoints] Unable to copy daily bars, error =", GetLastError());
+            Print("❌ [GetDailyPivotPoints] Unable to copy daily bars, error =", GetLastError());
             return false;
         }
 
@@ -280,8 +279,7 @@ namespace VSol
         int handle = iATR(symbol, timeframe, period);
         if(handle == INVALID_HANDLE)
         {
-            if(m_showDebugPrints)
-                Print("❌ [GetATR] Failed to create ATR indicator");
+            Print("❌ [GetATR] Failed to create ATR indicator");
             return 0.0;
         }
         
@@ -290,8 +288,7 @@ namespace VSol
         ArraySetAsSeries(atr, true);
         if(CopyBuffer(handle, 0, shift, 1, atr) <= 0)
         {
-            if(m_showDebugPrints)
-                Print("❌ [GetATR] Failed to copy ATR data");
+            Print("❌ [GetATR] Failed to copy ATR data");
             IndicatorRelease(handle);
             return 0.0;
         }
@@ -352,8 +349,7 @@ namespace VSol
         int arraySize = ArraySize(prices);
         if(touchIndex < 0 || touchIndex >= arraySize)
         {
-            if(m_showDebugPrints)
-                Print("❌ [IsValidTouch] Touch index out of bounds");
+            Print("❌ [IsValidTouch] Touch index out of bounds");
             return false;
         }
         
@@ -372,14 +368,12 @@ namespace VSol
                 {
                     if(MathAbs(prices[touchIndex - i] - price) <= m_touchZoneSize)
                     {
-                        if(m_showDebugPrints)
-                            Print("ℹ️ [IsValidTouch] Limited history but found confirming touch");
+                        Print("ℹ️ [IsValidTouch] Limited history but found confirming touch");
                         return true;
                     }
                 }
             }
-            if(m_showDebugPrints)
-                Print("ℹ️ [IsValidTouch] Limited history, treating as potentially valid");
+            Print("ℹ️ [IsValidTouch] Limited history, treating as potentially valid");
             return true;
         }
         
@@ -422,16 +416,20 @@ namespace VSol
         double lowPrices[];
         datetime times[];
         
-        ArraySetAsSeries(highPrices, true);
-        ArraySetAsSeries(lowPrices, true);
-        ArraySetAsSeries(times, true);
+        // Set arrays as series with error handling
+        if(!ArraySetAsSeries(highPrices, true) || 
+           !ArraySetAsSeries(lowPrices, true) || 
+           !ArraySetAsSeries(times, true))
+        {
+            Print("❌ [FindKeyLevels] Failed to set arrays as series");
+            return false;
+        }
 
         if(CopyHigh(symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, highPrices) <= 0 ||
            CopyLow(symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, lowPrices) <= 0 ||
            CopyTime(symbol, PERIOD_CURRENT, 0, m_lookbackPeriod, times) <= 0)
         {
-            if(m_showDebugPrints)
-                Print("❌ [FindKeyLevels] Failed to copy price data");
+            Print("❌ [FindKeyLevels] Failed to copy price data");
             return false;
         }
 
@@ -454,7 +452,12 @@ namespace VSol
                     {
                         if(newLevel.strength >= m_minStrengthThreshold)
                         {
-                            ArrayResize(tempLevels, levelCount + 1);
+                            // Add error handling for array resize
+                            if(!ArrayResize(tempLevels, levelCount + 1))
+                            {
+                                Print("❌ [FindKeyLevels] Failed to resize tempLevels array");
+                                return false;
+                            }
                             tempLevels[levelCount] = newLevel;
                             levelCount++;
                         }
@@ -475,7 +478,12 @@ namespace VSol
                     {
                         if(newLevel.strength >= m_minStrengthThreshold)
                         {
-                            ArrayResize(tempLevels, levelCount + 1);
+                            // Add error handling for array resize
+                            if(!ArrayResize(tempLevels, levelCount + 1))
+                            {
+                                Print("❌ [FindKeyLevels] Failed to resize tempLevels array");
+                                return false;
+                            }
                             tempLevels[levelCount] = newLevel;
                             levelCount++;
                         }
@@ -518,7 +526,13 @@ namespace VSol
         outLevel.touchCount = 0;
         outLevel.firstTouch = 0;
         outLevel.lastTouch = 0;
-        ArrayResize(outLevel.touches, 0);
+        
+        // Initialize touches array with error handling
+        if(!ArrayResize(outLevel.touches, 0))
+        {
+            Print("❌ [CountTouchesEnhanced] Failed to initialize touches array");
+            return false;
+        }
         
         // Count and validate touches
         int touches = 0;
@@ -537,7 +551,13 @@ namespace VSol
                 
                 // Create temporary array for validation
                 double priceArray[];
-                ArrayResize(priceArray, isHighTouch ? ArraySize(highPrices) : ArraySize(lowPrices));
+                int requiredSize = isHighTouch ? ArraySize(highPrices) : ArraySize(lowPrices);
+                
+                if(!ArrayResize(priceArray, requiredSize))
+                {
+                    Print("❌ [CountTouchesEnhanced] Failed to resize price array");
+                    return false;
+                }
                 
                 // Copy the appropriate price array
                 for(int i = 0; i < ArraySize(priceArray); i++)
@@ -546,9 +566,13 @@ namespace VSol
                 // Validate the touch
                 if(IsValidTouch(priceArray, times, j))
                 {
-                    // Record the touch
+                    // Record the touch with error handling
                     int touchIndex = outLevel.touchCount;
-                    ArrayResize(outLevel.touches, touchIndex + 1);
+                    if(!ArrayResize(outLevel.touches, touchIndex + 1))
+                    {
+                        Print("❌ [CountTouchesEnhanced] Failed to resize touches array");
+                        return false;
+                    }
                     
                     outLevel.touches[touchIndex].time = times[j];
                     outLevel.touches[touchIndex].price = touchPrice;
@@ -584,15 +608,19 @@ namespace VSol
     //+------------------------------------------------------------------+
     bool CV2EAMarketData::GetVolumeData(string symbol, long &volumes[], const int count)
     {
-        ArraySetAsSeries(volumes, true);
+        // Set array as series with error handling
+        if(!ArraySetAsSeries(volumes, true))
+        {
+            Print("❌ [GetVolumeData] Failed to set volumes array as series");
+            return false;
+        }
         
         // Get volume data based on configured type
         if(m_volumeType == VOLUME_REAL)
         {
             if(CopyRealVolume(symbol, PERIOD_CURRENT, 0, count, volumes) <= 0)
             {
-                if(m_showDebugPrints)
-                    Print("❌ [GetVolumeData] Failed to copy real volume data");
+                Print("❌ [GetVolumeData] Failed to copy real volume data");
                 return false;
             }
         }
@@ -600,8 +628,7 @@ namespace VSol
         {
             if(CopyTickVolume(symbol, PERIOD_CURRENT, 0, count, volumes) <= 0)
             {
-                if(m_showDebugPrints)
-                    Print("❌ [GetVolumeData] Failed to copy tick volume data");
+                Print("❌ [GetVolumeData] Failed to copy tick volume data");
                 return false;
             }
         }
@@ -636,8 +663,7 @@ namespace VSol
         
         if(countVol == 0)
         {
-            if(m_showDebugPrints)
-                Print("❌ [DoesVolumeMeetRequirement] No valid volume data found");
+            Print("❌ [DoesVolumeMeetRequirement] No valid volume data found");
             return false;
         }
         
@@ -647,8 +673,7 @@ namespace VSol
         
         if(avgVol <= 0)
         {
-            if(m_showDebugPrints)
-                Print("❌ [DoesVolumeMeetRequirement] Average volume is zero");
+            Print("❌ [DoesVolumeMeetRequirement] Average volume is zero");
             return false;
         }
         
