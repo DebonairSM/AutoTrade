@@ -13,6 +13,7 @@
 //+------------------------------------------------------------------+
 #define DEFAULT_BUFFER_SIZE 100 // Default size for price buffers
 #define DEFAULT_DEBUG_INTERVAL 300 // Default debug interval (5 minutes)
+#define ERR_OBJECT_DOES_NOT_EXIST 4202 // MQL5 error code for non-existent object
 
 //+------------------------------------------------------------------+
 //| Structure Definitions                                              |
@@ -103,6 +104,48 @@ struct STouchQuality {
 class CV2EABreakouts
 {
 private:
+    //--- Safe Array Resize Template Function
+    template<typename T>
+    bool SafeResizeArray(T &arr[], int newSize, const string context)
+    {
+        if(!ArrayResize(arr, newSize))
+        {
+            Print("❌ [", context, "] Error: Failed to resize array to ", newSize, " elements.");
+            return false;
+        }
+        return true;
+    }
+
+    //--- QuickSort implementation for key levels
+    void QuickSortLevels(SKeyLevel &arr[], int left, int right)
+    {
+        if(left >= right) return;
+        
+        int i = left, j = right;
+        SKeyLevel pivot = arr[(left + right) / 2];
+        
+        while(i <= j)
+        {
+            while(arr[i].strength > pivot.strength) i++;
+            while(arr[j].strength < pivot.strength) j--;
+            
+            if(i <= j)
+            {
+                if(i != j)
+                {
+                    SKeyLevel temp = arr[i];
+                    arr[i] = arr[j];
+                    arr[j] = temp;
+                }
+                i++;
+                j--;
+            }
+        }
+        
+        if(left < j) QuickSortLevels(arr, left, j);
+        if(i < right) QuickSortLevels(arr, i, right);
+    }
+
     //--- Key Level Parameters
     int           m_lookbackPeriod;    // Bars to look back for key levels
     double        m_minStrength;       // Minimum strength threshold for key levels
@@ -175,16 +218,41 @@ private:
 public:
     //--- Constructor and destructor
     CV2EABreakouts(void) : m_initialized(false),
-                           m_lookbackPeriod(0),     // Will be set based on timeframe
+                           m_lookbackPeriod(0),     
                            m_minStrength(0.55),
-                           m_touchZone(0),          // Will be set based on timeframe
+                           m_touchZone(0),          
                            m_minTouches(2),
                            m_keyLevelCount(0),
                            m_lastKeyLevelUpdate(0),
                            m_showDebugPrints(false),
-                           m_maxBounceDelay(8)  // Default max bounce delay
+                           m_maxBounceDelay(8)  
     {
-        ArrayResize(m_currentKeyLevels, DEFAULT_BUFFER_SIZE);
+        // Initialize each array with robust error checking
+        if(!SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_currentKeyLevels"))
+        {
+            Print("❌ [CV2EABreakouts::Constructor] Initialization failed for m_currentKeyLevels");
+            return;
+        }
+        
+        if(!SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_chartLines"))
+        {
+            Print("❌ [CV2EABreakouts::Constructor] Initialization failed for m_chartLines");
+            return;
+        }
+        
+        if(!SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_recentBreaks") ||
+           !SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_recentBreakTimes"))
+        {
+            Print("❌ [CV2EABreakouts::Constructor] Initialization failed for recent breaks arrays");
+            return;
+        }
+        
+        if(!SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_lastAlerts"))
+        {
+            Print("❌ [CV2EABreakouts::Constructor] Initialization failed for m_lastAlerts");
+            return;
+        }
+        
         m_state.Reset();
     }
     
@@ -198,16 +266,30 @@ public:
     }
     
     //--- Initialization
-    bool Init(int lookbackPeriod, double minStrength, double touchZone, 
-              int minTouches, bool showDebugPrints)
+    bool Init(int lookbackPeriod, double minStrength, double touchZone, int minTouches, bool showDebugPrints)
     {
-        // Adjust lookback period based on timeframe
+        // Validate inputs
+        if(minStrength <= 0.0 || minStrength > 1.0)
+        {
+            Print("❌ [Init] Invalid minStrength (", minStrength, "). Resetting to default 0.55.");
+            minStrength = 0.55;
+        }
+        if(minTouches < 1)
+        {
+            Print("❌ [Init] Invalid minTouches (", minTouches, "). Resetting to minimum value 2.");
+            minTouches = 2;
+        }
+        
+        m_minStrength = minStrength;
+        m_minTouches = minTouches;
+        m_showDebugPrints = showDebugPrints;
+        
         ENUM_TIMEFRAMES tf = Period();
         int periodMinutes = PeriodSeconds(tf) / 60;
         
-        // Set default lookback to cover approximately 5 days of data
         if(lookbackPeriod == 0)
         {
+            // Set default lookback period based on timeframe
             switch(tf)
             {
                 case PERIOD_MN1: m_lookbackPeriod = 36;   break;  // 3 years of monthly data
@@ -251,41 +333,52 @@ public:
             m_touchZone = touchZone;
         }
         
-        m_minStrength = minStrength;
-        m_minTouches = minTouches;
-        m_showDebugPrints = showDebugPrints;
+        // Reinitialize arrays with robust error checks
+        if(!SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_currentKeyLevels"))
+        {
+            Print("❌ [CV2EABreakouts::Init] Failed to resize key levels array");
+            return false;
+        }
+        
+        if(!SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_chartLines"))
+        {
+            Print("❌ [CV2EABreakouts::Init] Failed to resize chart lines array");
+            return false;
+        }
+        
+        if(!SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_recentBreaks") ||
+           !SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_recentBreakTimes"))
+        {
+            Print("❌ [CV2EABreakouts::Init] Failed to resize recent breaks arrays");
+            return false;
+        }
+        
+        if(!SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_lastAlerts"))
+        {
+            Print("❌ [CV2EABreakouts::Init] Failed to resize last alerts array");
+            return false;
+        }
+        
+        m_keyLevelCount = 0;
+        m_recentBreakCount = 0;
+        m_state.Reset();
+        m_lastChartUpdate = 0;
+        
+        // Validate symbol point value with error handling
+        double symbolPoint = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+        if(symbolPoint <= 0)
+        {
+            Print("❌ [Init] SymbolInfoDouble failed, checking _Point...");
+            symbolPoint = _Point;
+            if(symbolPoint <= 0)
+            {
+                Print("❌ [Init] All point value retrievals failed. Using fallback value.");
+                symbolPoint = 0.0001;
+            }
+        }
         
         m_initialized = true;
-        
-        // Enhanced debug information for timeframe verification
-        string timeframeInfo = StringFormat(
-            "\n=== TIMEFRAME CONFIGURATION DETAILS ===\n" +
-            "Timeframe: %s\n" +
-            "Period Minutes: %d\n" +
-            "Bars per Day: %d\n" +
-            "Lookback Period: %d bars (%.1f days)\n" +
-            "Touch Zone: %.5f (%d pips)\n" +
-            "Touch Zone Range in Points: %.1f to %.1f\n" +
-            "Min Strength Threshold: %.2f\n" +
-            "Min Touches Required: %d\n" +
-            "Current Symbol Point: %.5f\n" +
-            "=== END CONFIGURATION ===",
-            EnumToString(tf),
-            periodMinutes,
-            1440 / periodMinutes,
-            m_lookbackPeriod,
-            (double)m_lookbackPeriod * periodMinutes / 1440,
-            m_touchZone,
-            (int)(m_touchZone * 10000),
-            m_touchZone / _Point,
-            m_touchZone * 3 / _Point,  // Max range for touch validation
-            m_minStrength,
-            m_minTouches,
-            _Point
-        );
-        
-        Print(timeframeInfo);
-        
+        Print("✅ [CV2EABreakouts::Init] Configuration complete for ", _Symbol);
         return true;
     }
     
@@ -341,7 +434,8 @@ public:
         // Step 3: Update and print system health report (hourly)
         PrintSystemHealthReport();
         
-        // Step 4: Update chart lines
+        // Step 4: Update chart lines - Force update on each call
+        m_lastChartUpdate = 0; // Reset last update time to force update
         UpdateChartLines();
         
         // Future steps will be added here:
@@ -1337,7 +1431,6 @@ private:
     
     void RemoveWeakestLevels(int maxPerType)
     {
-        // Create temporary arrays for sorting
         SKeyLevel resistanceLevels[];
         SKeyLevel supportLevels[];
         int resistanceCount = 0;
@@ -1348,62 +1441,54 @@ private:
         {
             if(m_currentKeyLevels[i].isResistance)
             {
-                ArrayResize(resistanceLevels, resistanceCount + 1);
+                if(!SafeResizeArray(resistanceLevels, resistanceCount + 1, "CV2EABreakouts::RemoveWeakestLevels - resistanceLevels"))
+                {
+                    Print("❌ [RemoveWeakestLevels] Failed to resize resistance levels array");
+                    return;
+                }
                 resistanceLevels[resistanceCount++] = m_currentKeyLevels[i];
             }
             else
             {
-                ArrayResize(supportLevels, supportCount + 1);
+                if(!SafeResizeArray(supportLevels, supportCount + 1, "CV2EABreakouts::RemoveWeakestLevels - supportLevels"))
+                {
+                    Print("❌ [RemoveWeakestLevels] Failed to resize support levels array");
+                    return;
+                }
                 supportLevels[supportCount++] = m_currentKeyLevels[i];
             }
         }
         
-        // Sort by strength (bubble sort is fine for small arrays)
-        for(int i = 0; i < resistanceCount - 1; i++)
-        {
-            for(int j = 0; j < resistanceCount - i - 1; j++)
-            {
-                if(resistanceLevels[j].strength < resistanceLevels[j + 1].strength)
-                {
-                    SKeyLevel temp = resistanceLevels[j];
-                    resistanceLevels[j] = resistanceLevels[j + 1];
-                    resistanceLevels[j + 1] = temp;
-                }
-            }
-        }
+        // Sort by strength (descending order)
+        if(resistanceCount > 1)
+            QuickSortLevels(resistanceLevels, 0, resistanceCount - 1);
+        if(supportCount > 1)
+            QuickSortLevels(supportLevels, 0, supportCount - 1);
         
-        for(int i = 0; i < supportCount - 1; i++)
-        {
-            for(int j = 0; j < supportCount - i - 1; j++)
-            {
-                if(supportLevels[j].strength < supportLevels[j + 1].strength)
-                {
-                    SKeyLevel temp = supportLevels[j];
-                    supportLevels[j] = supportLevels[j + 1];
-                    supportLevels[j + 1] = temp;
-                }
-            }
-        }
-        
-        // Keep only the strongest levels
         m_keyLevelCount = 0;
-        for(int i = 0; i < MathMin(maxPerType, resistanceCount); i++)
+        
+        // Resize arrays to keep only strongest levels
+        if(!SafeResizeArray(resistanceLevels, MathMin(maxPerType, resistanceCount), "CV2EABreakouts::RemoveWeakestLevels - resistanceLevels"))
         {
-            m_currentKeyLevels[m_keyLevelCount++] = resistanceLevels[i];
-        }
-        for(int i = 0; i < MathMin(maxPerType, supportCount); i++)
-        {
-            m_currentKeyLevels[m_keyLevelCount++] = supportLevels[i];
+            Print("❌ [RemoveWeakestLevels] Failed to resize resistance levels array to final size");
+            return;
         }
         
-        if(m_showDebugPrints)
+        if(!SafeResizeArray(supportLevels, MathMin(maxPerType, supportCount), "CV2EABreakouts::RemoveWeakestLevels - supportLevels"))
         {
-            Print(StringFormat(
-                "🧹 Cleaned up levels. Keeping %d strongest resistance and %d strongest support levels",
-                MathMin(maxPerType, resistanceCount),
-                MathMin(maxPerType, supportCount)
-            ));
+            Print("❌ [RemoveWeakestLevels] Failed to resize support levels array to final size");
+            return;
         }
+        
+        // Copy strongest levels back to main array
+        for(int i = 0; i < MathMin(maxPerType, resistanceCount); i++)
+            m_currentKeyLevels[m_keyLevelCount++] = resistanceLevels[i];
+        for(int i = 0; i < MathMin(maxPerType, supportCount); i++)
+            m_currentKeyLevels[m_keyLevelCount++] = supportLevels[i];
+        
+        Print("🧹 [CV2EABreakouts::RemoveWeakestLevels] Cleaned up levels. Kept ",
+              IntegerToString(MathMin(maxPerType, resistanceCount)), " resistance and ",
+              IntegerToString(MathMin(maxPerType, supportCount)), " support levels.");
     }
     
     //--- Debug print method
@@ -1619,14 +1704,35 @@ private:
         datetime currentTime = TimeCurrent();
         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
         
-        // Update if an hour has passed or if it's the first update
+        // Always update on timeframe change
+        static ENUM_TIMEFRAMES lastTimeframe = PERIOD_CURRENT;
+        ENUM_TIMEFRAMES currentTimeframe = Period();
+        bool timeframeChanged = (lastTimeframe != currentTimeframe);
+        
+        // Update if conditions are met
         bool shouldUpdate = (m_lastChartUpdate == 0) || 
-                           (currentTime - m_lastChartUpdate >= 3600) ||
-                           (m_keyLevelCount != ArraySize(m_chartLines));
+                          timeframeChanged ||
+                          (currentTime - m_lastChartUpdate >= 3600) ||
+                          (m_keyLevelCount != ArraySize(m_chartLines));
                 
         if(!shouldUpdate)
             return;
-                
+        
+        lastTimeframe = currentTimeframe;
+        
+        // Delete all existing lines first on timeframe change
+        if(timeframeChanged)
+        {
+            DebugPrint(StringFormat("Timeframe changed from %s to %s - Clearing all lines", 
+                EnumToString(lastTimeframe), EnumToString(currentTimeframe)));
+            
+            // Delete all existing chart objects with our prefix
+            ObjectsDeleteAll(0, "KL_");
+            ArrayFree(m_chartLines);
+            ArrayResize(m_chartLines, 0); // Reset array size to 0 instead of NULL
+            m_lastChartUpdate = 0;
+        }
+        
         // Clear old lines
         ClearInactiveChartLines();
         
@@ -1634,12 +1740,16 @@ private:
         for(int i = 0; i < ArraySize(m_chartLines); i++)
             m_chartLines[i].isActive = false;
         
+        // Debug print for line updates
+        DebugPrint(StringFormat("Updating chart lines. Key level count: %d", m_keyLevelCount));
+        
         // Update lines for current key levels
         for(int i = 0; i < m_keyLevelCount; i++)
         {
-            string lineName = StringFormat("KL_%s_%.5f", 
+            string lineName = StringFormat("KL_%s_%.5f_%s", 
                 m_currentKeyLevels[i].isResistance ? "R" : "S",
-                m_currentKeyLevels[i].price);
+                m_currentKeyLevels[i].price,
+                EnumToString(currentTimeframe));  // Add timeframe to line name
                     
             // First determine if this is above or below current price
             bool isAbovePrice = m_currentKeyLevels[i].price > currentPrice;
@@ -1693,13 +1803,17 @@ private:
                     found = true;
                     
                     // Update line properties
-                    ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
-                    ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle);
-                    ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth);
+                    if(!ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor))
+                        DebugPrint(StringFormat("Failed to update color for line %s", lineName));
+                    if(!ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle))
+                        DebugPrint(StringFormat("Failed to update style for line %s", lineName));
+                    if(!ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth))
+                        DebugPrint(StringFormat("Failed to update width for line %s", lineName));
                     
                     // Update tooltip with more information
-                    string tooltip = StringFormat("%s Level\nStrength: %.2f\nTouches: %d\nDistance: %d pips", 
+                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f\nTouches: %d\nDistance: %d pips", 
                         isAbovePrice ? "Resistance" : "Support",
+                        EnumToString(currentTimeframe),
                         m_currentKeyLevels[i].strength,
                         m_currentKeyLevels[i].touchCount,
                         (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point));
@@ -1712,7 +1826,12 @@ private:
             if(!found)
             {
                 int size = ArraySize(m_chartLines);
-                ArrayResize(m_chartLines, size + 1);
+                if(!SafeResizeArray(m_chartLines, size + 1, "CV2EABreakouts::UpdateChartLines - m_chartLines"))
+                {
+                    DebugPrint("Failed to resize chart lines array");
+                    continue;
+                }
+                
                 m_chartLines[size].name = lineName;
                 m_chartLines[size].price = m_currentKeyLevels[i].price;
                 m_chartLines[size].lastUpdate = currentTime;
@@ -1727,61 +1846,107 @@ private:
                     ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth);
                     ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
                     ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
+                    ObjectSetInteger(0, lineName, OBJPROP_HIDDEN, false);
+                    ObjectSetInteger(0, lineName, OBJPROP_SELECTED, false);
+                    ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, true);
+                    ObjectSetInteger(0, lineName, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS); // Make visible on all timeframes
                     
                     // Enhanced tooltip with more information
-                    string tooltip = StringFormat("%s Level\nStrength: %.2f\nTouches: %d\nDistance: %d pips", 
+                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f\nTouches: %d\nDistance: %d pips", 
                         isAbovePrice ? "Resistance" : "Support",
+                        EnumToString(currentTimeframe),
                         m_currentKeyLevels[i].strength,
                         m_currentKeyLevels[i].touchCount,
                         (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point));
                     ObjectSetString(0, lineName, OBJPROP_TOOLTIP, tooltip);
+                    
+                    DebugPrint(StringFormat("Created new line %s at %.5f", lineName, m_currentKeyLevels[i].price));
                 }
                 else
                 {
-                    DebugPrint(StringFormat("❌ Failed to create line %s", lineName));
+                    int error = GetLastError();
+                    DebugPrint(StringFormat("❌ Failed to create line %s. Error: %d", lineName, error));
                 }
             }
         }
         
         m_lastChartUpdate = currentTime;
         ChartRedraw(0);  // Force chart redraw
+        DebugPrint("Chart lines updated and redrawn");
     }
     
     void ClearInactiveChartLines()
     {
-        // First pass: delete objects for inactive lines
-        for(int i = 0; i < ArraySize(m_chartLines); i++)
+        int currentSize = ArraySize(m_chartLines);
+        if(currentSize == 0)
+            return;
+        
+        // Delete inactive chart objects (log errors directly)
+        for(int i = 0; i < currentSize; i++)
         {
+            if(m_chartLines[i].name == NULL || m_chartLines[i].name == "")
+                continue;
+                
             if(!m_chartLines[i].isActive)
             {
                 if(!ObjectDelete(0, m_chartLines[i].name))
                 {
-                    DebugPrint(StringFormat("❌ Failed to delete line %s", m_chartLines[i].name));
+                    int error = GetLastError();
+                    if(error != ERR_OBJECT_DOES_NOT_EXIST)
+                        Print("❌ [ClearInactiveChartLines] Failed to delete line ", m_chartLines[i].name, " Error: ", error);
                 }
             }
         }
         
-        // Second pass: remove inactive lines from array
-        int newSize = 0;
+        // Count active lines
+        int activeCount = 0;
+        for(int i = 0; i < currentSize; i++)
+        {
+            if(m_chartLines[i].isActive && m_chartLines[i].name != NULL && m_chartLines[i].name != "")
+                activeCount++;
+        }
+        
+        // If no active lines, free array and return
+        if(activeCount == 0)
+        {
+            ArrayFree(m_chartLines);
+            return;
+        }
+        
+        // Create temporary array for active lines
         SChartLine tempLines[];
-        ArrayResize(tempLines, ArraySize(m_chartLines));
+        if(!SafeResizeArray(tempLines, activeCount, "CV2EABreakouts::ClearInactiveChartLines - tempLines"))
+        {
+            Print("❌ [ClearInactiveChartLines] Failed to resize temporary lines array");
+            return;
+        }
         
         // Copy active lines to temporary array
-        for(int i = 0; i < ArraySize(m_chartLines); i++)
+        int newIndex = 0;
+        for(int i = 0; i < currentSize; i++)
         {
-            if(m_chartLines[i].isActive)
+            if(m_chartLines[i].isActive && m_chartLines[i].name != NULL && m_chartLines[i].name != "")
             {
-                tempLines[newSize] = m_chartLines[i];
-                newSize++;
+                if(newIndex < activeCount)
+                {
+                    tempLines[newIndex] = m_chartLines[i];
+                    newIndex++;
+                }
             }
         }
         
-        // Resize and copy back
-        ArrayResize(tempLines, newSize);
-        ArrayResize(m_chartLines, newSize);
-        for(int i = 0; i < newSize; i++)
+        // Free original array and resize to new size
+        ArrayFree(m_chartLines);
+        if(!SafeResizeArray(m_chartLines, activeCount, "CV2EABreakouts::ClearInactiveChartLines - m_chartLines"))
         {
-            m_chartLines[i] = tempLines[i];
+            Print("❌ [ClearInactiveChartLines] Failed to resize chart lines array to final size");
+            return;
         }
+        
+        // Copy back from temporary array
+        for(int i = 0; i < activeCount; i++)
+            m_chartLines[i] = tempLines[i];
+        
+        ChartRedraw(0);
     }
 }; 
