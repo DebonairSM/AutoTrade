@@ -1,0 +1,121 @@
+[General]
+Language = MQL5
+FileExtensions = .mq5;.mqh
+
+[Rules]
+; -- Class Definitions --
+ClassDefinition       = ^\s*(?:class|struct)\s+([A-Za-z_]\w*)
+ClassInNamespace      = ^\s*namespace\s+([A-Za-z_]\w*)\s*\{
+
+; -- Function Definitions --
+FunctionDefinition    = ^\s*(?:(?:virtual|static|inline)\s+)*(?:[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*\s+)?[A-Za-z_]\w*\s*\([^)]*\)\s*(?:const)?\s*(?:;|\{)
+
+; -- MQL5 Special and Event Functions --
+OnInitFunction        = ^\s*int\s+OnInit\s*\([^)]*\)
+OnTickFunction        = ^\s*void\s+OnTick\s*\([^)]*\)
+OnDeinitFunction      = ^\s*void\s+OnDeinit\s*\([^)]*\)
+OnTesterFunction      = ^\s*int\s+OnTester\s*\([^)]*\)
+OnChartEventFunction  = ^\s*void\s+OnChartEvent\s*\([^)]*\)
+
+; -- Constructors and Destructors --
+ConstructorDefinition = ^\s*([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:;|\{)
+DestructorDefinition  = ^\s*~([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:;|\{)
+
+; -- Struct & Enum Definitions --
+StructDefinition      = ^\s*struct\s+([A-Za-z_]\w*)
+EnumDefinition        = ^\s*enum\s+([A-Za-z_]\w*)
+
+; -- Input Variables --
+InputDefinition       = ^\s*input\s+([A-Za-z_]\w*)\s+([A-Za-z_]\w*)(?:\s*=\s*[^;]+)?;
+
+; -- Property Definitions --
+PropertyDefinition    = ^\s*#property\s+(\w+)
+
+; -- Preprocessor Directives --
+PreprocessorDirective = ^\s*#\s*\w+
+IncludeDirective      = ^\s*#include\s*[<"]([^>"]+)[>"]
+DefineDirective       = ^\s*#define\s+([A-Za-z_]\w*)
+
+; -- Comments --
+LineComment           = //
+MultiLineCommentStart = /\*
+MultiLineCommentEnd   = \*/
+
+; -- Block Delimiters --
+BlockStart            = \{
+BlockEnd              = \}
+
+; -- MQL5 Specific Patterns --
+IndicatorBuffer       = ^\s*double\s+([A-Za-z_]\w*)\[\];
+SetIndexBuffer        = ^\s*SetIndexBuffer\s*\(\s*\d+\s*,\s*([A-Za-z_]\w*)
+
+; -- Region Markers --
+RegionStart           = ^\s*#pragma\s+region\b
+RegionEnd             = ^\s*#pragma\s+endregion\b
+
+[Navigation]
+JumpToClassStart      = ClassDefinition
+JumpToFunctionStart   = FunctionDefinition
+JumpToOnInit          = OnInitFunction
+JumpToOnTick          = OnTickFunction
+JumpToOnDeinit        = OnDeinitFunction
+JumpToOnTester        = OnTesterFunction
+JumpToChartEvent      = OnChartEventFunction
+JumpToConstructor     = ConstructorDefinition
+JumpToDestructor      = DestructorDefinition
+JumpToStruct          = StructDefinition
+JumpToEnum            = EnumDefinition
+JumpToInput           = InputDefinition
+JumpToProperty        = PropertyDefinition
+JumpToBuffer          = IndicatorBuffer
+JumpToRegionStart     = RegionStart
+
+[Formatting]
+IndentSize           = 4
+TabSize              = 4
+UseSpaces            = true
+MaxLineLength        = 120
+BraceStyle           = Allman
+
+[Documentation]
+RequireClassDocs     = true
+RequireFunctionDocs  = true
+DocStyle            = Doxygen
+
+[Naming]
+ClassPrefix          = C
+StructPrefix         = S
+EnumPrefix           = E
+InterfacePrefix      = I
+ConstantPrefix       = k
+GlobalPrefix         = g_
+MemberPrefix         = m_
+ParameterPrefix      = 
+
+[CodeGeneration]
+GenerateGettersSetters = true
+GenerateConstructors   = true
+GenerateDestructors    = true
+GenerateEventHandlers  = true
+
+[ErrorChecking]
+CheckNullPointers    = true
+CheckArrayBounds     = true
+CheckDivisionByZero  = true
+CheckMemoryLeaks     = true
+
+[Optimization]
+InlineSmallFunctions = true
+UnrollSmallLoops     = true
+OptimizeForSpeed     = true
+
+[Testing]
+GenerateUnitTests    = true
+TestDataDirectory    = tests
+MockObjectPrefix     = Mock_
+
+[MetaTrader]
+DefaultTimeframe     = PERIOD_H1
+DefaultSymbol        = EURUSD
+BacktestPeriod       = 6
+OptimizationCriteria = 0
