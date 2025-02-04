@@ -7,6 +7,7 @@
 #property version   "1.01"
 
 #include <Trade\Trade.mqh>
+#include <VErrorDesc.mqh>  // Add this include for error descriptions
 
 //+------------------------------------------------------------------+
 //| Constants                                                          |
@@ -26,6 +27,8 @@ struct SKeyLevel
     datetime  firstTouch;      // Time of first touch
     datetime  lastTouch;       // Time of last touch
     double    strength;        // Relative strength of the level
+    bool      volumeConfirmed; // Whether this level is confirmed by significant volume
+    double    volumeRatio;     // Ratio of level volume to average volume
 };
 
 struct SStrategyState
@@ -87,6 +90,7 @@ struct SChartLine
     datetime lastUpdate; // Last update time
     color lineColor;   // Line color
     bool isActive;     // Whether line is currently shown
+    string labelName;   // Name of associated text label
 };
 
 struct STouchQuality {
@@ -536,16 +540,18 @@ public:
         if(!m_initialized)
             return false;
             
-        // Copy price data
+        // Copy price and volume data
         double highPrices[];
         double lowPrices[];
         double closePrices[];
         datetime times[];
+        long volumes[];
         
         ArraySetAsSeries(highPrices, true);
         ArraySetAsSeries(lowPrices, true);
         ArraySetAsSeries(closePrices, true);
         ArraySetAsSeries(times, true);
+        ArraySetAsSeries(volumes, true);
         
         // Get available bars for the current timeframe
         long availableBars = SeriesInfoInteger(_Symbol, Period(), SERIES_BARS_COUNT);
@@ -573,9 +579,10 @@ public:
         if(CopyHigh(_Symbol, Period(), 0, (int)barsToUse, highPrices) <= 0 ||
            CopyLow(_Symbol, Period(), 0, (int)barsToUse, lowPrices) <= 0 ||
            CopyClose(_Symbol, Period(), 0, (int)barsToUse, closePrices) <= 0 ||
-           CopyTime(_Symbol, Period(), 0, (int)barsToUse, times) <= 0)
+           CopyTime(_Symbol, Period(), 0, (int)barsToUse, times) <= 0 ||
+           CopyTickVolume(_Symbol, Period(), 0, (int)barsToUse, volumes) <= 0)
         {
-            DebugPrint(StringFormat("❌ Failed to copy price data. Available bars: %d, Requested: %d, Error: %d", 
+            DebugPrint(StringFormat("❌ Failed to copy price/volume data. Available bars: %d, Requested: %d, Error: %d", 
                 (int)availableBars, (int)barsToUse, GetLastError()));
             return false;
         }
@@ -627,6 +634,37 @@ public:
                     
                     newLevel.strength = CalculateLevelStrength(newLevel, quality);
                     
+                    // Add volume strength bonus if there's a volume spike
+                    double volumeBonus = GetVolumeStrengthBonus(volumes, i);
+                    if(volumeBonus > 0)
+                    {
+                        newLevel.strength = MathMin(newLevel.strength * (1.0 + volumeBonus), 0.98);
+                        newLevel.volumeConfirmed = true;
+                        newLevel.volumeRatio = (double)volumes[i] / GetAverageVolume(volumes, i, 20);
+                        
+                        if(m_showDebugPrints)
+                        {
+                            Print(StringFormat(
+                                "Volume bonus applied to %s level %.5f:\n" +
+                                "Original strength: %.4f\n" +
+                                "Volume bonus: +%.1f%%\n" +
+                                "Volume ratio: %.2fx\n" +
+                                "Final strength: %.4f",
+                                newLevel.isResistance ? "resistance" : "support",
+                                level,
+                                newLevel.strength / (1.0 + volumeBonus),
+                                volumeBonus * 100,
+                                newLevel.volumeRatio,
+                                newLevel.strength
+                            ));
+                        }
+                    }
+                    else
+                    {
+                        newLevel.volumeConfirmed = false;
+                        newLevel.volumeRatio = 1.0;
+                    }
+                    
                     if(newLevel.strength >= m_minStrength)
                     {
                         AddKeyLevel(newLevel);
@@ -669,6 +707,37 @@ public:
                     }
                     
                     newLevel.strength = CalculateLevelStrength(newLevel, quality);
+                    
+                    // Add volume strength bonus if there's a volume spike
+                    double volumeBonus = GetVolumeStrengthBonus(volumes, i);
+                    if(volumeBonus > 0)
+                    {
+                        newLevel.strength = MathMin(newLevel.strength * (1.0 + volumeBonus), 0.98);
+                        newLevel.volumeConfirmed = true;
+                        newLevel.volumeRatio = (double)volumes[i] / GetAverageVolume(volumes, i, 20);
+                        
+                        if(m_showDebugPrints)
+                        {
+                            Print(StringFormat(
+                                "Volume bonus applied to %s level %.5f:\n" +
+                                "Original strength: %.4f\n" +
+                                "Volume bonus: +%.1f%%\n" +
+                                "Volume ratio: %.2fx\n" +
+                                "Final strength: %.4f",
+                                newLevel.isResistance ? "resistance" : "support",
+                                level,
+                                newLevel.strength / (1.0 + volumeBonus),
+                                volumeBonus * 100,
+                                newLevel.volumeRatio,
+                                newLevel.strength
+                            ));
+                        }
+                    }
+                    else
+                    {
+                        newLevel.volumeConfirmed = false;
+                        newLevel.volumeRatio = 1.0;
+                    }
                     
                     if(newLevel.strength >= m_minStrength)
                     {
@@ -1762,31 +1831,31 @@ private:
             // Strong levels (>= 0.85)
             if(m_currentKeyLevels[i].strength >= 0.85) {
                 if(isAbovePrice) {
-                    lineColor = clrCrimson;      // Strong resistance = dark red
+                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrDarkRed : clrCrimson;      // Dark red for volume-confirmed
                 } else {
-                    lineColor = clrForestGreen;  // Strong support = dark green
+                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrDarkGreen : clrForestGreen;  // Dark green for volume-confirmed
                 }
-                lineStyle = STYLE_SOLID;
-                lineWidth = 2;
+                lineStyle = m_currentKeyLevels[i].volumeConfirmed ? STYLE_SOLID : STYLE_SOLID;
+                lineWidth = m_currentKeyLevels[i].volumeConfirmed ? 3 : 2;
             }
             // Medium levels (>= 0.70)
             else if(m_currentKeyLevels[i].strength >= 0.70) {
                 if(isAbovePrice) {
-                    lineColor = clrLightCoral;      // Medium resistance = lighter red
+                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrFireBrick : clrLightCoral;
                 } else {
-                    lineColor = clrMediumSeaGreen;  // Medium support = lighter green
+                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrSeaGreen : clrMediumSeaGreen;
                 }
-                lineStyle = STYLE_SOLID;
-                lineWidth = 1;
+                lineStyle = m_currentKeyLevels[i].volumeConfirmed ? STYLE_SOLID : STYLE_SOLID;
+                lineWidth = m_currentKeyLevels[i].volumeConfirmed ? 2 : 1;
             }
             // Weak levels (< 0.70)
             else {
                 if(isAbovePrice) {
-                    lineColor = clrPink;       // Weak resistance = very light red
+                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrIndianRed : clrPink;
                 } else {
-                    lineColor = clrPaleGreen;  // Weak support = very light green
+                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrMediumSpringGreen : clrPaleGreen;
                 }
-                lineStyle = STYLE_DOT;
+                lineStyle = m_currentKeyLevels[i].volumeConfirmed ? STYLE_SOLID : STYLE_DOT;
                 lineWidth = 1;
             }
             
@@ -1811,12 +1880,18 @@ private:
                         DebugPrint(StringFormat("Failed to update width for line %s", lineName));
                     
                     // Update tooltip with more information
-                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f\nTouches: %d\nDistance: %d pips", 
+                    string volumeInfo = m_currentKeyLevels[i].volumeConfirmed ? 
+                        StringFormat("\nVolume: %.1fx average", m_currentKeyLevels[i].volumeRatio) : 
+                        "\nNo significant volume";
+                        
+                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f%s\nTouches: %d\nDistance: %d pips%s", 
                         isAbovePrice ? "Resistance" : "Support",
                         EnumToString(currentTimeframe),
                         m_currentKeyLevels[i].strength,
+                        m_currentKeyLevels[i].volumeConfirmed ? " (Volume Confirmed)" : "",
                         m_currentKeyLevels[i].touchCount,
-                        (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point));
+                        (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point),
+                        volumeInfo);
                     ObjectSetString(0, lineName, OBJPROP_TOOLTIP, tooltip);
                     break;
                 }
@@ -1849,16 +1924,91 @@ private:
                     ObjectSetInteger(0, lineName, OBJPROP_HIDDEN, false);
                     ObjectSetInteger(0, lineName, OBJPROP_SELECTED, false);
                     ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, true);
-                    ObjectSetInteger(0, lineName, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS); // Make visible on all timeframes
+                    ObjectSetInteger(0, lineName, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
                     
-                    // Enhanced tooltip with more information
-                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f\nTouches: %d\nDistance: %d pips", 
+                    // Enhanced tooltip with volume information
+                    string volumeInfo = m_currentKeyLevels[i].volumeConfirmed ? 
+                        StringFormat("\nVolume: %.1fx average", m_currentKeyLevels[i].volumeRatio) : 
+                        "\nNo significant volume";
+                        
+                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f%s\nTouches: %d\nDistance: %d pips%s", 
                         isAbovePrice ? "Resistance" : "Support",
                         EnumToString(currentTimeframe),
                         m_currentKeyLevels[i].strength,
+                        m_currentKeyLevels[i].volumeConfirmed ? " (Volume Confirmed)" : "",
                         m_currentKeyLevels[i].touchCount,
-                        (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point));
+                        (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point),
+                        volumeInfo);
                     ObjectSetString(0, lineName, OBJPROP_TOOLTIP, tooltip);
+                    
+                    // Create text label for volume-confirmed levels
+                    if(m_currentKeyLevels[i].volumeConfirmed)
+                    {
+                        string labelName = StringFormat("KL_Label_%s_%.5f_%s", 
+                            m_currentKeyLevels[i].isResistance ? "R" : "S",
+                            m_currentKeyLevels[i].price,
+                            EnumToString(currentTimeframe));
+                        
+                        DebugPrint(StringFormat("🏷️ Attempting to create label: %s", labelName));
+                        
+                        // Get chart dimensions
+                        long chartWidth = 0, chartHeight = 0;
+                        if(!ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0, chartWidth) ||
+                           !ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0, chartHeight))
+                        {
+                            DebugPrint(StringFormat("❌ Failed to get chart dimensions. Error: %d", GetLastError()));
+                        }
+                        else
+                        {
+                            DebugPrint(StringFormat("📊 Chart dimensions: %dx%d pixels", chartWidth, chartHeight));
+                        }
+                        
+                        // Get first visible bar time
+                        datetime firstVisibleTime = 0;
+                        int firstVisibleBar = (int)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR);
+                        if(firstVisibleBar <= 0)
+                        {
+                            DebugPrint(StringFormat("❌ Failed to get first visible bar. Error: %d", GetLastError()));
+                            firstVisibleTime = TimeCurrent();
+                        }
+                        else
+                        {
+                            firstVisibleTime = iTime(_Symbol, Period(), firstVisibleBar);
+                            DebugPrint(StringFormat("📅 First visible bar: %d, Time: %s", 
+                                firstVisibleBar, TimeToString(firstVisibleTime)));
+                        }
+                        
+                        // Delete existing label if it exists
+                        ObjectDelete(0, labelName);
+                        
+                        // Create or update the text label
+                        if(ObjectCreate(0, labelName, OBJ_TEXT, 0, firstVisibleTime, m_currentKeyLevels[i].price))
+                        {
+                            string labelText = StringFormat("VOL %.1fx", m_currentKeyLevels[i].volumeRatio);
+                            
+                            ObjectSetString(0, labelName, OBJPROP_TEXT, labelText);
+                            ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
+                            ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
+                            ObjectSetInteger(0, labelName, OBJPROP_COLOR, lineColor);
+                            ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, ANCHOR_LEFT);
+                            ObjectSetInteger(0, labelName, OBJPROP_BACK, false);
+                            ObjectSetInteger(0, labelName, OBJPROP_SELECTABLE, false);
+                            ObjectSetInteger(0, labelName, OBJPROP_HIDDEN, false);
+                            ObjectSetInteger(0, labelName, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
+                            
+                            // Store label name for cleanup
+                            m_chartLines[size].labelName = labelName;
+                            
+                            DebugPrint(StringFormat("✅ Successfully created label %s at price %.5f with text '%s'", 
+                                labelName, m_currentKeyLevels[i].price, labelText));
+                        }
+                        else
+                        {
+                            int error = GetLastError();
+                            DebugPrint(StringFormat("❌ Failed to create label %s. Error: %d - %s", 
+                                labelName, error, ErrorDescription(error)));
+                        }
+                    }
                     
                     DebugPrint(StringFormat("Created new line %s at %.5f", lineName, m_currentKeyLevels[i].price));
                 }
@@ -1889,11 +2039,23 @@ private:
                 
             if(!m_chartLines[i].isActive)
             {
+                // Delete the line
                 if(!ObjectDelete(0, m_chartLines[i].name))
                 {
                     int error = GetLastError();
                     if(error != ERR_OBJECT_DOES_NOT_EXIST)
                         Print("❌ [ClearInactiveChartLines] Failed to delete line ", m_chartLines[i].name, " Error: ", error);
+                }
+                
+                // Delete associated label if it exists
+                if(m_chartLines[i].labelName != "" && m_chartLines[i].labelName != NULL)
+                {
+                    if(!ObjectDelete(0, m_chartLines[i].labelName))
+                    {
+                        int error = GetLastError();
+                        if(error != ERR_OBJECT_DOES_NOT_EXIST)
+                            Print("❌ [ClearInactiveChartLines] Failed to delete label ", m_chartLines[i].labelName, " Error: ", error);
+                    }
                 }
             }
         }
@@ -1948,5 +2110,77 @@ private:
             m_chartLines[i] = tempLines[i];
         
         ChartRedraw(0);
+    }
+
+    //--- Volume Detection Helper Methods
+    double GetAverageVolume(const long &volumes[], int startIndex, int period)
+    {
+        if(period <= 0 || startIndex < 0 || startIndex + period > ArraySize(volumes))
+            return 0;
+            
+        double sum = 0;
+        for(int i = startIndex; i < startIndex + period; i++)
+            sum += (double)volumes[i];
+            
+        return sum / period;
+    }
+    
+    bool IsVolumeSpike(const long &volumes[], int index, int period = 20, double thresholdMultiplier = 1.5)
+    {
+        if(index < 0 || period <= 0 || index >= ArraySize(volumes))
+            return false;
+            
+        double avgVolume = GetAverageVolume(volumes, index, period);
+        if(avgVolume <= 0)
+            return false;
+            
+        // Calculate standard deviation for dynamic thresholding
+        double sumSquares = 0;
+        for(int i = index; i < index + period; i++)
+        {
+            if(i >= ArraySize(volumes)) break;
+            double diff = (double)volumes[i] - avgVolume;
+            sumSquares += diff * diff;
+        }
+        double stdDev = MathSqrt(sumSquares / period);
+        
+        // Adjust threshold based on market volatility
+        double dynamicThreshold = avgVolume + (stdDev * thresholdMultiplier);
+        
+        return (double)volumes[index] > dynamicThreshold;
+    }
+    
+    double GetVolumeStrengthBonus(const long &volumes[], int index, int period = 20)
+    {
+        if(!IsVolumeSpike(volumes, index, period))
+            return 0.0;
+            
+        double avgVolume = GetAverageVolume(volumes, index, period);
+        if(avgVolume <= 0)
+            return 0.0;
+            
+        // Calculate volume ratio
+        double volumeRatio = (double)volumes[index] / avgVolume;
+        
+        // Scale bonus based on volume ratio (max 10% bonus)
+        double bonus = MathMin((volumeRatio - 1.0) * 0.05, 0.10);
+        
+        if(m_showDebugPrints)
+        {
+            Print(StringFormat(
+                "Volume Analysis at bar %d:\n" +
+                "Current Volume: %d\n" +
+                "Average Volume: %.2f\n" +
+                "Volume Ratio: %.2f\n" +
+                "Strength Bonus: %.2f%%",
+                index,
+                volumes[index],
+                avgVolume,
+                volumeRatio,
+                bonus * 100
+            ));
+        }
+        
+        return bonus;
     }
 }; 
