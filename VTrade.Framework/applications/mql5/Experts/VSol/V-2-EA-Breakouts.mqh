@@ -8,6 +8,7 @@
 
 #include <Trade\Trade.mqh>
 #include <VErrorDesc.mqh>  // Add this include for error descriptions
+#include "V-2-EA-MarketData.mqh"  // Add this include for market data functions
 
 //+------------------------------------------------------------------+
 //| Constants                                                          |
@@ -19,17 +20,7 @@
 //+------------------------------------------------------------------+
 //| Structure Definitions                                              |
 //+------------------------------------------------------------------+
-struct SKeyLevel
-{
-    double    price;           // The price level
-    int       touchCount;      // Number of times price touched this level
-    bool      isResistance;    // Whether this is resistance (true) or support (false)
-    datetime  firstTouch;      // Time of first touch
-    datetime  lastTouch;       // Time of last touch
-    double    strength;        // Relative strength of the level
-    bool      volumeConfirmed; // Whether this level is confirmed by significant volume
-    double    volumeRatio;     // Ratio of level volume to average volume
-};
+// Note: SKeyLevel is defined in V-2-EA-MarketData.mqh
 
 struct SStrategyState
 {
@@ -827,6 +818,42 @@ public:
         
         if(m_showDebugPrints)
             DebugPrint("🧹 Cleared all chart objects");
+    }
+
+    // Test-specific methods
+    bool TEST_GetKeyLevel(int index, SKeyLevel &level) const
+    {
+        if(index >= 0 && index < m_keyLevelCount)
+        {
+            level = m_currentKeyLevels[index];
+            return true;
+        }
+        return false;
+    }
+    
+    int TEST_GetKeyLevelCount() const
+    {
+        return m_keyLevelCount;
+    }
+    
+    double TEST_GetMinStrength() const
+    {
+        return m_minStrength;
+    }
+    
+    double TEST_GetTouchZone() const
+    {
+        return m_touchZone;
+    }
+    
+    int TEST_GetMinTouches() const
+    {
+        return m_minTouches;
+    }
+
+    bool TEST_IsUS500()  // Add this test-specific method
+    {
+        return IsUS500();
     }
 
 private:
@@ -2141,133 +2168,28 @@ private:
     //--- Volume Detection Helper Methods
     double GetAverageVolume(const long &volumes[], int startIndex, int period)
     {
-        if(period <= 0 || startIndex < 0 || startIndex + period > ArraySize(volumes))
-            return 0;
-            
-        double sum = 0;
-        for(int i = startIndex; i < startIndex + period; i++)
-            sum += (double)volumes[i];
-            
-        return sum / period;
+        return CV2EAMarketData::GetAverageVolume(volumes, startIndex, period);
     }
     
     bool IsVolumeSpike(const long &volumes[], int index, int period = 20, double thresholdMultiplier = 1.5)
     {
-        if(index < 0 || period <= 0 || index >= ArraySize(volumes))
-            return false;
-            
-        double avgVolume = GetAverageVolume(volumes, index, period);
-        if(avgVolume <= 0)
-            return false;
-            
-        // Calculate standard deviation for dynamic thresholding
-        double sumSquares = 0;
-        for(int i = index; i < index + period; i++)
-        {
-            if(i >= ArraySize(volumes)) break;
-            double diff = (double)volumes[i] - avgVolume;
-            sumSquares += diff * diff;
-        }
-        double stdDev = MathSqrt(sumSquares / period);
-        
-        // Adjust threshold based on market volatility
-        double dynamicThreshold = avgVolume + (stdDev * thresholdMultiplier);
-        
-        return (double)volumes[index] > dynamicThreshold;
+        return CV2EAMarketData::IsVolumeSpike(volumes, index, period, thresholdMultiplier);
     }
     
     double GetVolumeStrengthBonus(const long &volumes[], int index, int period = 20)
     {
-        if(!IsVolumeSpike(volumes, index, period))
-            return 0.0;
-            
-        double avgVolume = GetAverageVolume(volumes, index, period);
-        if(avgVolume <= 0)
-            return 0.0;
-            
-        // Calculate volume ratio
-        double volumeRatio = (double)volumes[index] / avgVolume;
-        
-        // Scale bonus based on volume ratio (max 10% bonus)
-        double bonus = MathMin((volumeRatio - 1.0) * 0.05, 0.10);
-        
-        if(m_showDebugPrints)
-        {
-            Print(StringFormat(
-                "Volume Analysis at bar %d:\n" +
-                "Current Volume: %d\n" +
-                "Average Volume: %.2f\n" +
-                "Volume Ratio: %.2f\n" +
-                "Strength Bonus: %.2f%%",
-                index,
-                volumes[index],
-                avgVolume,
-                volumeRatio,
-                bonus * 100
-            ));
-        }
-        
-        return bonus;
+        return CV2EAMarketData::GetVolumeStrengthBonus(volumes, index, period);
     }
 
     //--- Bounce validation
     bool ValidateBounce(const double price, const double level, const bool isResistance)
     {
-        // Get current timeframe's ATR for dynamic bounce size
-        double atr = iATR(_Symbol, PERIOD_CURRENT, 14);  // Removed extra parameter
-        
-        // Calculate minimum bounce size
-        double minBounceSize;
-        if(IsUS500())
-        {
-            ENUM_TIMEFRAMES tf = Period();
-            switch(tf)
-            {
-                case PERIOD_MN1: minBounceSize = 70.0; break;
-                case PERIOD_W1:  minBounceSize = 40.0; break;
-                case PERIOD_D1:  minBounceSize = 30.0; break;
-                case PERIOD_H4:  minBounceSize = 20.0; break;
-                case PERIOD_H1:  minBounceSize = 15.0; break;
-                case PERIOD_M30: minBounceSize = 10.0; break;
-                case PERIOD_M15: minBounceSize = 7.5;  break;
-                case PERIOD_M5:  minBounceSize = 5.0;  break;
-                case PERIOD_M1:  minBounceSize = 3.0;  break;
-                default:         minBounceSize = 7.5;  break;
-            }
-            
-            // For US500, also consider ATR
-            if(atr > 0)
-                minBounceSize = MathMax(minBounceSize, atr * 0.5);  // At least 50% of ATR
-        }
-        else
-        {
-            // For other symbols, use standard bounce size
-            minBounceSize = m_touchZone * 2;
-            if(atr > 0)
-                minBounceSize = MathMax(minBounceSize, atr * 0.3);  // At least 30% of ATR
-        }
-        
-        // Check if bounce meets minimum size requirement
-        double bounceSize = MathAbs(price - level);
-        bool isBounceValid = (bounceSize >= minBounceSize);
-        
-        if(m_showDebugPrints && isBounceValid)
-        {
-            Print(StringFormat(
-                "✓ Valid bounce detected | Size: %.5f | Required: %.5f | Type: %s",
-                bounceSize,
-                minBounceSize,
-                isResistance ? "Resistance" : "Support"
-            ));
-        }
-        
-        return isBounceValid;
+        return CV2EAMarketData::ValidateBounce(_Symbol, price, level, isResistance);
     }
 
     //--- Touch validation
     bool IsTouchValid(const double price, const double level, const double touchZone)
     {
-        double distance = MathAbs(price - level);
-        return distance <= touchZone;
+        return CV2EAMarketData::IsTouchValid(price, level, touchZone);
     }
 }; 

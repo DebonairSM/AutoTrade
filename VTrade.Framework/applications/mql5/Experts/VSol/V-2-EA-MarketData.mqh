@@ -27,7 +27,9 @@ struct SKeyLevel
     bool      isResistance;    // True for resistance, false for support
     datetime  firstTouch;      // Time of first touch
     datetime  lastTouch;       // Time of last touch
-    double    strength;        // Relative strength of the level (0.0-1.0)
+    double    strength;        // Relative strength of the level
+    bool      volumeConfirmed; // Whether this level is confirmed by significant volume
+    double    volumeRatio;     // Ratio of level volume to average volume
     STouch    touches[];      // Array of all touches at this level
 };
 
@@ -124,6 +126,139 @@ public:
     static bool CalculateATRBasedLevels(string symbol, bool isBullish, double basePrice,
                                       int atrPeriod, double slMultiplier, double tpMultiplier,
                                       double &outSL, double &outTP);
+
+    //--- Volume Analysis Helper Methods
+    static double GetAverageVolume(const long &volumes[], int startIndex, int period)
+    {
+        if(period <= 0 || startIndex < 0 || startIndex + period > ArraySize(volumes))
+            return 0;
+            
+        double sum = 0;
+        for(int i = startIndex; i < startIndex + period; i++)
+            sum += (double)volumes[i];
+            
+        return sum / period;
+    }
+    
+    static bool IsVolumeSpike(const long &volumes[], int index, int period = 20, double thresholdMultiplier = 1.5)
+    {
+        if(index < 0 || period <= 0 || index >= ArraySize(volumes))
+            return false;
+            
+        double avgVolume = GetAverageVolume(volumes, index, period);
+        if(avgVolume <= 0)
+            return false;
+            
+        // Calculate standard deviation for dynamic thresholding
+        double sumSquares = 0;
+        for(int i = index; i < index + period; i++)
+        {
+            if(i >= ArraySize(volumes)) break;
+            double diff = (double)volumes[i] - avgVolume;
+            sumSquares += diff * diff;
+        }
+        double stdDev = MathSqrt(sumSquares / period);
+        
+        // Adjust threshold based on market volatility
+        double dynamicThreshold = avgVolume + (stdDev * thresholdMultiplier);
+        
+        return (double)volumes[index] > dynamicThreshold;
+    }
+    
+    static double GetVolumeStrengthBonus(const long &volumes[], int index, int period = 20)
+    {
+        if(!IsVolumeSpike(volumes, index, period))
+            return 0.0;
+            
+        double avgVolume = GetAverageVolume(volumes, index, period);
+        if(avgVolume <= 0)
+            return 0.0;
+            
+        // Calculate volume ratio
+        double volumeRatio = (double)volumes[index] / avgVolume;
+        
+        // Scale bonus based on volume ratio (max 10% bonus)
+        double bonus = MathMin((volumeRatio - 1.0) * 0.05, 0.10);
+        
+        if(m_showDebugPrints)
+        {
+            Print(StringFormat(
+                "Volume Analysis at bar %d:\n" +
+                "Current Volume: %d\n" +
+                "Average Volume: %.2f\n" +
+                "Volume Ratio: %.2f\n" +
+                "Strength Bonus: %.2f%%",
+                index,
+                volumes[index],
+                avgVolume,
+                volumeRatio,
+                bonus * 100
+            ));
+        }
+        
+        return bonus;
+    }
+
+    //--- Price Analysis Helper Methods
+    static bool ValidateBounce(string symbol, double price, double level, bool isResistance)
+    {
+        // Get current timeframe's ATR for dynamic bounce size
+        double atr = GetATR(symbol, PERIOD_CURRENT, 14);
+        
+        // Calculate minimum bounce size
+        double minBounceSize;
+        if(StringFind(symbol, "US500") >= 0 || StringFind(symbol, "SPX") >= 0)
+        {
+            ENUM_TIMEFRAMES tf = Period();
+            switch(tf)
+            {
+                case PERIOD_MN1: minBounceSize = 70.0; break;
+                case PERIOD_W1:  minBounceSize = 40.0; break;
+                case PERIOD_D1:  minBounceSize = 30.0; break;
+                case PERIOD_H4:  minBounceSize = 20.0; break;
+                case PERIOD_H1:  minBounceSize = 15.0; break;
+                case PERIOD_M30: minBounceSize = 10.0; break;
+                case PERIOD_M15: minBounceSize = 7.5;  break;
+                case PERIOD_M5:  minBounceSize = 5.0;  break;
+                case PERIOD_M1:  minBounceSize = 3.0;  break;
+                default:         minBounceSize = 7.5;  break;
+            }
+            
+            // For US500, also consider ATR
+            if(atr > 0)
+                minBounceSize = MathMax(minBounceSize, atr * 0.5);  // At least 50% of ATR
+        }
+        else
+        {
+            // For other symbols, use standard bounce size
+            double touchZone = GetTouchZoneSize();
+            minBounceSize = touchZone * 2;
+            if(atr > 0)
+                minBounceSize = MathMax(minBounceSize, atr * 0.3);  // At least 30% of ATR
+        }
+        
+        // Check if bounce meets minimum size requirement
+        double bounceSize = MathAbs(price - level);
+        bool isBounceValid = (bounceSize >= minBounceSize);
+        
+        if(m_showDebugPrints)
+        {
+            Print(StringFormat(
+                "✓ Valid bounce detected | Size: %.5f | Required: %.5f | Type: %s",
+                bounceSize,
+                minBounceSize,
+                isResistance ? "Resistance" : "Support"
+            ));
+        }
+        
+        return isBounceValid;
+    }
+
+    static bool IsTouchValid(double price, double level, double touchZone)
+    {
+        double distance = MathAbs(price - level);
+        return distance <= touchZone;
+    }
 };
 
 //+------------------------------------------------------------------+
