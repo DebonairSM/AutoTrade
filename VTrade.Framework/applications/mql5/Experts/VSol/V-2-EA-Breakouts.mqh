@@ -108,6 +108,12 @@ struct STouchQuality {
 class CV2EABreakouts
 {
 private:
+    //--- US500 Detection
+    bool IsUS500()
+    {
+        return (StringFind(_Symbol, "US500") >= 0 || StringFind(_Symbol, "SPX") >= 0);
+    }
+
     //--- Safe Array Resize Template Function
     template<typename T>
     bool SafeResizeArray(T &arr[], int newSize, const string context)
@@ -282,6 +288,26 @@ public:
         {
             Print("❌ [Init] Invalid minTouches (", minTouches, "). Resetting to minimum value 2.");
             minTouches = 2;
+        }
+        
+        // Adjust touch zone for US500
+        if(IsUS500())
+        {
+            ENUM_TIMEFRAMES tf = Period();
+            switch(tf)
+            {
+                case PERIOD_MN1: touchZone = 50.0; break;
+                case PERIOD_W1:  touchZone = 30.0; break;
+                case PERIOD_D1:  touchZone = 20.0; break;
+                case PERIOD_H4:  touchZone = 15.0; break;
+                case PERIOD_H1:  touchZone = 10.0; break;
+                case PERIOD_M30: touchZone = 7.5;  break;
+                case PERIOD_M15: touchZone = 5.0;  break;
+                case PERIOD_M5:  touchZone = 3.0;  break;
+                case PERIOD_M1:  touchZone = 2.0;  break;
+                default:         touchZone = 5.0;  break;
+            }
+            Print("ℹ️ [Init] Adjusted touch zone for US500: ", touchZone);
         }
         
         m_minStrength = minStrength;
@@ -2182,5 +2208,66 @@ private:
         }
         
         return bonus;
+    }
+
+    //--- Bounce validation
+    bool ValidateBounce(const double price, const double level, const bool isResistance)
+    {
+        // Get current timeframe's ATR for dynamic bounce size
+        double atr = iATR(_Symbol, PERIOD_CURRENT, 14);  // Removed extra parameter
+        
+        // Calculate minimum bounce size
+        double minBounceSize;
+        if(IsUS500())
+        {
+            ENUM_TIMEFRAMES tf = Period();
+            switch(tf)
+            {
+                case PERIOD_MN1: minBounceSize = 70.0; break;
+                case PERIOD_W1:  minBounceSize = 40.0; break;
+                case PERIOD_D1:  minBounceSize = 30.0; break;
+                case PERIOD_H4:  minBounceSize = 20.0; break;
+                case PERIOD_H1:  minBounceSize = 15.0; break;
+                case PERIOD_M30: minBounceSize = 10.0; break;
+                case PERIOD_M15: minBounceSize = 7.5;  break;
+                case PERIOD_M5:  minBounceSize = 5.0;  break;
+                case PERIOD_M1:  minBounceSize = 3.0;  break;
+                default:         minBounceSize = 7.5;  break;
+            }
+            
+            // For US500, also consider ATR
+            if(atr > 0)
+                minBounceSize = MathMax(minBounceSize, atr * 0.5);  // At least 50% of ATR
+        }
+        else
+        {
+            // For other symbols, use standard bounce size
+            minBounceSize = m_touchZone * 2;
+            if(atr > 0)
+                minBounceSize = MathMax(minBounceSize, atr * 0.3);  // At least 30% of ATR
+        }
+        
+        // Check if bounce meets minimum size requirement
+        double bounceSize = MathAbs(price - level);
+        bool isBounceValid = (bounceSize >= minBounceSize);
+        
+        if(m_showDebugPrints && isBounceValid)
+        {
+            Print(StringFormat(
+                "✓ Valid bounce detected | Size: %.5f | Required: %.5f | Type: %s",
+                bounceSize,
+                minBounceSize,
+                isResistance ? "Resistance" : "Support"
+            ));
+        }
+        
+        return isBounceValid;
+    }
+
+    //--- Touch validation
+    bool IsTouchValid(const double price, const double level, const double touchZone)
+    {
+        double distance = MathAbs(price - level);
+        return distance <= touchZone;
     }
 }; 
