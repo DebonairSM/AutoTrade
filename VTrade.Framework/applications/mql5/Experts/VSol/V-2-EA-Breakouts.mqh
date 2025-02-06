@@ -2,8 +2,8 @@
 //|                                              V-2-EA-Breakouts.mqh |
 //|                                    Key Level Detection Implementation|
 //+------------------------------------------------------------------+
-#property copyright "Rommel Company"
-#property link      "Your Link"
+#property copyright "VSol Trading Systems"
+#property link      "https://vsol-systems.com"
 #property version   "1.01"
 
 #include <Trade\Trade.mqh>
@@ -96,7 +96,7 @@ struct STouchQuality {
 //+------------------------------------------------------------------+
 //| Key Level Detection Class                                          |
 //+------------------------------------------------------------------+
-class CV2EABreakouts
+class CV2EABreakouts : public CV2EAMarketDataBase
 {
 private:
     //--- US500 Detection
@@ -148,10 +148,7 @@ private:
     }
 
     //--- Key Level Parameters
-    int           m_lookbackPeriod;    // Bars to look back for key levels
-    double        m_minStrength;       // Minimum strength threshold for key levels
-    double        m_touchZone;         // Zone size for touch detection
-    int           m_minTouches;        // Minimum touches required
+    int           m_maxBounceDelay;  // Maximum bars to wait for bounce
     
     //--- Key Level State
     SKeyLevel     m_currentKeyLevels[]; // Array of current key levels
@@ -162,7 +159,6 @@ private:
     SStrategyState m_state;            // Current strategy state
     
     //--- Debug settings
-    bool            m_showDebugPrints; // Debug mode
     bool            m_initialized;      // Initialization state
     
     //--- Hourly statistics
@@ -214,18 +210,11 @@ private:
     SChartLine m_chartLines[];  // Array to track chart lines
     datetime m_lastChartUpdate; // Last chart update time
 
-    int m_maxBounceDelay;  // Maximum bars to wait for bounce
-
 public:
     //--- Constructor and destructor
     CV2EABreakouts(void) : m_initialized(false),
-                           m_lookbackPeriod(0),     
-                           m_minStrength(0.55),
-                           m_touchZone(0),          
-                           m_minTouches(2),
                            m_keyLevelCount(0),
                            m_lastKeyLevelUpdate(0),
-                           m_showDebugPrints(false),
                            m_maxBounceDelay(8)  
     {
         // Initialize each array with robust error checking
@@ -2172,30 +2161,28 @@ private:
     }
 
     //--- Volume Detection Helper Methods
-    double GetAverageVolume(const long &volumes[], int startIndex, int period)
+    double GetAverageVolume(const long &volumes[], int startIndex, int barsToAverage)
     {
-        return CV2EAMarketData::GetAverageVolume(volumes, startIndex, period);
+        return CV2EAMarketDataBase::GetAverageVolume(volumes, startIndex, barsToAverage);
     }
     
-    bool IsVolumeSpike(const long &volumes[], int index, int period = 20, double thresholdMultiplier = 1.5)
+    bool IsVolumeSpike(const long &volumes[], int index)
     {
-        return CV2EAMarketData::IsVolumeSpike(volumes, index, period, thresholdMultiplier);
+        return CV2EAMarketDataBase::IsVolumeSpike(volumes, index);
     }
     
-    double GetVolumeStrengthBonus(const long &volumes[], int index, int period = 20)
+    double GetVolumeStrengthBonus(const long &volumes[], int index)
     {
-        return CV2EAMarketData::GetVolumeStrengthBonus(volumes, index, period);
+        return CV2EAMarketDataBase::GetVolumeStrengthBonus(volumes, index);
     }
-
-    //--- Bounce validation
-    bool ValidateBounce(const double price, const double level, const bool isResistance)
+    
+    bool ValidateBounce(const double &prices[], double price, double level, double minBounceSize)
     {
-        return CV2EAMarketData::ValidateBounce(_Symbol, price, level, isResistance);
+        return CV2EAMarketDataBase::ValidateBounce(prices, price, level, minBounceSize);
     }
-
-    //--- Touch validation
-    bool IsTouchValid(const double price, const double level, const double touchZone)
+    
+    bool IsTouchValid(double price, double level, double touchZone)
     {
-        return CV2EAMarketData::IsTouchValid(price, level, touchZone);
+        return CV2EAMarketDataBase::IsTouchValid(price, level, touchZone);
     }
 }; 

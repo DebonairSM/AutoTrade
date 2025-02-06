@@ -2,8 +2,8 @@
 //|                                              V-2-EA-US500Data.mqh |
 //|                        US500-Specific Market Data Analysis Module |
 //+------------------------------------------------------------------+
-#property copyright "Your Company Name"
-#property link      "https://www.yourwebsite.com"
+#property copyright "VSol Trading Systems"
+#property link      "https://vsol-systems.com"
 #property version   "1.01"
 #property description "US500-specific market data analysis module"
 
@@ -12,7 +12,7 @@
 //+------------------------------------------------------------------+
 //| US500-Specific Market Data Analysis Class                          |
 //+------------------------------------------------------------------+
-class CV2EAUS500Data : public CV2EAMarketData
+class CV2EAUS500Data : public CV2EAMarketDataBase
 {
 private:
     //--- US500 Specific Settings
