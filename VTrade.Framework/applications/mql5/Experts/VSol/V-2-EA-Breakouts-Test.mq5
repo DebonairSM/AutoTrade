@@ -2,52 +2,84 @@
 //|                                         V-2-EA-Breakouts-Test.mq5 |
 //|                                           Unit Tests for Breakouts |
 //+------------------------------------------------------------------+
-#property copyright "Rommel Company"
-#property link      "Your Link"
+#property copyright "VSol Trading Systems"
+#property link      "https://vsol-systems.com"
 #property version   "1.00"
 
 // Include the file to test
 #include "V-2-EA-Breakouts.mqh"
 
 // Test framework globals
-int g_totalTests = 0;
-int g_passedTests = 0;
-string g_currentTestName = "";
+struct STestCase
+{
+    string name;
+    bool passed;
+    int assertions;
+    int passedAssertions;
+};
+
+STestCase g_currentTest;
+STestCase g_tests[];
+int g_testCount = 0;
 
 //+------------------------------------------------------------------+
 //| Test Framework Functions                                           |
 //+------------------------------------------------------------------+
 void BeginTest(string testName)
 {
-    g_currentTestName = testName;
-    g_totalTests++;
+    // Reset current test
+    g_currentTest.name = testName;
+    g_currentTest.passed = true;  // Start as passed, will be set to false on any failure
+    g_currentTest.assertions = 0;
+    g_currentTest.passedAssertions = 0;
+    
     Print("Running test: ", testName);
+}
+
+void EndTest()
+{
+    // Add test to array
+    ArrayResize(g_tests, g_testCount + 1);
+    g_tests[g_testCount] = g_currentTest;
+    g_testCount++;
+    
+    // Print test summary
+    string result = g_currentTest.passed ? "✓" : "✗";
+    Print(StringFormat("%s Test complete: %s - %d/%d assertions passed", 
+          result, g_currentTest.name, 
+          g_currentTest.passedAssertions, g_currentTest.assertions));
 }
 
 void AssertTrue(bool condition, string message)
 {
+    g_currentTest.assertions++;
+    
     if(condition)
     {
-        g_passedTests++;
-        Print("✓ ", g_currentTestName, " - ", message);
+        Print("✓ ", g_currentTest.name, " - ", message);
+        g_currentTest.passedAssertions++;
     }
     else
     {
-        Print("✗ ", g_currentTestName, " - ", message);
+        Print("✗ ", g_currentTest.name, " - ", message);
+        g_currentTest.passed = false;
     }
 }
 
 void AssertEquals(double expected, double actual, double epsilon, string message)
 {
+    g_currentTest.assertions++;
+    
     if(MathAbs(expected - actual) <= epsilon)
     {
-        g_passedTests++;
-        Print("✓ ", g_currentTestName, " - ", message);
+        Print("✓ ", g_currentTest.name, " - ", message);
+        g_currentTest.passedAssertions++;
     }
     else
     {
-        Print("✗ ", g_currentTestName, " - ", message, 
+        Print("✗ ", g_currentTest.name, " - ", message, 
               " (Expected: ", expected, ", Actual: ", actual, ")");
+        g_currentTest.passed = false;
     }
 }
 
@@ -61,6 +93,8 @@ void TestConstructor()
     CV2EABreakouts breakouts;
     // Test that object is created successfully
     AssertTrue(GetLastError() == 0, "Constructor should not generate errors");
+    
+    EndTest();
 }
 
 void TestConstructorDefaults()
@@ -68,11 +102,14 @@ void TestConstructorDefaults()
     BeginTest("Constructor Defaults Test");
     
     CV2EABreakouts breakouts;
+    breakouts.Init(100, 0.55, 0.0025, 2, true);  // Initialize with test values
     
-    // Test default values
+    // Test default values through base class methods
     AssertEquals(0.55, breakouts.TEST_GetMinStrength(), 0.0001, "Default min strength should be 0.55");
     AssertEquals(2, breakouts.TEST_GetMinTouches(), 0, "Default min touches should be 2");
     AssertTrue(breakouts.TEST_GetKeyLevelCount() == 0, "Initial key level count should be 0");
+    
+    EndTest();
 }
 
 void TestKeyLevelManagement()
@@ -147,6 +184,59 @@ void TestTouchZoneCalculation()
     
     // Test touch zone calculations if you have methods exposed for this
     // This might require making some methods public or adding test-specific methods
+}
+
+void TestVolumeAnalysis()
+{
+    BeginTest("Volume Analysis Test");
+    
+    CV2EABreakouts breakouts;
+    breakouts.Init(100, 0.55, 0.0025, 2, true);
+    
+    // Create test volume data
+    long volumes[];
+    ArrayResize(volumes, 20);
+    
+    // Set up a clear volume spike
+    for(int i = 0; i < 20; i++)
+    {
+        volumes[i] = 100;  // Base volume
+    }
+    volumes[10] = 300;  // Volume spike (3x normal)
+    
+    // Test volume spike detection
+    SKeyLevel level;
+    if(breakouts.TEST_GetKeyLevel(0, level))
+    {
+        AssertTrue(level.volumeConfirmed, "Volume spike should be confirmed");
+        AssertTrue(level.volumeRatio >= 1.5, "Volume ratio should be at least 1.5x average");
+    }
+}
+
+void TestKeyLevelStrength()
+{
+    BeginTest("Key Level Strength Test");
+    
+    CV2EABreakouts breakouts;
+    breakouts.Init(100, 0.55, 0.0025, 2, true);
+    
+    // Process some test data
+    MqlRates rates[];
+    GenerateForexTestData(rates, 200, 1.2000, 0.0002);
+    
+    // Check strength calculation components
+    SKeyLevel level;
+    if(breakouts.TEST_GetKeyLevel(0, level))
+    {
+        AssertTrue(level.strength >= 0.45 && level.strength <= 0.98, 
+                  "Strength should be within valid range (0.45-0.98)");
+        
+        if(level.volumeConfirmed)
+        {
+            AssertTrue(level.strength > level.volumeRatio * 0.5, 
+                      "Volume-confirmed level should have higher strength");
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -395,16 +485,16 @@ void TestUS500BreakoutDetection()
     bool initialized = breakouts.Init(
         100,    // lookbackPeriod
         0.55,   // minStrength
-        10.0,   // touchZone (10 points for US500)
+        10.0,   // touchZone (10 points for US500 H1)
         2,      // minTouches
         true    // showDebugPrints
     );
     
     AssertTrue(initialized, "Breakouts detector should initialize successfully");
     
-    // Generate simulated US500 data
+    // Generate simulated US500 data with appropriate scale
     MqlRates rates[];
-    GenerateUS500TestData(rates, 200);  // Generate 200 bars of test data
+    GenerateUS500TestData(rates, 200, 4500.0, 15.0);  // 15 point volatility
     
     // Process the data
     breakouts.ProcessStrategy();
@@ -448,7 +538,7 @@ void TestUS500MarketConditions()
     BeginTest("US500 Market Conditions Test");
     
     CV2EABreakouts breakouts;
-    breakouts.Init(100, 0.55, 10.0, 2, true);
+    breakouts.Init(100, 0.55, 10.0, 2, true);  // 10 points for US500 H1
     
     // Test different market conditions
     struct MarketCondition {
@@ -458,7 +548,7 @@ void TestUS500MarketConditions()
     };
     
     MarketCondition conditions[] = {
-        {"Low Volatility", 5.0, 4500.0},     // Quiet market
+        {"Low Volatility", 5.0, 4500.0},      // Quiet market
         {"Normal Trading", 15.0, 4500.0},     // Normal market
         {"High Volatility", 30.0, 4500.0},    // Volatile market
         {"Gap Up", 15.0, 4600.0},            // Gap up scenario
@@ -514,6 +604,8 @@ int OnInit()
     TestSymbolDetection();
     TestKeyLevelDetection();
     TestTouchZoneCalculation();
+    TestVolumeAnalysis();        // Add new volume analysis test
+    TestKeyLevelStrength();      // Add new strength calculation test
     
     // Run forex-specific tests
     TestForexBreakoutDetection();
@@ -523,8 +615,25 @@ int OnInit()
     TestUS500BreakoutDetection();
     TestUS500MarketConditions();
     
+    // Calculate final test results
+    int passedTests = 0;
+    int totalAssertions = 0;
+    int passedAssertions = 0;
+    
+    for(int i = 0; i < g_testCount; i++)
+    {
+        if(g_tests[i].passed)
+            passedTests++;
+            
+        totalAssertions += g_tests[i].assertions;
+        passedAssertions += g_tests[i].passedAssertions;
+    }
+    
     // Print test results
-    Print("Test Results: ", g_passedTests, "/", g_totalTests, " tests passed");
+    Print("\n=== TEST SUMMARY ===");
+    Print(StringFormat("Tests: %d/%d passed", passedTests, g_testCount));
+    Print(StringFormat("Assertions: %d/%d passed", passedAssertions, totalAssertions));
+    Print("==================\n");
     
     // Since this is a test EA, we don't want it running on charts
     return(INIT_FAILED);
