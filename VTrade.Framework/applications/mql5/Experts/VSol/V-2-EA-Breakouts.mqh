@@ -1937,14 +1937,17 @@ private:
                         StringFormat("\nVolume: %.1fx average", m_currentKeyLevels[i].volumeRatio) : 
                         "\nNo significant volume";
                         
-                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f%s\nTouches: %d\nDistance: %d pips%s", 
+                    string timeInfo = StringFormat("\nLast Update: %s", TimeToString(m_chartLines[j].lastUpdate, TIME_DATE|TIME_MINUTES));
+                        
+                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f%s\nTouches: %d\nDistance: %d pips%s%s", 
                         isAbovePrice ? "Resistance" : "Support",
                         EnumToString(currentTimeframe),
                         m_currentKeyLevels[i].strength,
                         m_currentKeyLevels[i].volumeConfirmed ? " (Volume Confirmed)" : "",
                         m_currentKeyLevels[i].touchCount,
                         (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point),
-                        volumeInfo);
+                        volumeInfo,
+                        timeInfo);
                     ObjectSetString(0, lineName, OBJPROP_TOOLTIP, tooltip);
                     break;
                 }
@@ -1984,14 +1987,17 @@ private:
                         StringFormat("\nVolume: %.1fx average", m_currentKeyLevels[i].volumeRatio) : 
                         "\nNo significant volume";
                         
-                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f%s\nTouches: %d\nDistance: %d pips%s", 
+                    string timeInfo = StringFormat("\nLast Update: %s", TimeToString(currentTime, TIME_DATE|TIME_MINUTES));
+                        
+                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f%s\nTouches: %d\nDistance: %d pips%s%s", 
                         isAbovePrice ? "Resistance" : "Support",
                         EnumToString(currentTimeframe),
                         m_currentKeyLevels[i].strength,
                         m_currentKeyLevels[i].volumeConfirmed ? " (Volume Confirmed)" : "",
                         m_currentKeyLevels[i].touchCount,
                         (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point),
-                        volumeInfo);
+                        volumeInfo,
+                        timeInfo);
                     ObjectSetString(0, lineName, OBJPROP_TOOLTIP, tooltip);
                     
                     // Create text label for volume-confirmed levels

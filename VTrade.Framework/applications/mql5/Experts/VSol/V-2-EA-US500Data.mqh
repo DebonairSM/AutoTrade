@@ -35,6 +35,7 @@ private:
     static double CalculateUS500Strength(const SKeyLevel &level, const STouch &touches[]);
     static bool ValidateUS500Touch(const double price, const double level, ENUM_TIMEFRAMES timeframe);
     static double GetUS500ATR(string symbol, ENUM_TIMEFRAMES timeframe, int period=14);
+    static double GetStdDev(string symbol, ENUM_TIMEFRAMES timeframe, int period, int shift=1);
 
 public:
     //--- Initialization
@@ -241,8 +242,22 @@ double CV2EAUS500Data::GetUS500ATR(string symbol, ENUM_TIMEFRAMES timeframe, int
     if(current_time - m_lastATRUpdate < PeriodSeconds(timeframe) && m_lastATR > 0)
         return m_lastATR;
     
-    // Calculate new ATR
-    double atr = iATR(symbol, timeframe, period, 0);
+    // Adjust ATR period based on volatility
+    double stdDev = GetStdDev(symbol, timeframe, period);
+    int dynamicPeriod = period;
+    
+    // Increase ATR period in high volatility
+    if(stdDev > 0)
+    {
+        double normalizedStdDev = stdDev / SymbolInfoDouble(symbol, SYMBOL_POINT);
+        if(normalizedStdDev > 100)  // High volatility
+            dynamicPeriod = (int)MathMin(period * 1.5, 21);  // Max 21 periods
+        else if(normalizedStdDev < 50)  // Low volatility
+            dynamicPeriod = (int)MathMax(period * 0.75, 10);  // Min 10 periods
+    }
+    
+    // Calculate new ATR with dynamic period
+    double atr = iATR(symbol, timeframe, dynamicPeriod, 0);
     if(atr > 0)
     {
         m_lastATR = atr;
@@ -250,6 +265,27 @@ double CV2EAUS500Data::GetUS500ATR(string symbol, ENUM_TIMEFRAMES timeframe, int
     }
     
     return atr;
+}
+
+// Helper method to get Standard Deviation
+double CV2EAUS500Data::GetStdDev(string symbol, ENUM_TIMEFRAMES timeframe, int period, int shift=1)
+{
+    int handle = iStdDev(symbol, timeframe, period, 0, MODE_SMA, PRICE_CLOSE);
+    if(handle == INVALID_HANDLE)
+        return 0.0;
+            
+    double stdDev[];
+    ArraySetAsSeries(stdDev, true);
+    
+    if(CopyBuffer(handle, 0, shift, 1, stdDev) <= 0)
+    {
+        IndicatorRelease(handle);
+        return 0.0;
+    }
+    
+    double result = stdDev[0];
+    IndicatorRelease(handle);
+    return result;
 }
 
 //+------------------------------------------------------------------+
@@ -324,28 +360,34 @@ double CV2EAUS500Data::CalculateUS500Strength(const SKeyLevel &level, const STou
 //+------------------------------------------------------------------+
 bool CV2EAUS500Data::FindUS500KeyLevels(string symbol, SKeyLevel &outStrongestLevel)
 {
-    ENUM_TIMEFRAMES tf = Period();
-    
     // Get price data
     MqlRates rates[];
     ArraySetAsSeries(rates, true);
     
-    int bars = GetUS500Lookback(tf);
-    if(CopyRates(symbol, tf, 0, bars, rates) != bars)
+    int bars = GetUS500Lookback(Period());
+    if(CopyRates(symbol, Period(), 0, bars, rates) != bars)
     {
         Print("❌ Failed to copy price data for US500 level detection");
         return false;
     }
     
-    // Initialize arrays for high/low prices
+    // Initialize arrays for high/low prices and volume
     double highs[], lows[];
     datetime times[];
+    long volumes[];
     ArrayResize(highs, bars);
     ArrayResize(lows, bars);
     ArrayResize(times, bars);
     ArraySetAsSeries(highs, true);
     ArraySetAsSeries(lows, true);
     ArraySetAsSeries(times, true);
+    
+    // Get volume data for validation
+    if(!GetVolumeData(symbol, volumes, bars))
+    {
+        Print("❌ Failed to get volume data for US500 level detection");
+        return false;
+    }
     
     // Fill arrays
     for(int i = 0; i < bars; i++)
@@ -372,9 +414,17 @@ bool CV2EAUS500Data::FindUS500KeyLevels(string symbol, SKeyLevel &outStrongestLe
             level.firstTouch = times[i];
             level.lastTouch = times[i];
             
+            // Add volume validation
+            if(IsVolumeSpike(volumes, i))
+                level.volumeConfirmed = true;
+            
             if(CountTouchesEnhanced(symbol, highs, lows, times, level.price, level))
             {
-                if(level.strength >= GetUS500MinStrength(tf))
+                // Add volume strength bonus if confirmed by volume
+                if(level.volumeConfirmed)
+                    level.strength += GetVolumeStrengthBonus(volumes, i);
+                
+                if(level.strength >= GetUS500MinStrength(Period()))
                 {
                     ArrayResize(levels, levelCount + 1);
                     levels[levelCount++] = level;
@@ -392,9 +442,17 @@ bool CV2EAUS500Data::FindUS500KeyLevels(string symbol, SKeyLevel &outStrongestLe
             level.firstTouch = times[i];
             level.lastTouch = times[i];
             
+            // Add volume validation
+            if(IsVolumeSpike(volumes, i))
+                level.volumeConfirmed = true;
+            
             if(CountTouchesEnhanced(symbol, highs, lows, times, level.price, level))
             {
-                if(level.strength >= GetUS500MinStrength(tf))
+                // Add volume strength bonus if confirmed by volume
+                if(level.volumeConfirmed)
+                    level.strength += GetVolumeStrengthBonus(volumes, i);
+                
+                if(level.strength >= GetUS500MinStrength(Period()))
                 {
                     ArrayResize(levels, levelCount + 1);
                     levels[levelCount++] = level;
