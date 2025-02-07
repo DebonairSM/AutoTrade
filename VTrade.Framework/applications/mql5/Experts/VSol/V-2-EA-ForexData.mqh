@@ -13,6 +13,166 @@
 #include "V-2-EA-MarketData.mqh"
 
 //+------------------------------------------------------------------+
+//| Forex Configuration Class                                          |
+//+------------------------------------------------------------------+
+class CV2EAForexData
+{
+private:
+    static double m_forexTouchZones[];      // Touch zones in pips per timeframe
+    static double m_forexBounceMinSizes[];  // Minimum bounce sizes
+    static int    m_forexMinTouches[];      // Minimum number of touches
+    static double m_forexMinStrengths[];    // Minimum acceptable strength
+    static int    m_forexLookbacks[];       // Lookback periods
+    static int    m_forexMaxBounceDelays[]; // Maximum allowed bounce delays
+    
+    static bool   m_initialized;            // Initialization state
+    
+public:
+    static void Initialize()
+    {
+        if(m_initialized) return;
+        
+        // Initialize arrays
+        ArrayResize(m_forexTouchZones, 9);      // One for each timeframe
+        ArrayResize(m_forexBounceMinSizes, 9);
+        ArrayResize(m_forexMinTouches, 9);
+        ArrayResize(m_forexMinStrengths, 9);
+        ArrayResize(m_forexLookbacks, 9);
+        ArrayResize(m_forexMaxBounceDelays, 9);
+        
+        // Touch zones in pips
+        m_forexTouchZones[PERIOD_MN1] = 50.0;   // 50 pips
+        m_forexTouchZones[PERIOD_W1]  = 30.0;   // 30 pips
+        m_forexTouchZones[PERIOD_D1]  = 20.0;   // 20 pips
+        m_forexTouchZones[PERIOD_H4]  = 15.0;   // 15 pips
+        m_forexTouchZones[PERIOD_H1]  = 10.0;   // 10 pips
+        m_forexTouchZones[PERIOD_M30] = 7.5;    // 7.5 pips
+        m_forexTouchZones[PERIOD_M15] = 5.0;    // 5 pips
+        m_forexTouchZones[PERIOD_M5]  = 3.0;    // 3 pips
+        m_forexTouchZones[PERIOD_M1]  = 2.0;    // 2 pips
+        
+        // Minimum bounce sizes (in pips)
+        m_forexBounceMinSizes[PERIOD_MN1] = 100.0;
+        m_forexBounceMinSizes[PERIOD_W1]  = 70.0;
+        m_forexBounceMinSizes[PERIOD_D1]  = 50.0;
+        m_forexBounceMinSizes[PERIOD_H4]  = 30.0;
+        m_forexBounceMinSizes[PERIOD_H1]  = 20.0;
+        m_forexBounceMinSizes[PERIOD_M30] = 15.0;
+        m_forexBounceMinSizes[PERIOD_M15] = 10.0;
+        m_forexBounceMinSizes[PERIOD_M5]  = 7.0;
+        m_forexBounceMinSizes[PERIOD_M1]  = 5.0;
+        
+        // Minimum touches required
+        m_forexMinTouches[PERIOD_MN1] = 2;
+        m_forexMinTouches[PERIOD_W1]  = 2;
+        m_forexMinTouches[PERIOD_D1]  = 2;
+        m_forexMinTouches[PERIOD_H4]  = 3;
+        m_forexMinTouches[PERIOD_H1]  = 3;
+        m_forexMinTouches[PERIOD_M30] = 3;
+        m_forexMinTouches[PERIOD_M15] = 4;
+        m_forexMinTouches[PERIOD_M5]  = 4;
+        m_forexMinTouches[PERIOD_M1]  = 5;
+        
+        // Minimum strength thresholds
+        m_forexMinStrengths[PERIOD_MN1] = 0.50;
+        m_forexMinStrengths[PERIOD_W1]  = 0.50;
+        m_forexMinStrengths[PERIOD_D1]  = 0.55;
+        m_forexMinStrengths[PERIOD_H4]  = 0.60;
+        m_forexMinStrengths[PERIOD_H1]  = 0.65;
+        m_forexMinStrengths[PERIOD_M30] = 0.70;
+        m_forexMinStrengths[PERIOD_M15] = 0.70;
+        m_forexMinStrengths[PERIOD_M5]  = 0.75;
+        m_forexMinStrengths[PERIOD_M1]  = 0.80;
+        
+        // Lookback periods
+        m_forexLookbacks[PERIOD_MN1] = 24;   // 24 months
+        m_forexLookbacks[PERIOD_W1]  = 52;   // 52 weeks
+        m_forexLookbacks[PERIOD_D1]  = 200;  // 200 days
+        m_forexLookbacks[PERIOD_H4]  = 200;  // 200 4h bars
+        m_forexLookbacks[PERIOD_H1]  = 200;  // 200 1h bars
+        m_forexLookbacks[PERIOD_M30] = 200;  // 200 30m bars
+        m_forexLookbacks[PERIOD_M15] = 200;  // 200 15m bars
+        m_forexLookbacks[PERIOD_M5]  = 200;  // 200 5m bars
+        m_forexLookbacks[PERIOD_M1]  = 200;  // 200 1m bars
+        
+        // Maximum bounce delays (in bars)
+        m_forexMaxBounceDelays[PERIOD_MN1] = 3;
+        m_forexMaxBounceDelays[PERIOD_W1]  = 4;
+        m_forexMaxBounceDelays[PERIOD_D1]  = 5;
+        m_forexMaxBounceDelays[PERIOD_H4]  = 6;
+        m_forexMaxBounceDelays[PERIOD_H1]  = 8;
+        m_forexMaxBounceDelays[PERIOD_M30] = 10;
+        m_forexMaxBounceDelays[PERIOD_M15] = 12;
+        m_forexMaxBounceDelays[PERIOD_M5]  = 15;
+        m_forexMaxBounceDelays[PERIOD_M1]  = 20;
+        
+        m_initialized = true;
+    }
+    
+    static double GetTouchZone(ENUM_TIMEFRAMES timeframe)
+    {
+        if(!m_initialized) Initialize();
+        return timeframe < ArraySize(m_forexTouchZones) ? m_forexTouchZones[timeframe] * _Point : 5.0 * _Point;
+    }
+    
+    static double GetBounceMinSize(ENUM_TIMEFRAMES timeframe)
+    {
+        if(!m_initialized) Initialize();
+        return timeframe < ArraySize(m_forexBounceMinSizes) ? m_forexBounceMinSizes[timeframe] * _Point : 10.0 * _Point;
+    }
+    
+    static int GetMinTouches(ENUM_TIMEFRAMES timeframe)
+    {
+        if(!m_initialized) Initialize();
+        return timeframe < ArraySize(m_forexMinTouches) ? m_forexMinTouches[timeframe] : 3;
+    }
+    
+    static double GetMinStrength(ENUM_TIMEFRAMES timeframe)
+    {
+        if(!m_initialized) Initialize();
+        return timeframe < ArraySize(m_forexMinStrengths) ? m_forexMinStrengths[timeframe] : 0.65;
+    }
+    
+    static int GetLookback(ENUM_TIMEFRAMES timeframe)
+    {
+        if(!m_initialized) Initialize();
+        return timeframe < ArraySize(m_forexLookbacks) ? m_forexLookbacks[timeframe] : 200;
+    }
+    
+    static int GetMaxBounceDelay(ENUM_TIMEFRAMES timeframe)
+    {
+        if(!m_initialized) Initialize();
+        return timeframe < ArraySize(m_forexMaxBounceDelays) ? m_forexMaxBounceDelays[timeframe] : 8;
+    }
+    
+    // Session-specific volume adjustments
+    static double GetSessionVolumeFactor()
+    {
+        int hourET = CV2EAUtils::GetCurrentHourET();
+        
+        bool isAsianSession = CV2EAUtils::IsWithinSession(hourET, 0, 8);   // 00:00-08:00 ET
+        bool isLondonSession = CV2EAUtils::IsWithinSession(hourET, 3, 11); // 03:00-11:00 ET
+        bool isNYSession = CV2EAUtils::IsWithinSession(hourET, 8, 17);     // 08:00-17:00 ET
+        
+        if(isLondonSession && isNYSession) return 1.3;  // London-NY overlap
+        if(isAsianSession && isLondonSession) return 1.2;  // Asian-London overlap
+        if(isLondonSession) return 1.1;  // London session
+        if(isNYSession) return 1.1;  // NY session
+        if(isAsianSession) return 1.0;  // Asian session
+        return 0.8;  // Off-hours
+    }
+};
+
+// Initialize static members
+double CV2EAForexData::m_forexTouchZones[];
+double CV2EAForexData::m_forexBounceMinSizes[];
+int    CV2EAForexData::m_forexMinTouches[];
+double CV2EAForexData::m_forexMinStrengths[];
+int    CV2EAForexData::m_forexLookbacks[];
+int    CV2EAForexData::m_forexMaxBounceDelays[];
+bool   CV2EAForexData::m_initialized = false;
+
+//+------------------------------------------------------------------+
 //| Forex-specific market data analysis class                          |
 //+------------------------------------------------------------------+
 class CV2EAForexData : public CV2EAMarketDataBase
@@ -67,87 +227,6 @@ public:
     static double PriceToPips(double price);
     static bool IsSpreadAcceptable(string symbol);
 };
-
-//+------------------------------------------------------------------+
-//| Initialize static members                                          |
-//+------------------------------------------------------------------+
-double CV2EAForexData::m_forexTouchZones[] = {
-    50.0,   // PERIOD_MN1  (5.0 pips)
-    30.0,   // PERIOD_W1   (3.0 pips)
-    20.0,   // PERIOD_D1   (2.0 pips)
-    15.0,   // PERIOD_H4   (1.5 pips)
-    10.0,   // PERIOD_H1   (1.0 pips)
-    7.5,    // PERIOD_M30  (0.75 pips)
-    5.0,    // PERIOD_M15  (0.5 pips)
-    3.0,    // PERIOD_M5   (0.3 pips)
-    2.0     // PERIOD_M1   (0.2 pips)
-};
-
-double CV2EAForexData::m_forexBounceMinSizes[] = {
-    100.0,  // PERIOD_MN1  (10.0 pips)
-    70.0,   // PERIOD_W1   (7.0 pips)
-    50.0,   // PERIOD_D1   (5.0 pips)
-    30.0,   // PERIOD_H4   (3.0 pips)
-    20.0,   // PERIOD_H1   (2.0 pips)
-    15.0,   // PERIOD_M30  (1.5 pips)
-    10.0,   // PERIOD_M15  (1.0 pips)
-    7.5,    // PERIOD_M5   (0.75 pips)
-    5.0     // PERIOD_M1   (0.5 pips)
-};
-
-int CV2EAForexData::m_forexMinTouches[] = {
-    2,      // PERIOD_MN1
-    2,      // PERIOD_W1
-    2,      // PERIOD_D1
-    3,      // PERIOD_H4
-    3,      // PERIOD_H1
-    3,      // PERIOD_M30
-    4,      // PERIOD_M15
-    4,      // PERIOD_M5
-    5       // PERIOD_M1
-};
-
-double CV2EAForexData::m_forexMinStrengths[] = {
-    0.50,   // PERIOD_MN1
-    0.50,   // PERIOD_W1
-    0.55,   // PERIOD_D1
-    0.60,   // PERIOD_H4
-    0.65,   // PERIOD_H1
-    0.70,   // PERIOD_M30
-    0.75,   // PERIOD_M15
-    0.80,   // PERIOD_M5
-    0.85    // PERIOD_M1
-};
-
-int CV2EAForexData::m_forexLookbacks[] = {
-    36,     // PERIOD_MN1 (3 years)
-    52,     // PERIOD_W1  (1 year)
-    90,     // PERIOD_D1  (3 months)
-    180,    // PERIOD_H4  (30 days)
-    120,    // PERIOD_H1  (5 days)
-    240,    // PERIOD_M30 (5 days)
-    480,    // PERIOD_M15 (5 days)
-    720,    // PERIOD_M5  (2.5 days)
-    1440    // PERIOD_M1  (1 day)
-};
-
-int CV2EAForexData::m_forexMaxBounceDelays[] = {
-    8,      // PERIOD_MN1
-    7,      // PERIOD_W1
-    6,      // PERIOD_D1
-    6,      // PERIOD_H4
-    5,      // PERIOD_H1
-    5,      // PERIOD_M30
-    4,      // PERIOD_M15
-    4,      // PERIOD_M5
-    3       // PERIOD_M1
-};
-
-double   CV2EAForexData::m_pipValue = 0;
-int      CV2EAForexData::m_pipDigits = 0;
-double   CV2EAForexData::m_lastSpread = 0;
-datetime CV2EAForexData::m_lastSpreadUpdate = 0;
-double   CV2EAForexData::m_maxAllowedSpread = 20.0;
 
 //+------------------------------------------------------------------+
 //| Initialize Forex specific settings                                 |
