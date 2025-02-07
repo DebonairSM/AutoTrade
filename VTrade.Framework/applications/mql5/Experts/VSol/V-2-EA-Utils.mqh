@@ -22,6 +22,7 @@
 //| - Trade execution with validation                                 |
 //| - Session management and time control                             |
 //| - Position tracking and management                                |
+//| - Array manipulation and debug utilities                          |
 //+------------------------------------------------------------------+
 class CV2EAUtils
 {
@@ -41,35 +42,60 @@ private:
     static int        m_brokerToLocalOffsetHours; // Broker to ET time offset
 
 public:
-    //--- Logging Methods
-    static void LogError(string message)
+    //--- Array Manipulation Methods
+    template<typename T>
+    static bool SafeResizeArray(T &arr[], int newSize, const string context)
     {
-        string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
-        double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-        Print(StringFormat("[%s] [%.5f] ❌ %s", timestamp, currentPrice, message));
+        if(!ArrayResize(arr, newSize))
+        {
+            LogError(StringFormat("[%s] Failed to resize array to %d elements", context, newSize));
+            return false;
+        }
+        return true;
     }
     
-    static void LogWarning(string message)
+    //--- Enhanced Logging Methods
+    static void LogError(string message, bool showPrice = true)
     {
         string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
-        double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-        Print(StringFormat("[%s] [%.5f] ⚠️ %s", timestamp, currentPrice, message));
+        string priceStr = showPrice ? StringFormat("[%.5f]", SymbolInfoDouble(_Symbol, SYMBOL_BID)) : "";
+        Print(StringFormat("[%s] %s ❌ %s", timestamp, priceStr, message));
     }
     
-    static void LogInfo(string message)
+    static void LogWarning(string message, bool showPrice = true)
+    {
+        string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
+        string priceStr = showPrice ? StringFormat("[%.5f]", SymbolInfoDouble(_Symbol, SYMBOL_BID)) : "";
+        Print(StringFormat("[%s] %s ⚠️ %s", timestamp, priceStr, message));
+    }
+    
+    static void LogInfo(string message, string param1 = "", string param2 = "", string param3 = "", bool showPrice = true)
+    {
+        if(!m_showDebugPrints) return;
+        string formattedMsg = message;
+        if(param1 != "") formattedMsg = StringFormat(message, param1);
+        if(param2 != "") formattedMsg = StringFormat(message, param1, param2);
+        if(param3 != "") formattedMsg = StringFormat(message, param1, param2, param3);
+        
+        string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
+        string priceStr = showPrice ? StringFormat("[%.5f]", SymbolInfoDouble(_Symbol, SYMBOL_BID)) : "";
+        Print(StringFormat("[%s] %s ℹ️ %s", timestamp, priceStr, formattedMsg));
+    }
+    
+    static void LogSuccess(string message, bool showPrice = true)
     {
         if(!m_showDebugPrints) return;
         string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
-        double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-        Print(StringFormat("[%s] [%.5f] ℹ️ %s", timestamp, currentPrice, message));
+        string priceStr = showPrice ? StringFormat("[%.5f]", SymbolInfoDouble(_Symbol, SYMBOL_BID)) : "";
+        Print(StringFormat("[%s] %s ✅ %s", timestamp, priceStr, message));
     }
     
-    static void LogSuccess(string message)
+    static void DebugPrint(string message, bool showPrice = true)
     {
         if(!m_showDebugPrints) return;
         string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
-        double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-        Print(StringFormat("[%s] [%.5f] ✅ %s", timestamp, currentPrice, message));
+        string priceStr = showPrice ? StringFormat("[%.5f]", SymbolInfoDouble(_Symbol, SYMBOL_BID)) : "";
+        Print(StringFormat("[%s] %s %s", timestamp, priceStr, message));
     }
 
     //+------------------------------------------------------------------+
@@ -130,6 +156,44 @@ public:
     //--- Position Management Methods
     static bool HasOpenPosition(string symbol, int magicNumber);
     static int  GetOpenPositionsCount(string symbol, int magicNumber);
+
+    //--- Array Sorting Methods
+    template<typename T>
+    static void QuickSort(T &arr[], int left, int right, 
+                         double &strengths[])  // Strengths array for sorting
+    {
+        if(left >= right) return;
+        
+        int i = left, j = right;
+        double pivotStrength = strengths[(left + right) / 2];
+        
+        while(i <= j)
+        {
+            while(strengths[i] > pivotStrength) i++;
+            while(strengths[j] < pivotStrength) j--;
+            
+            if(i <= j)
+            {
+                if(i != j)
+                {
+                    // Swap elements
+                    T temp = arr[i];
+                    arr[i] = arr[j];
+                    arr[j] = temp;
+                    
+                    // Swap corresponding strengths
+                    double tempStr = strengths[i];
+                    strengths[i] = strengths[j];
+                    strengths[j] = tempStr;
+                }
+                i++;
+                j--;
+            }
+        }
+        
+        if(left < j) QuickSort(arr, left, j, strengths);
+        if(i < right) QuickSort(arr, i, right, strengths);
+    }
 };
 
 //--- Initialize static class members

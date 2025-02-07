@@ -593,6 +593,69 @@ void TestUS500MarketConditions()
 }
 
 //+------------------------------------------------------------------+
+//| Utility Function Tests                                             |
+//+------------------------------------------------------------------+
+void TestUtilityFunctions()
+{
+    BeginTest("Utility Functions Test");
+    
+    // Test SafeResizeArray
+    double testArray[];
+    bool resizeResult = CV2EAUtils::SafeResizeArray(testArray, 10, "TestUtilityFunctions");
+    AssertTrue(resizeResult, "SafeResizeArray should succeed with valid size");
+    AssertTrue(ArraySize(testArray) == 10, "Array should be resized to 10 elements");
+    
+    // Test array resize with invalid size
+    resizeResult = CV2EAUtils::SafeResizeArray(testArray, -1, "TestUtilityFunctions");
+    AssertTrue(!resizeResult, "SafeResizeArray should fail with invalid size");
+    
+    // Test QuickSort
+    SKeyLevel levels[];
+    double strengths[];
+    CV2EAUtils::SafeResizeArray(levels, 5, "TestQuickSort");
+    CV2EAUtils::SafeResizeArray(strengths, 5, "TestQuickSort");
+    
+    // Initialize test data
+    strengths[0] = 0.75;  // Middle strength
+    strengths[1] = 0.90;  // Highest strength
+    strengths[2] = 0.60;  // Lower strength
+    strengths[3] = 0.85;  // Second highest
+    strengths[4] = 0.65;  // Second lowest
+    
+    for(int i = 0; i < 5; i++)
+    {
+        levels[i].price = (i + 1) * 100.0;
+        levels[i].strength = strengths[i];
+    }
+    
+    // Sort arrays
+    CV2EAUtils::QuickSort(levels, 0, 4, strengths);
+    
+    // Verify sorting
+    AssertTrue(strengths[0] > strengths[1], "First element should have highest strength");
+    AssertTrue(strengths[3] > strengths[4], "Last element should have lowest strength");
+    AssertTrue(levels[0].strength == 0.90, "Level sorting should match strength sorting");
+    
+    // Test debug print control
+    CV2EAUtils::Init(true);  // Enable debug prints
+    
+    // Test LogInfo with different parameter counts
+    CV2EAUtils::LogInfo("Simple message");
+    CV2EAUtils::LogInfo("Message with one param: %s", "TEST1");
+    CV2EAUtils::LogInfo("Message with two params: %s, %s", "TEST1", "TEST2");
+    CV2EAUtils::LogInfo("Message with three params: %s, %s, %s", "TEST1", "TEST2", "TEST3");
+    
+    CV2EAUtils::Init(false); // Disable debug prints
+    CV2EAUtils::LogInfo("Test message - should not be printed");
+    
+    // Test error logging (these should always print regardless of debug setting)
+    CV2EAUtils::LogError("Test error message");
+    CV2EAUtils::LogWarning("Test warning message");
+    
+    EndTest();
+}
+
+//+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
@@ -604,8 +667,9 @@ int OnInit()
     TestSymbolDetection();
     TestKeyLevelDetection();
     TestTouchZoneCalculation();
-    TestVolumeAnalysis();        // Add new volume analysis test
-    TestKeyLevelStrength();      // Add new strength calculation test
+    TestVolumeAnalysis();
+    TestKeyLevelStrength();
+    TestUtilityFunctions();  // Add the new test
     
     // Run forex-specific tests
     TestForexBreakoutDetection();
