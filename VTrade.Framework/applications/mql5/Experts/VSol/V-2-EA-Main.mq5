@@ -1,16 +1,16 @@
 //+------------------------------------------------------------------+
-//|                                               V-2-EA-Main.mq5     |
-//|                         Key Level Detection Implementation        |
+//|                                               V-2-EA-Main.mq5      |
+//|                         Key Level Detection Implementation         |
 //+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
 #property link      "https://vsol-systems.com"
 #property version   "2.01"
 #property strict
 
-#include "V-2-EA-Breakouts.mqh"
+#include "V-2-EA-BreakoutsStrategy.mqh"
 
 // Version tracking
-#define EA_VERSION "1.0.3"
+#define EA_VERSION "1.0.4"
 #define EA_VERSION_DATE "2024-03-19"
 #define EA_NAME "V-2-EA-Main"
 
@@ -22,9 +22,8 @@ input int     MinTouches = 2;          // Minimum touches required
 input bool    ShowDebugPrints = true;  // Show debug prints
 
 //--- Global Variables
-CV2EABreakouts g_strategy;
+CV2EABreakoutsStrategy g_strategy;
 datetime g_lastBarTime = 0;
-ENUM_TIMEFRAMES g_lastTimeframe = PERIOD_CURRENT;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -33,18 +32,7 @@ int OnInit()
 {
     // Print version information
     PrintFormat("=== %s v%s (%s) ===", EA_NAME, EA_VERSION, EA_VERSION_DATE);
-    PrintFormat("Changes: Added version tracking and improved timeframe handling");
-    
-    // Clear any existing chart objects first
-    ObjectsDeleteAll(0, "KL_");  // Delete all objects starting with "KL_"
-    
-    // Wait for enough bars to be loaded
-    int bars = Bars(_Symbol, Period());
-    if(bars < LookbackPeriod + 10)  // Add buffer for swing detection
-    {
-        Print("❌ Not enough historical data loaded. Need at least ", LookbackPeriod + 10, " bars, got ", bars);
-        return INIT_FAILED;
-    }
+    PrintFormat("Changes: Added multi-timeframe key level detection");
     
     // Initialize strategy
     if(!g_strategy.Init(LookbackPeriod, MinStrength, TouchZone, MinTouches, ShowDebugPrints))
@@ -55,19 +43,12 @@ int OnInit()
     
     // Store initial state
     g_lastBarTime = iTime(_Symbol, Period(), 0);
-    g_lastTimeframe = Period();
     
     // Print timeframe info
-    int periodMinutes = PeriodSeconds(g_lastTimeframe) / 60;
     Print(StringFormat(
-        "Initializing EA on %s timeframe (%d minutes)",
-        EnumToString(g_lastTimeframe),
-        periodMinutes
+        "Initializing EA on %s timeframe",
+        EnumToString(Period())
     ));
-    
-    // Force initial strategy processing to draw lines immediately
-    g_strategy.ProcessStrategy();
-    ChartRedraw(0);
     
     return(INIT_SUCCEEDED);
 }
@@ -77,7 +58,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-    ObjectsDeleteAll(0, "KL_");  // Delete all objects starting with "KL_"
+    // Strategy object will clean up its own chart objects through destructor
 }
 
 //+------------------------------------------------------------------+
@@ -85,15 +66,56 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    // Check for new bar or timeframe change
-    datetime currentBarTime = iTime(_Symbol, Period(), 0);
-    if(currentBarTime == g_lastBarTime && Period() == g_lastTimeframe)
+    // Check for new bar with error handling
+    datetime currentBarTime = 0;
+    if(!SeriesInfoInteger(_Symbol, Period(), SERIES_LASTBAR_DATE, currentBarTime))
+    {
+        Print("❌ Error getting current bar time");
+        return;
+    }
+    
+    if(currentBarTime == g_lastBarTime)
         return;
         
-    // Update state
+    // Update state and process
     g_lastBarTime = currentBarTime;
-    g_lastTimeframe = Period();
+    g_strategy.OnNewBar();
     
-    // Process strategy
-    g_strategy.ProcessStrategy();
+    // Get and print report
+    SKeyLevelReport report;
+    g_strategy.GetReport(report);
+    if(report.isValid)
+        PrintKeyLevelReport(report);
+}
+
+//+------------------------------------------------------------------+
+//| Print formatted key level report                                   |
+//+------------------------------------------------------------------+
+void PrintKeyLevelReport(const SKeyLevelReport &report)
+{
+    if(!report.isValid || !ShowDebugPrints)
+        return;
+        
+    PrintFormat("=== Key Level Report Update ===");
+    PrintFormat("Symbol: %s", report.symbol);
+    PrintFormat("Time: %s", TimeToString(report.reportTime));
+    PrintFormat("Levels found: %d", ArraySize(report.levels));
+    
+    for(int i = 0; i < ArraySize(report.levels); i++)
+    {
+        if(!report.levels[i].isValid)
+            continue;
+            
+        STimeframeKeyLevel level = report.levels[i];
+        
+        PrintFormat(
+            "%s: %.5f (%.2f strength, %d touches) %s",
+            EnumToString(level.timeframe),
+            level.strongestLevel.price,
+            level.strongestLevel.strength,
+            level.strongestLevel.touchCount,
+            level.strongestLevel.isResistance ? "RESISTANCE" : "SUPPORT"
+        );
+    }
+    PrintFormat("===========================");
 }

@@ -110,6 +110,8 @@ focused on:
 #include <VErrorDesc.mqh>  // Add this include for error descriptions
 #include "V-2-EA-MarketData.mqh"  // Add this include for market data functions
 #include "V-2-EA-Utils.mqh"  // Add this include for utilities
+#include "V-2-EA-US500Data.mqh"
+#include "V-2-EA-ForexData.mqh"
 
 //+------------------------------------------------------------------+
 //| Constants                                                          |
@@ -311,16 +313,22 @@ public:
     
     ~CV2EABreakouts(void)
     {
-        // Clear all chart objects created by this EA
-        for(int i = 0; i < ArraySize(m_chartLines); i++)
-        {
-            ObjectDelete(0, m_chartLines[i].name);
-        }
+        ClearAllChartObjects();  // Clean up chart objects before destruction
     }
     
     //--- Initialization
     bool Init(int lookbackPeriod, double minStrength, double touchZone, int minTouches, bool showDebugPrints, bool useVolumeFilter = true)
     {
+        // Check for sufficient historical data first
+        int bars = Bars(_Symbol, Period());
+        if(bars < lookbackPeriod + 10)  // Add buffer for swing detection
+        {
+            CV2EAUtils::LogError(StringFormat(
+                "Not enough historical data loaded. Need at least %d bars, got %d", 
+                lookbackPeriod + 10, bars));
+            return false;
+        }
+
         // Validate inputs
         if(minStrength <= 0.0 || minStrength > 1.0)
         {
@@ -955,15 +963,119 @@ public:
         return IsUS500();
     }
 
+    //--- Add to public section of CV2EABreakouts class
+    public:
+        bool ProcessTimeframe(ENUM_TIMEFRAMES timeframe)
+        {
+            if(!m_initialized) {
+                CV2EAUtils::LogError("Strategy not initialized");
+                return false;
+            }
+            
+            // Store current timeframe and rates
+            ENUM_TIMEFRAMES currentTF = Period();
+            
+            // Check if we're in testing mode
+            bool isTesting = MQLInfoInteger(MQL_TESTER);
+            
+            if(isTesting) {
+                // Testing mode - use CopyRates
+                MqlRates rates[];
+                double high[], low[], close[];
+                long volume[];
+                datetime time[];
+                
+                ArraySetAsSeries(rates, true);
+                ArraySetAsSeries(high, true);
+                ArraySetAsSeries(low, true);
+                ArraySetAsSeries(close, true);
+                ArraySetAsSeries(volume, true);
+                ArraySetAsSeries(time, true);
+                
+                // Get enough bars for lookback plus buffer
+                int barsNeeded = m_lookbackPeriod + 10;  // Add buffer for swing detection
+                
+                // Copy all necessary data
+                if(CopyHigh(_Symbol, timeframe, 0, barsNeeded, high) <= 0 ||
+                   CopyLow(_Symbol, timeframe, 0, barsNeeded, low) <= 0 ||
+                   CopyClose(_Symbol, timeframe, 0, barsNeeded, close) <= 0 ||
+                   CopyTickVolume(_Symbol, timeframe, 0, barsNeeded, volume) <= 0 ||
+                   CopyTime(_Symbol, timeframe, 0, barsNeeded, time) <= 0) {
+                    CV2EAUtils::LogError(StringFormat("Failed to copy data for %s", EnumToString(timeframe)));
+                    return false;
+                }
+                
+                // Process strategy using the copied data
+                ProcessStrategyOnData(high, low, close, volume, time);
+            }
+            else {
+                // Live trading - use chart switching for proper visualization
+                if(!ChartSetSymbolPeriod(0, _Symbol, timeframe)) {
+                    CV2EAUtils::LogError(StringFormat("Failed to switch to timeframe %s", EnumToString(timeframe)));
+                    return false;
+                }
+                
+                // Process strategy on this timeframe
+                ProcessStrategy();
+                
+                // Switch back to original timeframe
+                ChartSetSymbolPeriod(0, _Symbol, currentTF);
+            }
+            
+            return true;
+        }
+        
+        bool GetStrongestLevel(SKeyLevel &outLevel)
+        {
+            if(m_keyLevelCount == 0)
+                return false;
+                
+            double maxStrength = 0;
+            int strongestIdx = -1;
+            
+            // Find strongest level
+            for(int i = 0; i < m_keyLevelCount; i++) {
+                if(m_currentKeyLevels[i].strength > maxStrength) {
+                    maxStrength = m_currentKeyLevels[i].strength;
+                    strongestIdx = i;
+                }
+            }
+            
+            if(strongestIdx >= 0) {
+                outLevel = m_currentKeyLevels[strongestIdx];
+                return true;
+            }
+            
+            return false;
+        }
+
+        //--- Chart object cleanup
+        void ClearAllChartObjects()
+        {
+            // Clear all objects with our prefix
+            ObjectsDeleteAll(0, "KL_");
+            
+            // Reset our internal tracking arrays
+            ArrayFree(m_chartLines);
+            m_lastChartUpdate = 0;
+            
+            if(m_showDebugPrints)
+                CV2EAUtils::LogInfo("Cleared all chart objects");
+        }
+
 private:
     //--- Key Level Helper Methods
     bool IsSwingHigh(const double &prices[], int index)
     {
-        // Validate array bounds
+        // Validate array bounds first
         int size = ArraySize(prices);
         if(index < 2 || index >= size - 2)
+        {
+            if(m_showDebugPrints)
+                CV2EAUtils::LogInfo(StringFormat("IsSwingHigh: Index %d out of valid range [2, %d]", index, size - 3));
             return false;
-            
+        }
+        
         // Basic swing high pattern
         bool basicPattern = prices[index] > prices[index-1] && 
                           prices[index] > prices[index-2] &&
@@ -1040,25 +1152,14 @@ private:
             return false;
             
         // Additional validation: check if it's the highest in a wider window
-        for(int i = index-windowSize; i <= index+windowSize; i++)
-        {
-            if(i != index && i >= 0 && i < size)
-            {
-                if(prices[i] > prices[index])
-                    return false;  // Found a higher point nearby
-            }
-        }
+        // Make sure we don't go out of bounds
+        int startIdx = MathMax(0, index - windowSize);
+        int endIdx = MathMin(size - 1, index + windowSize);
         
-        // Optional: Check volume if available
-        double volume = (double)iVolume(_Symbol, Period(), index);
-        double volumePrev = (double)iVolume(_Symbol, Period(), index-1);
-        double volumeNext = (double)iVolume(_Symbol, Period(), index+1);
-        
-        if(volume > 0.0 && volumePrev > 0.0 && volumeNext > 0.0)
+        for(int i = startIdx; i <= endIdx; i++)
         {
-            // Volume should be higher at the swing point
-            if(volume <= (volumePrev + volumeNext) / 2.0)
-                return false;
+            if(i != index && prices[i] > prices[index])
+                return false;  // Found a higher point nearby
         }
         
         return true;
@@ -1066,6 +1167,15 @@ private:
     
     bool IsSwingLow(const double &prices[], int index)
     {
+        // Validate array bounds first
+        int size = ArraySize(prices);
+        if(index < 2 || index >= size - 2)
+        {
+            if(m_showDebugPrints)
+                CV2EAUtils::LogInfo(StringFormat("IsSwingLow: Index %d out of valid range [2, %d]", index, size - 3));
+            return false;
+        }
+        
         // Basic swing low pattern
         bool basicPattern = prices[index] < prices[index-1] && 
                           prices[index] < prices[index-2] &&
@@ -1130,13 +1240,14 @@ private:
             return false;
             
         // Additional validation: check if it's the lowest in a wider window
-        for(int i = index-windowSize; i <= index+windowSize; i++)
+        // Make sure we don't go out of bounds
+        int startIdx = MathMax(0, index - windowSize);
+        int endIdx = MathMin(size - 1, index + windowSize);
+        
+        for(int i = startIdx; i <= endIdx; i++)
         {
-            if(i != index && i >= 0 && i < ArraySize(prices))
-            {
-                if(prices[i] < prices[index])
-                    return false;  // Found a lower point nearby
-            }
+            if(i != index && prices[i] < prices[index])
+                return false;  // Found a lower point nearby
         }
         
         return true;
@@ -1264,8 +1375,24 @@ private:
         int consecutiveTouches = 0;
         double lastValidTouch = 0;
         
+        // Add safety check for array size
+        if(ArraySize(highs) < m_lookbackPeriod || ArraySize(lows) < m_lookbackPeriod)
+        {
+            if(m_showDebugPrints)
+                CV2EAUtils::LogError(StringFormat("[%s] Insufficient data for analysis. Need %d bars, got High:%d Low:%d", 
+                    TimeToString(TimeCurrent()), m_lookbackPeriod, ArraySize(highs), ArraySize(lows)));
+            return 0;
+        }
+        
         for(int i = 0; i < m_lookbackPeriod - m_maxBounceDelay; i++)
         {
+            // Add bounds check for main arrays
+            if(i >= ArraySize(highs) || i >= ArraySize(lows))
+            {
+                CV2EAUtils::LogError("Array index out of bounds in touch detection");
+                break;
+            }
+            
             double currentPrice = isResistance ? highs[i] : lows[i];
             double touchDistance = MathAbs(currentPrice - level);
             
@@ -1299,20 +1426,23 @@ private:
                     bool cleanBounce = true;
                     double bounceVolume = 0;
                     
-                    // Find the bounce
-                    for(int j = 1; j <= m_maxBounceDelay && (i+j) < m_lookbackPeriod; j++)
+                    // Find the bounce with bounds checking
+                    for(int j = 1; j <= m_maxBounceDelay && (i+j) < ArraySize(highs) && (i+j) < ArraySize(lows); j++)
                     {
+                        if(i+j >= m_lookbackPeriod) break;  // Safety check
+                        
                         double price = isResistance ? lows[i+j] : highs[i+j];
                         if(isResistance ? (price < extremePrice) : (price > extremePrice))
                         {
                             extremePrice = price;
                             bounceBar = j;
-                            if(hasVolume) bounceVolume = (double)iVolume(_Symbol, Period(), i+j);
+                            if(hasVolume && (i+j) < ArraySize(times)) 
+                                bounceVolume = (double)iVolume(_Symbol, Period(), i+j);
                         }
                     }
                     
-                    // Verify clean bounce
-                    for(int j = 1; j < bounceBar; j++)
+                    // Verify clean bounce with bounds checking
+                    for(int j = 1; j < bounceBar && (i+j) < ArraySize(highs) && (i+j) < ArraySize(lows); j++)
                     {
                         double checkPrice = isResistance ? highs[i+j] : lows[i+j];
                         if(isResistance ? (checkPrice > currentPrice - m_touchZone) : 
@@ -1436,17 +1566,14 @@ private:
         
         // Timeframe bonus - adjusted weights
         double timeframeBonus = 0;
-        switch(tf) {
-            case PERIOD_MN1: timeframeBonus = 0.12; break;
-            case PERIOD_W1:  timeframeBonus = 0.10; break;
-            case PERIOD_D1:  timeframeBonus = 0.08; break;
-            case PERIOD_H4:  timeframeBonus = 0.06; break;
-            case PERIOD_H1:  timeframeBonus = 0.04; break;
-            case PERIOD_M30: timeframeBonus = 0.02; break;
-            case PERIOD_M15: timeframeBonus = 0.015; break;
-            case PERIOD_M5:  timeframeBonus = 0.01; break;
-            case PERIOD_M1:  timeframeBonus = 0.005; break;
-            default: timeframeBonus = 0.01;
+        if(CV2EAUtils::IsUS500()) {
+            timeframeBonus = CV2EAUS500Data::GetTimeframeBonus(tf);
+        }
+        else if(CV2EAUtils::IsForexPair()) {
+            timeframeBonus = CV2EAForexData::GetTimeframeBonus(tf);
+        }
+        else {
+            timeframeBonus = 0.0; // Default for other instruments
         }
         
         // Touch quality bonus (up to +20% based on bounce characteristics)
@@ -2425,5 +2552,240 @@ private:
         }
         
         return hasValidVolume;
+    }
+
+    bool FindKeyLevelsOnData(const double &highs[], const double &lows[], const double &closes[],
+                            const long &volumes[], const datetime &times[], SKeyLevel &outStrongestLevel)
+    {
+        if(!m_initialized)
+        {
+            CV2EAUtils::LogError("Strategy not initialized");
+            return false;
+        }
+        
+        // Validate array sizes
+        int highSize = ArraySize(highs);
+        int lowSize = ArraySize(lows);
+        int closeSize = ArraySize(closes);
+        int volumeSize = ArraySize(volumes);
+        int timeSize = ArraySize(times);
+        
+        // All arrays should have the same size and be large enough
+        if(highSize < m_lookbackPeriod || lowSize < m_lookbackPeriod || 
+           closeSize < m_lookbackPeriod || volumeSize < m_lookbackPeriod || 
+           timeSize < m_lookbackPeriod)
+        {
+            CV2EAUtils::LogError(StringFormat(
+                "Insufficient data for analysis. Need %d bars, got High:%d Low:%d Close:%d Volume:%d Time:%d",
+                m_lookbackPeriod, highSize, lowSize, closeSize, volumeSize, timeSize
+            ));
+            return false;
+        }
+            
+        // Reset key levels array
+        m_keyLevelCount = 0;
+        
+        // Get current hour for stats tracking
+        datetime currentTime = TimeCurrent();
+        MqlDateTime dt;
+        TimeToStruct(currentTime, dt);
+        datetime currentHour = currentTime - dt.min * 60 - dt.sec;
+        
+        static datetime lastStatReset = 0;
+        
+        // Check if we need to reset hourly stats
+        if(lastStatReset < currentHour)
+        {
+            // Reset hourly stats structure
+            m_hourlyStats.Reset();
+            lastStatReset = currentHour;
+            
+            CV2EAUtils::LogInfo("Reset hourly stats for new hour");
+        }
+        
+        // Use the minimum size for iteration to prevent out of bounds access
+        int maxBars = MathMin(MathMin(MathMin(highSize, lowSize), 
+                            MathMin(closeSize, volumeSize)), timeSize);
+        int barsToProcess = MathMin(m_lookbackPeriod, maxBars - 4);  // Leave room for swing detection
+        
+        if(m_showDebugPrints)
+        {
+            CV2EAUtils::LogInfo(StringFormat(
+                "Processing %d bars out of %d available",
+                barsToProcess, maxBars
+            ));
+        }
+        
+        // Find swing highs (resistance levels)
+        for(int i = 2; i < barsToProcess - 2; i++)
+        {
+            if(IsSwingHigh(highs, i))
+            {
+                m_hourlyStats.totalSwingHighs++;
+                double level = highs[i];
+                
+                if(!IsNearExistingLevel(level))
+                {
+                    SKeyLevel newLevel;
+                    newLevel.price = level;
+                    newLevel.isResistance = true;
+                    newLevel.firstTouch = times[i];
+                    newLevel.lastTouch = times[i];
+                    STouchQuality quality;
+                    newLevel.touchCount = CountTouches(level, true, highs, lows, times, quality);
+                    
+                    if(newLevel.touchCount < m_minTouches)
+                    {
+                        m_hourlyStats.lowTouchCount++;
+                        continue;
+                    }
+                    
+                    newLevel.strength = CalculateLevelStrength(newLevel, quality);
+                    
+                    // Add volume strength bonus if there's a volume spike
+                    double volumeBonus = GetVolumeStrengthBonus(volumes, i);
+                    if(volumeBonus > 0)
+                    {
+                        newLevel.strength = MathMin(newLevel.strength * (1.0 + volumeBonus), 0.98);
+                        newLevel.volumeConfirmed = true;
+                        newLevel.volumeRatio = (double)volumes[i] / GetAverageVolume(volumes, i, 20);
+                    }
+                    else
+                    {
+                        newLevel.volumeConfirmed = false;
+                        newLevel.volumeRatio = 1.0;
+                    }
+                    
+                    if(newLevel.strength >= m_minStrength)
+                    {
+                        AddKeyLevel(newLevel);
+                        m_hourlyStats.validLevels++;
+                    }
+                    else
+                    {
+                        m_hourlyStats.lowStrength++;
+                    }
+                }
+                else
+                {
+                    m_hourlyStats.nearExistingLevels++;
+                }
+            }
+        }
+        
+        // Find swing lows (support levels)
+        for(int i = 2; i < barsToProcess - 2; i++)
+        {
+            if(IsSwingLow(lows, i))
+            {
+                m_hourlyStats.totalSwingLows++;
+                double level = lows[i];
+                
+                if(!IsNearExistingLevel(level))
+                {
+                    SKeyLevel newLevel;
+                    newLevel.price = level;
+                    newLevel.isResistance = false;
+                    newLevel.firstTouch = times[i];
+                    newLevel.lastTouch = times[i];
+                    STouchQuality quality;
+                    newLevel.touchCount = CountTouches(level, false, highs, lows, times, quality);
+                    
+                    if(newLevel.touchCount < m_minTouches)
+                    {
+                        m_hourlyStats.lowTouchCount++;
+                        continue;
+                    }
+                    
+                    newLevel.strength = CalculateLevelStrength(newLevel, quality);
+                    
+                    // Add volume strength bonus if there's a volume spike
+                    double volumeBonus = GetVolumeStrengthBonus(volumes, i);
+                    if(volumeBonus > 0)
+                    {
+                        newLevel.strength = MathMin(newLevel.strength * (1.0 + volumeBonus), 0.98);
+                        newLevel.volumeConfirmed = true;
+                        newLevel.volumeRatio = (double)volumes[i] / GetAverageVolume(volumes, i, 20);
+                    }
+                    else
+                    {
+                        newLevel.volumeConfirmed = false;
+                        newLevel.volumeRatio = 1.0;
+                    }
+                    
+                    if(newLevel.strength >= m_minStrength)
+                    {
+                        AddKeyLevel(newLevel);
+                        m_hourlyStats.validLevels++;
+                    }
+                    else
+                    {
+                        m_hourlyStats.lowStrength++;
+                    }
+                }
+                else
+                {
+                    m_hourlyStats.nearExistingLevels++;
+                }
+            }
+        }
+        
+        // Find strongest level
+        if(m_keyLevelCount > 0)
+        {
+            int strongestIdx = 0;
+            double maxStrength = m_currentKeyLevels[0].strength;
+            
+            for(int i = 1; i < m_keyLevelCount; i++)
+            {
+                if(m_currentKeyLevels[i].strength > maxStrength)
+                {
+                    maxStrength = m_currentKeyLevels[i].strength;
+                    strongestIdx = i;
+                }
+            }
+            
+            outStrongestLevel = m_currentKeyLevels[strongestIdx];
+            m_lastKeyLevelUpdate = TimeCurrent();
+            
+            return true;
+        }
+        
+        return false;
+    }
+
+    void ProcessStrategyOnData(const double &high[], const double &low[], const double &close[],
+                             const long &volume[], const datetime &time[])
+    {
+        // Find key levels using the provided data arrays
+        SKeyLevel strongestLevel;
+        bool foundKeyLevel = FindKeyLevelsOnData(high, low, close, volume, time, strongestLevel);
+        
+        // Update system state
+        if(foundKeyLevel)
+        {
+            // If we found a new key level that's significantly different from our active one
+            if(!m_state.keyLevelFound || 
+               MathAbs(strongestLevel.price - m_state.activeKeyLevel.price) > m_touchZone)
+            {
+                // Update strategy state with new key level
+                m_state.keyLevelFound = true;
+                m_state.activeKeyLevel = strongestLevel;
+                m_state.lastUpdate = TimeCurrent();
+                
+                // Print key levels report when we find a new significant level
+                PrintKeyLevelsReport();
+            }
+        }
+        else if(m_state.keyLevelFound && !IsKeyLevelValid(m_state.activeKeyLevel))
+        {
+            // If we had a key level but can't find it anymore, reset state
+            CV2EAUtils::LogInfo("Previous key level no longer valid, resetting state");
+            m_state.Reset();
+        }
+        
+        // Update chart lines - Force update on each call
+        m_lastChartUpdate = 0; // Reset last update time to force update
+        UpdateChartLines();
     }
 }; 

@@ -194,6 +194,20 @@ public:
         if(left < j) QuickSort(arr, left, j, strengths);
         if(i < right) QuickSort(arr, i, right, strengths);
     }
+
+    // Add to CV2EAUtils class
+    static bool IsForexPair(string symbol=NULL)
+    {
+        if(symbol == NULL) symbol = _Symbol;
+        return StringFind(symbol, "US500") == -1 &&  // Exclude indices
+              (StringLen(symbol) == 6 || StringLen(symbol) == 7); // Major/minor pairs
+    }
+
+    static bool IsUS500(string symbol=NULL)
+    {
+        if(symbol == NULL) symbol = _Symbol;
+        return StringFind(symbol, "US500") != -1;
+    }
 };
 
 //--- Initialize static class members

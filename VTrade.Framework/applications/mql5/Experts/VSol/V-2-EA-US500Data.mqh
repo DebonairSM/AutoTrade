@@ -159,6 +159,23 @@ public:
         // Overnight
         return 0.5;
     }
+    
+    static double GetTimeframeBonus(ENUM_TIMEFRAMES tf)
+    {
+        if(!m_initialized) Initialize();
+        
+        switch(tf) {
+            case PERIOD_MN1: return 0.15;  // 15% bonus for monthly
+            case PERIOD_W1:  return 0.12;
+            case PERIOD_D1:  return 0.10;
+            case PERIOD_H4:  return 0.08;
+            case PERIOD_H1:  return 0.06;
+            case PERIOD_M30: return 0.04;
+            case PERIOD_M15: return 0.02;
+            case PERIOD_M5:  return 0.01;
+            default:         return 0.0;
+        }
+    }
 };
 
 // Initialize static members
