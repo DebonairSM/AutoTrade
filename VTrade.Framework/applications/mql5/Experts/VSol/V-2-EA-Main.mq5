@@ -20,10 +20,12 @@ input double  MinStrength = 0.55;      // Minimum strength for key levels
 input double  TouchZone = 0.0025;      // Touch zone size (in pips for Forex, points for US500)
 input int     MinTouches = 2;          // Minimum touches required
 input bool    ShowDebugPrints = true;  // Show debug prints
+input bool    EnforceMarketHours = true; // Enforce market hours check
 
 //--- Global Variables
 CV2EABreakoutsStrategy g_strategy;
 datetime g_lastBarTime = 0;
+string g_requiredStrategyVersion = "1.0.4";
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -50,6 +52,11 @@ int OnInit()
         EnumToString(Period())
     ));
     
+    if(!CheckVersionCompatibility()) {
+        Print("❌ Version mismatch between EA and Strategy");
+        return INIT_FAILED;
+    }
+    
     return(INIT_SUCCEEDED);
 }
 
@@ -66,17 +73,27 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    // Check for new bar with error handling
-    datetime currentBarTime = 0;
-    if(!SeriesInfoInteger(_Symbol, Period(), SERIES_LASTBAR_DATE, currentBarTime))
-    {
-        Print("❌ Error getting current bar time");
+    // Replace existing new bar check with:
+    datetime currentBarTime = iTime(_Symbol, Period(), 0);
+    if(currentBarTime == 0) {
+        Print("❌ Invalid current bar time - data not synchronized");
         return;
     }
     
-    if(currentBarTime == g_lastBarTime)
+    if(!SeriesInfoInteger(_Symbol, Period(), SERIES_SYNCHRONIZED)) {
+        Print("⚠️ Chart data not synchronized");
+        return;
+    }
+    
+    if(currentBarTime <= g_lastBarTime) 
         return;
         
+    if(!IsDuringMarketHours()) {
+        if(ShowDebugPrints)
+            Print("Skipping processing outside market hours");
+        return;
+    }
+    
     // Update state and process
     g_lastBarTime = currentBarTime;
     g_strategy.OnNewBar();
@@ -118,4 +135,31 @@ void PrintKeyLevelReport(const SKeyLevelReport &report)
         );
     }
     PrintFormat("===========================");
+}
+
+// Add new function
+bool CheckVersionCompatibility()
+{
+    if(g_strategy.GetVersion() != EA_VERSION) {
+        PrintFormat("EA Version: %s | Strategy Version: %s", 
+              EA_VERSION, g_strategy.GetVersion());
+        return false;
+    }
+    return true;
+}
+
+// Add new function
+bool IsDuringMarketHours()
+{
+    if(!EnforceMarketHours)
+        return true;
+        
+    // US/EU session overlap check
+    datetime nyTime = TimeCurrent() - 5*3600;
+    int nyHour = (int)(nyTime % 86400) / 3600;
+    
+    // Monday-Friday 13:30-16:00 NY time (FX liquid hours)
+    if(nyHour >= 13 && nyHour < 16)
+        return true;
+    return false;
 }
