@@ -6,6 +6,16 @@
 #property link      "https://vsol-systems.com"
 #property version   "1.01"
 
+//--- Volume Analysis Constants
+#define VOLUME_SPIKE_MULTIPLIER      2.0    // Minimum ratio for volume spike detection (current/average)
+#define VOLUME_LOOKBACK_BARS         20     // Number of bars for volume average calculation
+#define VOLUME_STRENGTH_MAX_BONUS    0.15   // Maximum strength bonus from volume (15%)
+#define VOLUME_MIN_RATIO_BREAKOUT    1.5    // Minimum volume ratio required for breakout confirmation
+#define VOLUME_CONSISTENCY_THRESHOLD  0.3    // Minimum ratio of volume to average for consistency check
+#define VOLUME_EXPANSION_THRESHOLD   0.2    // Minimum ratio of bars with expanding volume
+#define VOLUME_PRE_BREAKOUT_BARS     10     // Bars to analyze before breakout
+#define VOLUME_RETEST_MIN_RATIO      0.5    // Minimum volume ratio for retest validation
+
 /*
 REFACTORING TODO:
 
@@ -190,6 +200,9 @@ struct STouchQuality {
 class CV2EABreakouts : public CV2EAMarketDataBase
 {
 private:
+    //--- Volume Settings
+    bool            m_useVolumeFilter;  // Whether to use volume filtering
+    
     //--- US500 Detection
     bool IsUS500()
     {
@@ -264,7 +277,8 @@ public:
     CV2EABreakouts(void) : m_initialized(false),
                            m_keyLevelCount(0),
                            m_lastKeyLevelUpdate(0),
-                           m_maxBounceDelay(8)  
+                           m_maxBounceDelay(8),
+                           m_useVolumeFilter(true)  
     {
         // Initialize each array with robust error checking
         if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_currentKeyLevels"))
@@ -305,7 +319,7 @@ public:
     }
     
     //--- Initialization
-    bool Init(int lookbackPeriod, double minStrength, double touchZone, int minTouches, bool showDebugPrints)
+    bool Init(int lookbackPeriod, double minStrength, double touchZone, int minTouches, bool showDebugPrints, bool useVolumeFilter = true)
     {
         // Validate inputs
         if(minStrength <= 0.0 || minStrength > 1.0)
@@ -318,6 +332,8 @@ public:
             CV2EAUtils::LogError("Invalid minTouches", minTouches);
             minTouches = 2;
         }
+        
+        m_useVolumeFilter = useVolumeFilter;
         
         // Adjust touch zone for US500
         if(IsUS500())
@@ -2243,7 +2259,40 @@ private:
     
     double GetVolumeStrengthBonus(const long &volumes[], int index)
     {
-        return CV2EAMarketDataBase::GetVolumeStrengthBonus(volumes, index);
+        if(index < 0 || index >= ArraySize(volumes))
+            return 0.0;
+            
+        double avgVolume = GetAverageVolume(volumes, index, VOLUME_LOOKBACK_BARS);
+        if(avgVolume <= 0)
+            return 0.0;
+            
+        double volumeRatio = (double)volumes[index] / avgVolume;
+        
+        // Return bonus based on volume ratio, capped at maximum
+        if(volumeRatio >= VOLUME_SPIKE_MULTIPLIER)
+        {
+            double bonus = MathMin((volumeRatio - 1.0) * 0.1, VOLUME_STRENGTH_MAX_BONUS);
+            
+            if(m_showDebugPrints)
+            {
+                CV2EAUtils::LogInfo(StringFormat(
+                    "Volume spike detected at bar %d:\n" +
+                    "Current Volume: %d\n" +
+                    "Average Volume: %.2f\n" +
+                    "Ratio: %.2fx\n" +
+                    "Strength Bonus: +%.1f%%",
+                    index,
+                    volumes[index],
+                    avgVolume,
+                    volumeRatio,
+                    bonus * 100
+                ));
+            }
+            
+            return bonus;
+        }
+        
+        return 0.0;
     }
     
     bool ValidateBounce(const double &prices[], double price, double level, double minBounceSize)
@@ -2268,5 +2317,113 @@ private:
             return false;
             
         return true;
+    }
+
+    bool DoesVolumeMeetRequirement(const long &volumes[], const int lookback)
+    {
+        if(!m_useVolumeFilter || lookback <= 0) 
+            return true;
+            
+        // Calculate pre-breakout volume metrics
+        double preBreakoutAvg = 0;
+        int preBreakoutBars = MathMin(VOLUME_PRE_BREAKOUT_BARS, ArraySize(volumes) - lookback);
+        
+        for(int i = lookback; i < lookback + preBreakoutBars; i++)
+            preBreakoutAvg += volumes[i];
+        preBreakoutAvg /= preBreakoutBars;
+        
+        // Calculate breakout volume metrics
+        double avgVolume = 0;
+        double maxVolume = volumes[0];
+        double minVolume = volumes[0];
+        double volumeSum = 0;
+        
+        for(int i = 0; i < lookback; i++)
+        {
+            avgVolume += volumes[i];
+            maxVolume = MathMax(maxVolume, volumes[i]);
+            minVolume = MathMin(minVolume, volumes[i]);
+            volumeSum += volumes[i];
+        }
+        avgVolume /= lookback;
+        
+        // Calculate volume increase ratio compared to pre-breakout
+        double volumeRatio = avgVolume / preBreakoutAvg;
+        
+        // Volume validation checks
+        bool hasVolumeSpike = volumes[0] > preBreakoutAvg * VOLUME_MIN_RATIO_BREAKOUT;
+        bool hasConsistentVolume = minVolume > preBreakoutAvg * VOLUME_CONSISTENCY_THRESHOLD;
+        
+        // Check if volume is expanding
+        double volumeMA = volumeSum / lookback;
+        int volumeExpansionCount = 0;
+        
+        for(int i = 0; i < lookback-1; i++)
+        {
+            if(volumes[i] > volumeMA)
+                volumeExpansionCount++;
+        }
+        
+        bool hasExpandingVolume = (double)volumeExpansionCount / lookback >= VOLUME_EXPANSION_THRESHOLD;
+        
+        if(m_showDebugPrints)
+        {
+            CV2EAUtils::LogInfo(StringFormat(
+                "Volume Analysis:\n" +
+                "Pre-breakout Avg: %.2f\n" +
+                "Breakout Avg: %.2f\n" +
+                "Volume Ratio: %.2fx\n" +
+                "Volume Spike: %s\n" +
+                "Volume Consistent: %s\n" +
+                "Volume Expanding: %s",
+                preBreakoutAvg,
+                avgVolume,
+                volumeRatio,
+                hasVolumeSpike ? "Yes" : "No",
+                hasConsistentVolume ? "Yes" : "No",
+                hasExpandingVolume ? "Yes" : "No"
+            ));
+        }
+        
+        return (hasVolumeSpike && hasExpandingVolume) && hasConsistentVolume;
+    }
+
+    bool ValidateRetest(const double &prices[], const long &volumes[], const datetime &times[], int bars)
+    {
+        if(bars < 2) return false;
+        
+        // Calculate average volume during retest
+        double avgVolume = 0;
+        for(int i = 0; i < bars; i++)
+            avgVolume += volumes[i];
+        avgVolume /= bars;
+        
+        // Get pre-retest volume average
+        double preRetestAvg = 0;
+        int preRetestBars = MathMin(VOLUME_PRE_BREAKOUT_BARS, ArraySize(volumes) - bars);
+        
+        for(int i = bars; i < bars + preRetestBars; i++)
+            preRetestAvg += volumes[i];
+        preRetestAvg /= preRetestBars;
+        
+        // Volume should be at least VOLUME_RETEST_MIN_RATIO of pre-retest average
+        bool hasValidVolume = avgVolume >= preRetestAvg * VOLUME_RETEST_MIN_RATIO;
+        
+        if(m_showDebugPrints)
+        {
+            CV2EAUtils::LogInfo(StringFormat(
+                "Retest Volume Analysis:\n" +
+                "Retest Avg Volume: %.2f\n" +
+                "Pre-retest Avg: %.2f\n" +
+                "Volume Ratio: %.2fx\n" +
+                "Volume Valid: %s",
+                avgVolume,
+                preRetestAvg,
+                avgVolume / preRetestAvg,
+                hasValidVolume ? "Yes" : "No"
+            ));
+        }
+        
+        return hasValidVolume;
     }
 }; 
