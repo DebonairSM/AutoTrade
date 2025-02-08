@@ -1,0 +1,68 @@
+---
+description: MQL5 Code Formatting Standards
+globs: "*.{mq5,mqh}"
+---
+# MQL5 Formatting Rules
+
+Rules for code formatting and style in MQL5 files.
+
+<rule>
+name: mql5_formatting
+description: Code formatting and style guidelines for MQL5
+
+settings:
+  indent_size: 4
+  tab_size: 4
+  use_spaces: true
+  max_line_length: 120
+  brace_style: "Allman"
+
+patterns:
+  # Block Delimiters
+  block_start: "\{"
+  block_end: "\}"
+  
+  # Comments
+  line_comment: "//"
+  multiline_comment_start: "/\*"
+  multiline_comment_end: "\*/"
+  
+  # Region Markers
+  region_start: "^\s*#pragma\s+region\b"
+  region_end: "^\s*#pragma\s+endregion\b"
+
+actions:
+  - type: enforce
+    conditions:
+      - pattern: "^\t+"
+        message: "Use spaces instead of tabs for indentation"
+      
+      - pattern: "^.{121,}"
+        message: "Line exceeds maximum length of 120 characters"
+        
+      - pattern: "\{[^\n]"
+        message: "Opening brace must be on a new line (Allman style)"
+
+  - type: suggest
+    message: |
+      Follow these formatting guidelines:
+      1. Use 4 spaces for indentation
+      2. Maximum line length: 120 characters
+      3. Allman brace style (braces on new lines)
+      4. Use #pragma region for code organization
+      5. Proper spacing around operators
+      6. Consistent comment style
+
+examples:
+  - input: |
+      if(condition)
+      {
+          // Correct indentation
+          DoSomething();
+      }
+    output: "Correctly formatted code block"
+
+metadata:
+  priority: high
+  version: 1.0
+</rule> 

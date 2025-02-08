@@ -1,0 +1,48 @@
+---
+description: MQL5 Event Handler Functions
+globs: "*.{mq5,mqh}"
+---
+# MQL5 Event Handler Rules
+
+Rules for MQL5 special event handling functions.
+
+<rule>
+name: mql5_event_handlers
+description: Patterns and requirements for MQL5 event handler functions
+
+patterns:
+  # Special Event Functions
+  on_init: "^\s*int\s+OnInit\s*\([^)]*\)"
+  on_tick: "^\s*void\s+OnTick\s*\([^)]*\)"
+  on_deinit: "^\s*void\s+OnDeinit\s*\([^)]*\)"
+  on_tester: "^\s*int\s+OnTester\s*\([^)]*\)"
+  on_chart_event: "^\s*void\s+OnChartEvent\s*\([^)]*\)"
+
+actions:
+  - type: suggest
+    message: |
+      Event handler implementation guidelines:
+      1. OnInit() must return INIT_SUCCEEDED on success
+      2. OnTick() should contain main trading logic
+      3. OnDeinit() must clean up resources
+      4. Include error handling in all handlers
+      5. Document expected behavior and return values
+
+examples:
+  - input: |
+      int OnInit()
+      {
+          // Initialization code
+          return(INIT_SUCCEEDED);
+      }
+
+      void OnTick()
+      {
+          // Trading logic
+      }
+    output: "Correctly implemented event handlers"
+
+metadata:
+  priority: high
+  version: 1.0
+</rule> 

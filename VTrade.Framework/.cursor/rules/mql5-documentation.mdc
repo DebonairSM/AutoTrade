@@ -1,0 +1,63 @@
+---
+description: MQL5 Documentation Standards
+globs: "*.{mq5,mqh}"
+---
+# MQL5 Documentation Rules
+
+Rules for code documentation in MQL5 files.
+
+<rule>
+name: mql5_documentation
+description: Documentation requirements and standards for MQL5 code
+
+settings:
+  require_class_docs: true
+  require_function_docs: true
+  doc_style: "Doxygen"
+
+patterns:
+  class_doc: "/\\*\\*\\s*\n\\s*\\*[^*]*\\*/"
+  function_doc: "/\\*\\*\\s*\n\\s*\\*[^*]*\\*/"
+  property_doc: "///.*"
+
+actions:
+  - type: enforce
+    conditions:
+      - pattern: "^\\s*class\\s+\\w+(?!\\s*\\{\\s*$)(?![^{]*\\*/)"
+        message: "Classes must be documented with Doxygen-style comments"
+      
+      - pattern: "^\\s*(?:virtual|static|inline)?\\s*\\w+\\s+\\w+\\s*\\([^)]*\\)\\s*(?:const)?\\s*\\{(?![^{]*\\*/)"
+        message: "Functions must be documented with Doxygen-style comments"
+
+  - type: suggest
+    message: |
+      Documentation requirements:
+      1. All classes must have Doxygen documentation
+      2. All public functions must be documented
+      3. Include @brief description
+      4. Document parameters with @param
+      5. Document return values with @return
+      6. Use /// for single-line property documentation
+      7. Include usage examples where appropriate
+
+examples:
+  - input: |
+      /**
+       * @brief Main trading strategy class
+       * @details Implements breakout trading logic
+       */
+      class CBreakoutStrategy
+      {
+          /**
+           * @brief Executes the trading strategy
+           * @param symbol Current trading symbol
+           * @return true if order placed successfully
+           */
+          bool Execute(string symbol);
+      };
+    output: "Correctly documented class and function"
+
+metadata:
+  priority: high
+  version: 1.0
+</rule> 

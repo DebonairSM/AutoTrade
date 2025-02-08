@@ -1,0 +1,63 @@
+---
+description: MetaTrader 5 Specific Settings
+globs: "*.{mq5,mqh}"
+---
+# MetaTrader 5 Specific Rules
+
+Rules for MetaTrader 5 specific settings and properties.
+
+<rule>
+name: mql5_metatrader
+description: MetaTrader 5 specific configuration and requirements
+
+settings:
+  default_timeframe: "PERIOD_H1"
+  default_symbol: "EURUSD"
+  backtest_period: 6
+  optimization_criteria: 0
+
+patterns:
+  # Property Definitions
+  property_definition: "^\s*#property\s+(\w+)"
+  
+  # Input Variables
+  input_definition: "^\s*input\s+([A-Za-z_]\w*)\s+([A-Za-z_]\w*)(?:\s*=\s*[^;]+)?;"
+  
+  # Indicator Buffers
+  indicator_buffer: "^\s*double\s+([A-Za-z_]\w*)\[\];"
+  set_index_buffer: "^\s*SetIndexBuffer\s*\(\s*\d+\s*,\s*([A-Za-z_]\w*)"
+
+actions:
+  - type: enforce
+    conditions:
+      - pattern: "^(?!#property).*"
+        message: "EA must start with proper #property definitions"
+      
+      - pattern: "input\\s+(?!(?:double|int|string|bool|long|datetime|color)\\s+)"
+        message: "Input variables must have proper type declaration"
+
+  - type: suggest
+    message: |
+      MetaTrader specific requirements:
+      1. Include proper #property definitions
+      2. Declare input parameters with correct types
+      3. Use appropriate timeframe constants
+      4. Follow MetaTrader naming conventions
+      5. Include proper version and description properties
+      6. Set appropriate testing/optimization parameters
+
+examples:
+  - input: |
+      #property copyright "Copyright 2024"
+      #property link      "https://www.yourwebsite.com"
+      #property version   "1.00"
+      #property strict
+      
+      input double StopLoss = 50.0;
+      input ENUM_TIMEFRAMES TimeFrame = PERIOD_H1;
+    output: "Correctly defined MetaTrader properties and inputs"
+
+metadata:
+  priority: high
+  version: 1.0
+</rule> 

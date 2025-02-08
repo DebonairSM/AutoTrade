@@ -1,0 +1,51 @@
+---
+description: MQL5 Code Definitions
+globs: "*.{mq5,mqh}"
+---
+# MQL5 Code Definition Rules
+
+Rules for MQL5 code structure and definitions.
+
+<rule>
+name: mql5_definitions
+description: Patterns for MQL5 code structure and definitions
+
+patterns:
+  # Class Definitions
+  class_definition: "^\s*(?:class|struct)\s+([A-Za-z_]\w*)"
+  class_in_namespace: "^\s*namespace\s+([A-Za-z_]\w*)\s*\{"
+
+  # Function Definitions
+  function_definition: "^\s*(?:(?:virtual|static|inline)\s+)*(?:[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*\s+)?[A-Za-z_]\w*\s*\([^)]*\)\s*(?:const)?\s*(?:;|\{)"
+
+  # Constructors and Destructors
+  constructor_definition: "^\s*([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:;|\{)"
+  destructor_definition: "^\s*~([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:;|\{)"
+
+  # Struct & Enum Definitions
+  struct_definition: "^\s*struct\s+([A-Za-z_]\w*)"
+  enum_definition: "^\s*enum\s+([A-Za-z_]\w*)"
+
+actions:
+  - type: suggest
+    message: |
+      Follow these guidelines for code definitions:
+      1. Use proper class/struct naming with appropriate prefix
+      2. Include necessary documentation for classes and functions
+      3. Follow consistent brace style (Allman)
+      4. Maintain proper indentation (4 spaces)
+
+examples:
+  - input: |
+      class CMyClass
+      {
+          public:
+              CMyClass();
+              ~CMyClass();
+      };
+    output: "Correctly formatted class definition"
+
+metadata:
+  priority: high
+  version: 1.0
+</rule> 

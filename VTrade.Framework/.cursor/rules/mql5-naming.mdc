@@ -1,0 +1,70 @@
+---
+description: MQL5 Naming Conventions
+globs: "*.{mq5,mqh}"
+---
+# MQL5 Naming Convention Rules
+
+Rules for naming conventions in MQL5 code.
+
+<rule>
+name: mql5_naming
+description: Naming conventions and prefix rules for MQL5
+
+patterns:
+  class_name: "^C[A-Z][a-zA-Z0-9]*$"
+  struct_name: "^S[A-Z][a-zA-Z0-9]*$"
+  enum_name: "^E[A-Z][a-zA-Z0-9]*$"
+  interface_name: "^I[A-Z][a-zA-Z0-9]*$"
+  constant_name: "^k[A-Z][a-zA-Z0-9]*$"
+  global_variable: "^g_[a-z][a-zA-Z0-9]*$"
+  member_variable: "^m_[a-z][a-zA-Z0-9]*$"
+
+prefixes:
+  class: "C"
+  struct: "S"
+  enum: "E"
+  interface: "I"
+  constant: "k"
+  global: "g_"
+  member: "m_"
+
+actions:
+  - type: enforce
+    conditions:
+      - pattern: "class\\s+(?!C)[A-Za-z]"
+        message: "Class names must start with 'C' prefix"
+      
+      - pattern: "struct\\s+(?!S)[A-Za-z]"
+        message: "Struct names must start with 'S' prefix"
+        
+      - pattern: "enum\\s+(?!E)[A-Za-z]"
+        message: "Enum names must start with 'E' prefix"
+        
+      - pattern: "^\\s*[A-Z]\\w*\\s+(?!m_)[a-z]\\w*;"
+        message: "Member variables must start with 'm_' prefix"
+
+  - type: suggest
+    message: |
+      Follow these naming conventions:
+      1. Classes: CMyClass
+      2. Structs: SMyStruct
+      3. Enums: EMyEnum
+      4. Interfaces: IMyInterface
+      5. Constants: kMyConstant
+      6. Global variables: g_myVariable
+      7. Member variables: m_myMember
+
+examples:
+  - input: |
+      class CMyTrader
+      {
+          private:
+              double m_lotSize;
+              static double g_spread;
+      };
+    output: "Correctly named class and variables"
+
+metadata:
+  priority: high
+  version: 1.0
+</rule> 
