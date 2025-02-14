@@ -7,7 +7,10 @@
 #property version   "2.01"
 #property strict
 
+// Include core implementation files
 #include "V-2-EA-Breakouts.mqh"
+#include "V-2-EA-MarketData.mqh"
+#include "V-2-EA-Utils.mqh"
 
 // Version tracking
 #define EA_VERSION "1.0.3"
@@ -96,4 +99,33 @@ void OnTick()
     
     // Process strategy
     g_strategy.ProcessStrategy();
+    
+    // Find key levels
+    SKeyLevel strongestLevel;
+    if(g_strategy.FindKeyLevels(strongestLevel))
+    {
+        if(ShowDebugPrints)
+        {
+            string volumeInfo = strongestLevel.volumeConfirmed ? 
+                StringFormat(", Volume Ratio=%.2f", strongestLevel.volumeRatio) : 
+                ", No Volume Confirmation";
+                
+            string touchInfo = StringFormat(
+                "First Touch=%s, Last Touch=%s", 
+                TimeToString(strongestLevel.firstTouch),
+                TimeToString(strongestLevel.lastTouch)
+            );
+                
+            Print("Found key level: ",
+                  "Price=", DoubleToString(strongestLevel.price, _Digits),
+                  ", Strength=", DoubleToString(strongestLevel.strength, 2),
+                  ", Touches=", strongestLevel.touchCount,
+                  strongestLevel.isResistance ? " (Resistance)" : " (Support)",
+                  volumeInfo,
+                  "\n", touchInfo
+            );
+        }
+    }
+    
+    ChartRedraw();
 }

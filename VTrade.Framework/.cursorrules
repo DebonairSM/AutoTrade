@@ -119,3 +119,33 @@ DefaultTimeframe     = PERIOD_H1
 DefaultSymbol        = EURUSD
 BacktestPeriod       = 6
 OptimizationCriteria = 0
+
+[CodingPrinciples]
+; -- Core Principles --
+DRY                  = true    ; Don't Repeat Yourself - Avoid code duplication
+KISS                 = true    ; Keep It Simple, Stupid - Favor simplicity
+YAGNI                = true    ; You Ain't Gonna Need It - Only implement what's necessary
+LawOfDemeter         = true    ; Objects should only talk to their immediate friends
+CompositionOverInheritance = true    ; Prefer composition over inheritance
+
+; -- Design Principles --
+Encapsulation        = true    ; Hide internal state, expose controlled interfaces
+Modularity           = true    ; Design in discrete, cohesive components
+SeparationOfConcerns = true    ; Different functionalities in distinct modules
+CodeReusability      = true    ; Write generalizable, reusable code
+Scalability          = true    ; Design for growth and increased load
+Performance          = true    ; Optimize appropriately, avoid premature optimization
+
+; -- Validation Rules --
+ValidateDRY          = (?s).*?(\b\w+\b)(?:\s*[=;].*?\b\1\b.*?){2,}    ; Detect repeated code patterns
+ValidateComplexity   = ^(?:[^{}]*\{){4,}    ; Detect nested complexity > 3 levels
+ValidateMethodLength = ^.{500,}$    ; Flag methods longer than 500 characters
+ValidateDependencies = ^\s*#include.*$\s*\1    ; Detect duplicate includes
+ValidateInheritance  = (?s)class.*:.*:.*\{    ; Flag multiple inheritance
+
+; -- Metrics --
+MaxMethodLength      = 50      ; Maximum number of lines per method
+MaxClassLength       = 500     ; Maximum number of lines per class
+MaxParameters        = 5       ; Maximum number of method parameters
+MaxInheritanceDepth  = 3      ; Maximum inheritance depth
+MaxCyclomaticComplexity = 10  ; Maximum cyclomatic complexity
