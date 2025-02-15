@@ -333,6 +333,38 @@ public:
     }
     
     /**
+     * @brief Calculate market-specific strength.
+     */
+    double CalculateStrength(const SKeyLevel &level, const STouch &touches[])
+    {
+        return 0.0;  // Base implementation, should be overridden
+    }
+    
+    /**
+     * @brief Validate market-specific level.
+     */
+    bool ValidateLevel(const double price, const double level, ENUM_TIMEFRAMES timeframe)
+    {
+        return IsTouchValid(price, level, m_touchZone);  // Base implementation
+    }
+    
+    /**
+     * @brief Find market-specific key levels.
+     */
+    bool FindKeyLevels(string symbol, SKeyLevel &outStrongestLevel)
+    {
+        return false;  // Base implementation, should be overridden
+    }
+    
+    /**
+     * @brief Get market-specific session factor.
+     */
+    double GetSessionFactor()
+    {
+        return 1.0;  // Base implementation, no session adjustment
+    }
+    
+    /**
      * @brief Detect the market type for a given symbol
      */
     static ENUM_MARKET_TYPE GetMarketType(const string symbol)
@@ -350,6 +382,8 @@ public:
             
         return MARKET_TYPE_UNKNOWN;
     }
+    
+    virtual ~CVSolMarketBase() {}  // Virtual destructor for proper cleanup
 };
 
 //+------------------------------------------------------------------+

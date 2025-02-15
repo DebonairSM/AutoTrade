@@ -419,6 +419,38 @@ public:
         
         return false;
     }
+    
+    /**
+     * @brief Override base class strength calculation for Indices.
+     */
+    double CalculateStrength(const SKeyLevel &level, const STouch &touches[]) override
+    {
+        return CalculateIndicesStrength(level, touches);
+    }
+    
+    /**
+     * @brief Override base class level validation for Indices.
+     */
+    bool ValidateLevel(const double price, const double level, ENUM_TIMEFRAMES timeframe) override
+    {
+        return ValidateIndicesLevel(price, level, timeframe);
+    }
+    
+    /**
+     * @brief Override base class key level detection for Indices.
+     */
+    bool FindKeyLevels(string symbol, SKeyLevel &outStrongestLevel) override
+    {
+        return FindIndicesKeyLevels(symbol, outStrongestLevel);
+    }
+    
+    /**
+     * @brief Override base class session factor for Indices.
+     */
+    double GetSessionFactor() override
+    {
+        return GetMarketHoursFactor();
+    }
 };
 
 // Initialize static members

@@ -17,6 +17,31 @@ OnDeinitFunction      = ^\s*void\s+OnDeinit\s*\([^)]*\)
 OnTesterFunction      = ^\s*int\s+OnTester\s*\([^)]*\)
 OnChartEventFunction  = ^\s*void\s+OnChartEvent\s*\([^)]*\)
 
+; -- MQL5 Trading Functions --
+OrderSendFunction     = ^\s*(?:bool|int)\s+OrderSend\s*\([^)]*\)
+OrderModifyFunction   = ^\s*bool\s+OrderModify\s*\([^)]*\)
+OrderCloseFunction    = ^\s*bool\s+OrderClose\s*\([^)]*\)
+PositionOpenFunction  = ^\s*bool\s+PositionOpen\s*\([^)]*\)
+PositionCloseFunction = ^\s*bool\s+PositionClose\s*\([^)]*\)
+TradeCheckFunction    = ^\s*bool\s+OrderCheck\s*\([^)]*\)
+
+; -- MQL5 Indicator Functions --
+CustomIndicatorFunction = ^\s*double\s+iCustom\s*\([^)]*\)
+MAFunction             = ^\s*double\s+iMA\s*\([^)]*\)
+RSIFunction            = ^\s*double\s+iRSI\s*\([^)]*\)
+StochFunction          = ^\s*double\s+iStochastic\s*\([^)]*\)
+BBandsFunction         = ^\s*double\s+iBands\s*\([^)]*\)
+ADXFunction            = ^\s*double\s+iADX\s*\([^)]*\)
+MACDFunction           = ^\s*double\s+iMACD\s*\([^)]*\)
+
+; -- MQL5 Trading Validation --
+ValidateStopLoss     = ^\s*sl\s*=\s*[^;]+;
+ValidateTakeProfit   = ^\s*tp\s*=\s*[^;]+;
+ValidateLotSize      = ^\s*lots?\s*=\s*[^;]+;
+ValidateSpread       = ^\s*spread\s*=\s*[^;]+;
+ValidateSwap         = ^\s*swap\s*=\s*[^;]+;
+ValidateMargin       = ^\s*margin\s*=\s*[^;]+;
+
 ; -- Constructors and Destructors --
 ConstructorDefinition = ^\s*([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:;|\{)
 DestructorDefinition  = ^\s*~([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:;|\{)
@@ -103,6 +128,15 @@ CheckNullPointers    = true
 CheckArrayBounds     = true
 CheckDivisionByZero  = true
 CheckMemoryLeaks     = true
+; -- MQL5 Specific Error Checking --
+CheckTradeContext    = true    ; Check if trade context is busy
+CheckMarketOpen      = true    ; Verify market is open before trading
+CheckFreeMargin      = true    ; Verify sufficient margin before trades
+CheckStopLevels      = true    ; Validate stop loss and take profit levels
+CheckSpreadLevels    = true    ; Check if spread is within acceptable range
+CheckTradeVolume     = true    ; Verify trade volume is within limits
+CheckTradingHours    = true    ; Verify trading is allowed at current hour
+CheckSymbolTrade     = true    ; Check if symbol trading is enabled
 
 [Optimization]
 InlineSmallFunctions = true
@@ -119,6 +153,25 @@ DefaultTimeframe     = PERIOD_H1
 DefaultSymbol        = EURUSD
 BacktestPeriod       = 6
 OptimizationCriteria = 0
+; -- MQL5 Trading Settings --
+DefaultMagicNumber   = 123456      ; Unique identifier for EA trades
+MaxSpread           = 20           ; Maximum allowed spread in points
+MaxSlippage         = 3            ; Maximum allowed slippage in points
+DefaultLotSize      = 0.1          ; Default trading volume
+RiskPercentage     = 2             ; Risk per trade as percentage of balance
+UseHedging         = false         ; Whether to allow hedging
+UseFixedLots       = true          ; Use fixed lot size vs. dynamic
+MaxPositions       = 10            ; Maximum number of open positions
+MinDistance        = 20            ; Minimum distance for SL/TP in points
+UseBreakEven       = true          ; Enable break-even feature
+BreakEvenPoints    = 20            ; Points needed for break-even
+TrailingStop       = true          ; Enable trailing stop
+TrailingPoints     = 50            ; Points for trailing stop activation
+MaxDailyLoss       = 5             ; Maximum daily loss percentage
+MaxDrawdown        = 20            ; Maximum allowed drawdown percentage
+RequireSpreadCheck = true          ; Enable spread checking
+AllowWeekendTrading = false        ; Allow trading during weekends
+UseNewsFilter      = true          ; Enable news trading filter
 
 [CodingPrinciples]
 ; -- Core Principles --

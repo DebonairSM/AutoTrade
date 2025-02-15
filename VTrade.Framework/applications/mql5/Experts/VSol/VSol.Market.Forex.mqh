@@ -191,7 +191,37 @@ public:
         return 0.8;  // Off-hours
     }
     
-    // ... existing code for other methods ...
+    /**
+     * @brief Override base class strength calculation for Forex.
+     */
+    double CalculateStrength(const SKeyLevel &level, const STouch &touches[]) override
+    {
+        return CalculateForexStrength(level, touches);
+    }
+    
+    /**
+     * @brief Override base class level validation for Forex.
+     */
+    bool ValidateLevel(const double price, const double level, ENUM_TIMEFRAMES timeframe) override
+    {
+        return ValidateForexTouch(price, level, timeframe);
+    }
+    
+    /**
+     * @brief Override base class key level detection for Forex.
+     */
+    bool FindKeyLevels(string symbol, SKeyLevel &outStrongestLevel) override
+    {
+        return FindForexKeyLevels(symbol, outStrongestLevel);
+    }
+    
+    /**
+     * @brief Override base class session factor for Forex.
+     */
+    double GetSessionFactor() override
+    {
+        return GetSessionVolumeFactor();
+    }
 };
 
 // Initialize static members
