@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                              V-2-EA-US500Data.mqh |
+//|                                           VSol.Market.Indices.mqh |
 //|                        US500-Specific Configuration Parameters    |
 //+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
@@ -9,7 +9,7 @@
 //+------------------------------------------------------------------+
 //| US500 Configuration Class                                          |
 //+------------------------------------------------------------------+
-class CV2EAUS500Data
+class CVSolIndicesData
 {
 private:
     static double m_us500TouchZones[];      // Touch zones in points per timeframe
@@ -142,18 +142,18 @@ public:
     // Market hours volume adjustments
     static double GetMarketHoursFactor()
     {
-        int hourET = CV2EAUtils::GetCurrentHourET();
+        int hourET = CVSolUtils::GetCurrentHourET();
         
         // Regular market hours (9:30 AM - 4:00 PM ET)
-        if(CV2EAUtils::IsWithinSession(hourET, 9, 16))
+        if(CVSolUtils::IsWithinSession(hourET, 9, 16))
             return 1.0;
             
         // Pre-market (4:00 AM - 9:30 AM ET)
-        if(CV2EAUtils::IsWithinSession(hourET, 4, 9))
+        if(CVSolUtils::IsWithinSession(hourET, 4, 9))
             return 0.7;
             
         // After-hours (4:00 PM - 8:00 PM ET)
-        if(CV2EAUtils::IsWithinSession(hourET, 16, 20))
+        if(CVSolUtils::IsWithinSession(hourET, 16, 20))
             return 0.7;
             
         // Overnight
@@ -162,10 +162,10 @@ public:
 };
 
 // Initialize static members
-double CV2EAUS500Data::m_us500TouchZones[];
-double CV2EAUS500Data::m_us500BounceMinSizes[];
-int    CV2EAUS500Data::m_us500MinTouches[];
-double CV2EAUS500Data::m_us500MinStrengths[];
-int    CV2EAUS500Data::m_us500Lookbacks[];
-int    CV2EAUS500Data::m_us500MaxBounceDelays[];
-bool   CV2EAUS500Data::m_initialized = false; 
+double CVSolIndicesData::m_us500TouchZones[];
+double CVSolIndicesData::m_us500BounceMinSizes[];
+int    CVSolIndicesData::m_us500MinTouches[];
+double CVSolIndicesData::m_us500MinStrengths[];
+int    CVSolIndicesData::m_us500Lookbacks[];
+int    CVSolIndicesData::m_us500MaxBounceDelays[];
+bool   CVSolIndicesData::m_initialized = false; 

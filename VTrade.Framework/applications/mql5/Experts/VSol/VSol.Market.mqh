@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|                                               V-2-EA-MarketData.mqh |
-//|         Base Market Data Analysis Module for all instruments        |
+//|                                               VSol.Market.mqh      |
+//|         Base Market Data Analysis Module for all instruments       |
 //+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
 #property link      "https://vsol-systems.com"
 #property version   "1.00"
 #property strict
 
-#ifndef __V2_EA_MARKETDATA_MQH__
-#define __V2_EA_MARKETDATA_MQH__
+#ifndef __VSOL_MARKET_MQH__
+#define __VSOL_MARKET_MQH__
 
 //+------------------------------------------------------------------+
 //| Key Level and Touch Structures                                     |
@@ -60,9 +60,82 @@ struct SKeyLevel
 };
 
 //+------------------------------------------------------------------+
+//| Market Type Definitions                                            |
+//+------------------------------------------------------------------+
+enum ENUM_MARKET_TYPE
+{
+    MARKET_TYPE_UNKNOWN = -1,    // Unknown market type
+    MARKET_TYPE_FOREX,           // Forex market
+    MARKET_TYPE_INDEX_US500      // US500/SPX market
+};
+
+//+------------------------------------------------------------------+
+//| Market Category Configuration                                      |
+//+------------------------------------------------------------------+
+struct SMarketConfig
+{
+    double touchZone;        // Touch zone size (pips/points)
+    double bounceMinSize;    // Minimum bounce size
+    double minStrength;      // Minimum level strength
+    int    minTouches;      // Minimum touches required
+    int    lookbackPeriod;  // Analysis lookback period
+    
+    void Reset()
+    {
+        touchZone = 0.0;
+        bounceMinSize = 0.0;
+        minStrength = 0.0;
+        minTouches = 0;
+        lookbackPeriod = 0;
+    }
+};
+
+//+------------------------------------------------------------------+
+//| Market Configuration Manager                                       |
+//+------------------------------------------------------------------+
+class CVSolMarketConfig
+{
+private:
+    ENUM_MARKET_TYPE m_marketType;  // Current market type
+    string          m_symbol;       // Current symbol
+    SMarketConfig   m_config;       // Market configuration
+    
+public:
+    void Configure(const string symbol, const ENUM_MARKET_TYPE type,
+                  const double touchZone, const double bounceSize,
+                  const double minStrength, const int minTouches,
+                  const int lookback)
+    {
+        m_symbol = symbol;
+        m_marketType = type;
+        
+        m_config.Reset();
+        m_config.touchZone = touchZone;
+        m_config.bounceMinSize = bounceSize;
+        m_config.minStrength = minStrength;
+        m_config.minTouches = minTouches;
+        m_config.lookbackPeriod = lookback;
+    }
+    
+    ENUM_MARKET_TYPE GetMarketType() const { return m_marketType; }
+    string GetSymbol() const { return m_symbol; }
+    
+    double GetTouchZone() const { return m_config.touchZone; }
+    double GetBounceMinSize() const { return m_config.bounceMinSize; }
+    double GetMinStrength() const { return m_config.minStrength; }
+    int GetMinTouches() const { return m_config.minTouches; }
+    int GetLookbackPeriod() const { return m_config.lookbackPeriod; }
+    
+    string GetUnits() const
+    {
+        return (m_marketType == MARKET_TYPE_FOREX) ? "pips" : "points";
+    }
+};
+
+//+------------------------------------------------------------------+
 //| Base Market Data Analysis Class                                    |
 //+------------------------------------------------------------------+
-class CV2EAMarketDataBase
+class CVSolMarketBase
 {
 protected:
     //--- Common Settings
@@ -258,21 +331,40 @@ public:
         
         return touchCount >= m_minTouches;
     }
+    
+    /**
+     * @brief Detect the market type for a given symbol
+     */
+    static ENUM_MARKET_TYPE GetMarketType(const string symbol)
+    {
+        // Get the symbol's trade calculation mode
+        ENUM_SYMBOL_CALC_MODE calc_mode = (ENUM_SYMBOL_CALC_MODE)SymbolInfoInteger(symbol, SYMBOL_TRADE_CALC_MODE);
+        
+        // Check for Forex
+        if(calc_mode == SYMBOL_CALC_MODE_FOREX)
+            return MARKET_TYPE_FOREX;
+            
+        // Check for US500/SPX
+        if(StringFind(symbol, "US500") >= 0 || StringFind(symbol, "SPX") >= 0)
+            return MARKET_TYPE_INDEX_US500;
+            
+        return MARKET_TYPE_UNKNOWN;
+    }
 };
 
 //+------------------------------------------------------------------+
 //| Initialize static members                                          |
 //+------------------------------------------------------------------+
-int      CV2EAMarketDataBase::m_lookbackPeriod;
-double   CV2EAMarketDataBase::m_minStrength;
-double   CV2EAMarketDataBase::m_touchZone;
-int      CV2EAMarketDataBase::m_minTouches;
-double   CV2EAMarketDataBase::m_touchWeight;
-double   CV2EAMarketDataBase::m_recencyWeight;
-double   CV2EAMarketDataBase::m_durationWeight;
-int      CV2EAMarketDataBase::m_minDurationHours;
-double   CV2EAMarketDataBase::m_volumeMultiplier;
-int      CV2EAMarketDataBase::m_volumeType;
-bool     CV2EAMarketDataBase::m_showDebugPrints;
+int      CVSolMarketBase::m_lookbackPeriod;
+double   CVSolMarketBase::m_minStrength;
+double   CVSolMarketBase::m_touchZone;
+int      CVSolMarketBase::m_minTouches;
+double   CVSolMarketBase::m_touchWeight;
+double   CVSolMarketBase::m_recencyWeight;
+double   CVSolMarketBase::m_durationWeight;
+int      CVSolMarketBase::m_minDurationHours;
+double   CVSolMarketBase::m_volumeMultiplier;
+int      CVSolMarketBase::m_volumeType;
+bool     CVSolMarketBase::m_showDebugPrints;
 
-#endif // __V2_EA_MARKETDATA_MQH__
+#endif // __VSOL_MARKET_MQH__

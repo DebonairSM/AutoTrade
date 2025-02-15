@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                              V-2-EA-Breakouts.mqh |
+//|                                              VSol.Strategy.mqh     |
 //|                                    Key Level Detection Implementation|
 //+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
@@ -108,8 +108,8 @@ focused on:
 
 #include <Trade\Trade.mqh>
 #include <VErrorDesc.mqh>  // Add this include for error descriptions
-#include "V-2-EA-MarketData.mqh"  // Add this include for market data functions
-#include "V-2-EA-Utils.mqh"  // Add this include for utilities
+#include "VSol.Market.mqh"  // Add this include for market data functions
+#include "VSol.Utils.mqh"  // Add this include for utilities
 
 //+------------------------------------------------------------------+
 //| Constants                                                          |
@@ -197,7 +197,7 @@ struct STouchQuality {
 //+------------------------------------------------------------------+
 //| Key Level Detection Class                                          |
 //+------------------------------------------------------------------+
-class CV2EABreakouts : public CV2EAMarketDataBase
+class CVSolStrategy : public CVSolMarketBase
 {
 private:
     //--- Volume Settings
@@ -274,42 +274,42 @@ private:
 
 public:
     //--- Constructor and destructor
-    CV2EABreakouts(void) : m_initialized(false),
+    CVSolStrategy(void) : m_initialized(false),
                            m_keyLevelCount(0),
                            m_lastKeyLevelUpdate(0),
                            m_maxBounceDelay(8),
                            m_useVolumeFilter(true)  
     {
         // Initialize each array with robust error checking
-        if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_currentKeyLevels"))
+        if(!CVSolUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "CVSolStrategy::Constructor - m_currentKeyLevels"))
         {
-            CV2EAUtils::LogError("Initializing m_currentKeyLevels failed");
+            CVSolUtils::LogError("Initializing m_currentKeyLevels failed");
             return;
         }
         
-        if(!CV2EAUtils::SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_chartLines"))
+        if(!CVSolUtils::SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, "CVSolStrategy::Constructor - m_chartLines"))
         {
-            CV2EAUtils::LogError("Initializing m_chartLines failed");
+            CVSolUtils::LogError("Initializing m_chartLines failed");
             return;
         }
         
-        if(!CV2EAUtils::SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_recentBreaks") ||
-           !CV2EAUtils::SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_recentBreakTimes"))
+        if(!CVSolUtils::SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, "CVSolStrategy::Constructor - m_recentBreaks") ||
+           !CVSolUtils::SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, "CVSolStrategy::Constructor - m_recentBreakTimes"))
         {
-            CV2EAUtils::LogError("Initializing recent breaks arrays failed");
+            CVSolUtils::LogError("Initializing recent breaks arrays failed");
             return;
         }
         
-        if(!CV2EAUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_lastAlerts"))
+        if(!CVSolUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "CVSolStrategy::Constructor - m_lastAlerts"))
         {
-            CV2EAUtils::LogError("Initializing m_lastAlerts failed");
+            CVSolUtils::LogError("Initializing m_lastAlerts failed");
             return;
         }
         
         m_state.Reset();
     }
     
-    ~CV2EABreakouts(void)
+    ~CVSolStrategy(void)
     {
         // Clear all chart objects created by this EA
         for(int i = 0; i < ArraySize(m_chartLines); i++)
@@ -324,12 +324,12 @@ public:
         // Validate inputs
         if(minStrength <= 0.0 || minStrength > 1.0)
         {
-            CV2EAUtils::LogError("Invalid minStrength", minStrength);
+            CVSolUtils::LogError("Invalid minStrength", minStrength);
             minStrength = 0.55;
         }
         if(minTouches < 1)
         {
-            CV2EAUtils::LogError("Invalid minTouches", minTouches);
+            CVSolUtils::LogError("Invalid minTouches", minTouches);
             minTouches = 2;
         }
         
@@ -352,7 +352,7 @@ public:
                 case PERIOD_M1:  touchZone = 2.0;  break;  // 2 points
                 default:         touchZone = 5.0;  break;  // Default 5 points
             }
-            CV2EAUtils::LogInfo("Adjusted touch zone for US500", DoubleToString(touchZone, 5));
+            CVSolUtils::LogInfo("Adjusted touch zone for US500", DoubleToString(touchZone, 5));
         }
         else
         {
@@ -374,12 +374,12 @@ public:
                     case PERIOD_M1:  touchZone = 0.0003; break; // 3 pips
                     default:         touchZone = 0.0005;        // Default 5 pips
                 }
-                CV2EAUtils::LogInfo("Using default forex touch zone", DoubleToString(touchZone, 5), 
+                CVSolUtils::LogInfo("Using default forex touch zone", DoubleToString(touchZone, 5), 
                     StringFormat(" (%.1f pips)", touchZone/_Point));
             }
             else
             {
-                CV2EAUtils::LogInfo("Using provided forex touch zone", DoubleToString(touchZone, 5), 
+                CVSolUtils::LogInfo("Using provided forex touch zone", DoubleToString(touchZone, 5), 
                     StringFormat(" (%.1f pips)", touchZone/_Point));
             }
         }
@@ -440,28 +440,28 @@ public:
         }
         
         // Reinitialize arrays with robust error checks
-        if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_currentKeyLevels"))
+        if(!CVSolUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "CVSolStrategy::Init - m_currentKeyLevels"))
         {
-            CV2EAUtils::LogError("Failed to resize key levels array");
+            CVSolUtils::LogError("Failed to resize key levels array");
             return false;
         }
         
-        if(!CV2EAUtils::SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_chartLines"))
+        if(!CVSolUtils::SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, "CVSolStrategy::Init - m_chartLines"))
         {
-            CV2EAUtils::LogError("Failed to resize chart lines array");
+            CVSolUtils::LogError("Failed to resize chart lines array");
             return false;
         }
         
-        if(!CV2EAUtils::SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_recentBreaks") ||
-           !CV2EAUtils::SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_recentBreakTimes"))
+        if(!CVSolUtils::SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, "CVSolStrategy::Init - m_recentBreaks") ||
+           !CVSolUtils::SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, "CVSolStrategy::Init - m_recentBreakTimes"))
         {
-            CV2EAUtils::LogError("Failed to resize recent breaks arrays");
+            CVSolUtils::LogError("Failed to resize recent breaks arrays");
             return false;
         }
         
-        if(!CV2EAUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_lastAlerts"))
+        if(!CVSolUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "CVSolStrategy::Init - m_lastAlerts"))
         {
-            CV2EAUtils::LogError("Failed to resize last alerts array");
+            CVSolUtils::LogError("Failed to resize last alerts array");
             return false;
         }
         
@@ -474,17 +474,17 @@ public:
         double symbolPoint = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
         if(symbolPoint <= 0)
         {
-            CV2EAUtils::LogError("SymbolInfoDouble failed, checking _Point...");
+            CVSolUtils::LogError("SymbolInfoDouble failed, checking _Point...");
             symbolPoint = _Point;
             if(symbolPoint <= 0)
             {
-                CV2EAUtils::LogError("All point value retrievals failed. Using fallback value.");
+                CVSolUtils::LogError("All point value retrievals failed. Using fallback value.");
                 symbolPoint = 0.0001;
             }
         }
         
         m_initialized = true;
-        CV2EAUtils::LogInfo("Configuration complete for ", _Symbol);
+        CVSolUtils::LogInfo("Configuration complete for ", _Symbol);
         return true;
     }
     
@@ -493,7 +493,7 @@ public:
     {
         if(!m_initialized)
         {
-            CV2EAUtils::LogError("Strategy not initialized");
+            CVSolUtils::LogError("Strategy not initialized");
             return;
         }
         
@@ -522,7 +522,7 @@ public:
         else if(m_state.keyLevelFound && !IsKeyLevelValid(m_state.activeKeyLevel))
         {
             // If we had a key level but can't find it anymore, reset state
-            CV2EAUtils::LogInfo("Previous key level no longer valid, resetting state");
+            CVSolUtils::LogInfo("Previous key level no longer valid, resetting state");
             m_state.Reset();
         }
         
@@ -602,7 +602,7 @@ public:
     {
         string timeStr = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES);
         
-        CV2EAUtils::DebugPrint(StringFormat(
+        CVSolUtils::DebugPrint(StringFormat(
             "\n📊 HOURLY LEVEL DETECTION REPORT - %s 📊\n" +
             "================================================\n" +
             "SUMMARY STATISTICS:\n" +
@@ -641,7 +641,7 @@ public:
     {
         if(!m_initialized)
         {
-            CV2EAUtils::LogError("Strategy not initialized");
+            CVSolUtils::LogError("Strategy not initialized");
             return false;
         }
             
@@ -662,7 +662,7 @@ public:
         long availableBars = SeriesInfoInteger(_Symbol, Period(), SERIES_BARS_COUNT);
         
         // Add debug output for bars availability
-        CV2EAUtils::DebugPrint(StringFormat("Available bars for %s: %d", EnumToString(Period()), availableBars));
+        CVSolUtils::DebugPrint(StringFormat("Available bars for %s: %d", EnumToString(Period()), availableBars));
         
         // Adjust minimum bars requirement based on timeframe
         int minRequiredBars;
@@ -677,12 +677,12 @@ public:
         long barsToUse = MathMin((long)m_lookbackPeriod, availableBars - 5); // Leave room for swing detection
         
         // Add debug output for bars calculation
-        CV2EAUtils::DebugPrint(StringFormat("Bars to use for %s: %d (minimum required: %d)", 
+        CVSolUtils::DebugPrint(StringFormat("Bars to use for %s: %d (minimum required: %d)", 
             EnumToString(Period()), barsToUse, minRequiredBars));
         
         if(barsToUse < minRequiredBars)
         {
-            CV2EAUtils::LogError(StringFormat("Insufficient bars available: %d (needed at least %d for %s timeframe)", 
+            CVSolUtils::LogError(StringFormat("Insufficient bars available: %d (needed at least %d for %s timeframe)", 
                 (int)availableBars, minRequiredBars, EnumToString(Period())));
             return false;
         }
@@ -694,13 +694,13 @@ public:
            CopyTime(_Symbol, Period(), 0, (int)barsToUse, times) <= 0 ||
            CopyTickVolume(_Symbol, Period(), 0, (int)barsToUse, volumes) <= 0)
         {
-            CV2EAUtils::LogError(StringFormat("Failed to copy price/volume data. Available bars: %d, Requested: %d, Error: %d", 
+            CVSolUtils::LogError(StringFormat("Failed to copy price/volume data. Available bars: %d, Requested: %d, Error: %d", 
                 (int)availableBars, (int)barsToUse, GetLastError()));
             return false;
         }
         
         // Add debug output for data copy success
-        CV2EAUtils::DebugPrint(StringFormat("Successfully copied data for %s timeframe. Processing %d bars for key levels", 
+        CVSolUtils::DebugPrint(StringFormat("Successfully copied data for %s timeframe. Processing %d bars for key levels", 
             EnumToString(Period()), barsToUse));
         
         // Reset key levels array
@@ -721,7 +721,7 @@ public:
             m_hourlyStats.Reset();
             lastStatReset = currentHour;
             
-            CV2EAUtils::LogInfo("Reset hourly stats for new hour");
+            CVSolUtils::LogInfo("Reset hourly stats for new hour");
         }
         
         // Find swing highs (resistance levels)
@@ -760,7 +760,7 @@ public:
                         
                         if(m_showDebugPrints)
                         {
-                            CV2EAUtils::LogInfo(StringFormat(
+                            CVSolUtils::LogInfo(StringFormat(
                                 "Volume bonus applied to %s level %.5f:\n" +
                                 "Original strength: %.4f\n" +
                                 "Volume bonus: +%.1f%%\n" +
@@ -834,7 +834,7 @@ public:
                         
                         if(m_showDebugPrints)
                         {
-                            CV2EAUtils::LogInfo(StringFormat(
+                            CVSolUtils::LogInfo(StringFormat(
                                 "Volume bonus applied to %s level %.5f:\n" +
                                 "Original strength: %.4f\n" +
                                 "Volume bonus: +%.1f%%\n" +
@@ -904,7 +904,7 @@ public:
         {
             if(!ObjectDelete(0, m_chartLines[i].name))
             {
-                CV2EAUtils::LogError(StringFormat("Failed to delete line %s", m_chartLines[i].name));
+                CVSolUtils::LogError(StringFormat("Failed to delete line %s", m_chartLines[i].name));
             }
         }
         
@@ -916,7 +916,7 @@ public:
         ChartRedraw(0);
         
         if(m_showDebugPrints)
-            CV2EAUtils::LogInfo("Cleared all chart objects");
+            CVSolUtils::LogInfo("Cleared all chart objects");
     }
 
     // Test-specific methods
@@ -1200,7 +1200,7 @@ private:
             
             if(m_showDebugPrints)
             {
-                CV2EAUtils::LogInfo(StringFormat(
+                CVSolUtils::LogInfo(StringFormat(
                     "Found nearby level: %.5f (%.1f pips away)",
                     m_currentKeyLevels[nearestIdx].price,
                     minDistance / _Point
@@ -1243,7 +1243,7 @@ private:
         // Debug info
         if(m_showDebugPrints)
         {
-            CV2EAUtils::LogInfo(StringFormat(
+            CVSolUtils::LogInfo(StringFormat(
                 "\n=== TOUCH DETECTION FOR LEVEL %.5f ===\n" +
                 "Type: %s\n" +
                 "Touch Zone: %.5f (%d pips)\n" +
@@ -1338,7 +1338,7 @@ private:
                         
                         if(m_showDebugPrints)
                         {
-                            CV2EAUtils::LogInfo(StringFormat(
+                            CVSolUtils::LogInfo(StringFormat(
                                 "Touch %d at %.5f (%.1f pips from level) - Bounce Size: %.1f pips, Bounce Bar: %d, Bounce Volume: %.2f",
                                 touches,
                                 currentPrice,
@@ -1368,7 +1368,7 @@ private:
             
             if(m_showDebugPrints)
             {
-                CV2EAUtils::LogInfo(StringFormat(
+                CVSolUtils::LogInfo(StringFormat(
                     "=== TOUCH QUALITY SUMMARY ===\n" +
                     "Total Touches: %d\n" +
                     "Avg Bounce: %.1f pips\n" +
@@ -1481,7 +1481,7 @@ private:
         // Debug output for strength calculation
         if(m_showDebugPrints)
         {
-            CV2EAUtils::LogInfo(StringFormat(
+            CVSolUtils::LogInfo(StringFormat(
                 "\n=== STRENGTH CALCULATION FOR LEVEL %.5f ===\n" +
                 "Base Strength (from %d touches): %.4f\n" +
                 "Recency Modifier: %.2f%%\n" +
@@ -1517,7 +1517,7 @@ private:
         {
             if(m_showDebugPrints)
             {
-                CV2EAUtils::LogError(StringFormat(
+                CVSolUtils::LogError(StringFormat(
                     "Invalid level rejected: Price=%.5f, Touches=%d, Strength=%.4f",
                     level.price,
                     level.touchCount,
@@ -1531,9 +1531,9 @@ private:
         if(m_keyLevelCount >= ArraySize(m_currentKeyLevels))
         {
             int newSize = MathMax(10, ArraySize(m_currentKeyLevels) * 2);
-            if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, newSize, "CV2EABreakouts::AddKeyLevel"))
+            if(!CVSolUtils::SafeResizeArray(m_currentKeyLevels, newSize, "CVSolStrategy::AddKeyLevel"))
             {
-                CV2EAUtils::LogError("Failed to resize key levels array");
+                CVSolUtils::LogError("Failed to resize key levels array");
                 return;
             }
         }
@@ -1576,7 +1576,7 @@ private:
             // Calculate actual duration in hours
             double durationHours = (double)(level.lastTouch - level.firstTouch) / 3600.0;
             
-            CV2EAUtils::LogInfo(StringFormat(
+            CVSolUtils::LogInfo(StringFormat(
                 "Added %s level at %.5f\n" +
                 "   Strength: %.4f (%s)\n" +
                 "   Touches: %d\n" +
@@ -1629,10 +1629,10 @@ private:
         {
             if(m_currentKeyLevels[i].isResistance)
             {
-                if(!CV2EAUtils::SafeResizeArray(resistanceLevels, resistanceCount + 1, "CV2EABreakouts::RemoveWeakestLevels - resistanceLevels") ||
-                   !CV2EAUtils::SafeResizeArray(resistanceStrengths, resistanceCount + 1, "CV2EABreakouts::RemoveWeakestLevels - resistanceStrengths"))
+                if(!CVSolUtils::SafeResizeArray(resistanceLevels, resistanceCount + 1, "CVSolStrategy::RemoveWeakestLevels - resistanceLevels") ||
+                   !CVSolUtils::SafeResizeArray(resistanceStrengths, resistanceCount + 1, "CVSolStrategy::RemoveWeakestLevels - resistanceStrengths"))
                 {
-                    CV2EAUtils::LogError("Failed to resize resistance arrays");
+                    CVSolUtils::LogError("Failed to resize resistance arrays");
                     return;
                 }
                 resistanceLevels[resistanceCount] = m_currentKeyLevels[i];
@@ -1641,10 +1641,10 @@ private:
             }
             else
             {
-                if(!CV2EAUtils::SafeResizeArray(supportLevels, supportCount + 1, "CV2EABreakouts::RemoveWeakestLevels - supportLevels") ||
-                   !CV2EAUtils::SafeResizeArray(supportStrengths, supportCount + 1, "CV2EABreakouts::RemoveWeakestLevels - supportStrengths"))
+                if(!CVSolUtils::SafeResizeArray(supportLevels, supportCount + 1, "CVSolStrategy::RemoveWeakestLevels - supportLevels") ||
+                   !CVSolUtils::SafeResizeArray(supportStrengths, supportCount + 1, "CVSolStrategy::RemoveWeakestLevels - supportStrengths"))
                 {
-                    CV2EAUtils::LogError("Failed to resize support arrays");
+                    CVSolUtils::LogError("Failed to resize support arrays");
                     return;
                 }
                 supportLevels[supportCount] = m_currentKeyLevels[i];
@@ -1655,22 +1655,22 @@ private:
         
         // Sort levels by strength (descending)
         if(resistanceCount > 1)
-            CV2EAUtils::QuickSort(resistanceLevels, 0, resistanceCount - 1, resistanceStrengths);
+            CVSolUtils::QuickSort(resistanceLevels, 0, resistanceCount - 1, resistanceStrengths);
         if(supportCount > 1)
-            CV2EAUtils::QuickSort(supportLevels, 0, supportCount - 1, supportStrengths);
+            CVSolUtils::QuickSort(supportLevels, 0, supportCount - 1, supportStrengths);
         
         m_keyLevelCount = 0;
         
         // Resize arrays to keep only strongest levels
-        if(!CV2EAUtils::SafeResizeArray(resistanceLevels, MathMin(maxPerType, resistanceCount), "CV2EABreakouts::RemoveWeakestLevels - resistanceLevels"))
+        if(!CVSolUtils::SafeResizeArray(resistanceLevels, MathMin(maxPerType, resistanceCount), "CVSolStrategy::RemoveWeakestLevels - resistanceLevels"))
         {
-            CV2EAUtils::LogError("Failed to resize resistance levels array to final size");
+            CVSolUtils::LogError("Failed to resize resistance levels array to final size");
             return;
         }
         
-        if(!CV2EAUtils::SafeResizeArray(supportLevels, MathMin(maxPerType, supportCount), "CV2EABreakouts::RemoveWeakestLevels - supportLevels"))
+        if(!CVSolUtils::SafeResizeArray(supportLevels, MathMin(maxPerType, supportCount), "CVSolStrategy::RemoveWeakestLevels - supportLevels"))
         {
-            CV2EAUtils::LogError("Failed to resize support levels array to final size");
+            CVSolUtils::LogError("Failed to resize support levels array to final size");
             return;
         }
         
@@ -1680,7 +1680,7 @@ private:
         for(int i = 0; i < MathMin(maxPerType, supportCount); i++)
             m_currentKeyLevels[m_keyLevelCount++] = supportLevels[i];
         
-        CV2EAUtils::LogInfo(StringFormat("Cleaned up levels. Kept %d resistance and %d support levels.",
+        CVSolUtils::LogInfo(StringFormat("Cleaned up levels. Kept %d resistance and %d support levels.",
               IntegerToString(MathMin(maxPerType, resistanceCount)),
               IntegerToString(MathMin(maxPerType, supportCount))));
     }
@@ -1695,7 +1695,7 @@ private:
         string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
         
-        CV2EAUtils::LogInfo(StringFormat("[%s] [%.5f] %s", timestamp, currentPrice, message));
+        CVSolUtils::LogInfo(StringFormat("[%s] [%.5f] %s", timestamp, currentPrice, message));
     }
 
     void PrintKeyLevelsReport()
@@ -1705,7 +1705,7 @@ private:
         string timeStr = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES);
         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
         
-        CV2EAUtils::DebugPrint(StringFormat("=== KEY LEVELS REPORT [%s] ===\nPrice: %.5f", 
+        CVSolUtils::DebugPrint(StringFormat("=== KEY LEVELS REPORT [%s] ===\nPrice: %.5f", 
             timeStr, currentPrice));
         
         // Create arrays to store and sort levels
@@ -1753,12 +1753,12 @@ private:
         }
         
         // Print header without timestamp in each line
-        CV2EAUtils::DebugPrint(StringFormat("=== KEY LEVELS REPORT [%s] ===\nPrice: %.5f", timeStr, currentPrice));
+        CVSolUtils::DebugPrint(StringFormat("=== KEY LEVELS REPORT [%s] ===\nPrice: %.5f", timeStr, currentPrice));
         
         // Print Support Levels
         if(supportCount > 0)
         {
-            CV2EAUtils::DebugPrint("\nSUPPORT:");
+            CVSolUtils::DebugPrint("\nSUPPORT:");
             for(int i = 0; i < supportCount; i++)
             {
                 double distance = MathAbs(currentPrice - supportLevels[i].price);
@@ -1766,7 +1766,7 @@ private:
                 string arrow = (currentPrice > supportLevels[i].price) ? "↓" : " ";
                 string distanceStr = StringFormat("%d pips", (int)(distance / _Point));
                 
-                CV2EAUtils::DebugPrint(StringFormat("%s %.5f (%s) | S:%.2f T:%d %s",
+                CVSolUtils::DebugPrint(StringFormat("%s %.5f (%s) | S:%.2f T:%d %s",
                     arrow,
                     supportLevels[i].price,
                     distanceStr,
@@ -1779,7 +1779,7 @@ private:
         // Print Resistance Levels
         if(resistanceCount > 0)
         {
-            CV2EAUtils::DebugPrint("\nRESISTANCE:");
+            CVSolUtils::DebugPrint("\nRESISTANCE:");
             for(int i = 0; i < resistanceCount; i++)
             {
                 double distance = MathAbs(currentPrice - resistanceLevels[i].price);
@@ -1787,7 +1787,7 @@ private:
                 string arrow = (currentPrice < resistanceLevels[i].price) ? "↑" : " ";
                 string distanceStr = StringFormat("%d pips", (int)(distance / _Point));
                 
-                CV2EAUtils::DebugPrint(StringFormat("%s %.5f (%s) | S:%.2f T:%d %s",
+                CVSolUtils::DebugPrint(StringFormat("%s %.5f (%s) | S:%.2f T:%d %s",
                     arrow,
                     resistanceLevels[i].price,
                     distanceStr,
@@ -1800,10 +1800,10 @@ private:
         // Print Recent Breaks if any (limit to last 3)
         if(m_recentBreakCount > 0)
         {
-            CV2EAUtils::DebugPrint("\nRECENT BREAKS:");
+            CVSolUtils::DebugPrint("\nRECENT BREAKS:");
             for(int i = MathMax(0, m_recentBreakCount - 3); i < m_recentBreakCount; i++)
             {
-                CV2EAUtils::DebugPrint(StringFormat("%.5f @ %s",
+                CVSolUtils::DebugPrint(StringFormat("%.5f @ %s",
                     m_recentBreaks[i],
                     TimeToString(m_recentBreakTimes[i], TIME_MINUTES)));
             }
@@ -1818,7 +1818,7 @@ private:
         datetime currentTime = TimeCurrent();
         if(currentTime - m_systemHealth.lastUpdate < 3600) return; // Only update hourly
         
-        CV2EAUtils::LogInfo(StringFormat(
+        CVSolUtils::LogInfo(StringFormat(
             "\n=== SYSTEM HEALTH REPORT ===\n" +
             "Detection Rate: %.1f%%\n" +
             "Noise Ratio: %.1f%%\n" +
@@ -1860,7 +1860,7 @@ private:
         // Only alert if level has some proven success
         if(m_levelPerformance.successRate < 0.30) return;
         
-        CV2EAUtils::LogInfo(StringFormat(
+        CVSolUtils::LogInfo(StringFormat(
             "\n🔔 TRADE SETUP ALERT\n" +
             "Price approaching %s @ %.5f\n" +
             "Distance: %.1f pips\n" +
@@ -1920,7 +1920,7 @@ private:
         // Delete all existing lines first on timeframe change
         if(timeframeChanged)
         {
-            CV2EAUtils::LogInfo(StringFormat("Timeframe changed from %s to %s - Clearing all lines", 
+            CVSolUtils::LogInfo(StringFormat("Timeframe changed from %s to %s - Clearing all lines", 
                 EnumToString(lastTimeframe), EnumToString(currentTimeframe)));
             
             // Delete all existing chart objects with our prefix
@@ -1938,7 +1938,7 @@ private:
             m_chartLines[i].isActive = false;
         
         // Debug print for line updates
-        CV2EAUtils::LogInfo(StringFormat("Updating chart lines. Key level count: %d", m_keyLevelCount));
+        CVSolUtils::LogInfo(StringFormat("Updating chart lines. Key level count: %d", m_keyLevelCount));
         
         // Update lines for current key levels
         for(int i = 0; i < m_keyLevelCount; i++)
@@ -2001,11 +2001,11 @@ private:
                     
                     // Update line properties
                     if(!ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor))
-                        CV2EAUtils::LogError(StringFormat("Failed to update color for line %s", lineName));
+                        CVSolUtils::LogError(StringFormat("Failed to update color for line %s", lineName));
                     if(!ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle))
-                        CV2EAUtils::LogError(StringFormat("Failed to update style for line %s", lineName));
+                        CVSolUtils::LogError(StringFormat("Failed to update style for line %s", lineName));
                     if(!ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth))
-                        CV2EAUtils::LogError(StringFormat("Failed to update width for line %s", lineName));
+                        CVSolUtils::LogError(StringFormat("Failed to update width for line %s", lineName));
                     
                     // Update tooltip with more information
                     string volumeInfo = m_currentKeyLevels[i].volumeConfirmed ? 
@@ -2032,9 +2032,9 @@ private:
             if(!found)
             {
                 int size = ArraySize(m_chartLines);
-                if(!CV2EAUtils::SafeResizeArray(m_chartLines, size + 1, "CV2EABreakouts::UpdateChartLines - m_chartLines"))
+                if(!CVSolUtils::SafeResizeArray(m_chartLines, size + 1, "CVSolStrategy::UpdateChartLines - m_chartLines"))
                 {
-                    CV2EAUtils::LogError("Failed to resize chart lines array");
+                    CVSolUtils::LogError("Failed to resize chart lines array");
                     continue;
                 }
                 
@@ -2083,18 +2083,18 @@ private:
                             m_currentKeyLevels[i].price,
                             EnumToString(currentTimeframe));
                         
-                        CV2EAUtils::LogInfo(StringFormat("Attempting to create label: %s", labelName));
+                        CVSolUtils::LogInfo(StringFormat("Attempting to create label: %s", labelName));
                         
                         // Get chart dimensions
                         long chartWidth = 0, chartHeight = 0;
                         if(!ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0, chartWidth) ||
                            !ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0, chartHeight))
                         {
-                            CV2EAUtils::LogError(StringFormat("Failed to get chart dimensions. Error: %d", GetLastError()));
+                            CVSolUtils::LogError(StringFormat("Failed to get chart dimensions. Error: %d", GetLastError()));
                         }
                         else
                         {
-                            CV2EAUtils::LogInfo(StringFormat("Chart dimensions: %dx%d pixels", chartWidth, chartHeight));
+                            CVSolUtils::LogInfo(StringFormat("Chart dimensions: %dx%d pixels", chartWidth, chartHeight));
                         }
                         
                         // Get first visible bar time
@@ -2102,13 +2102,13 @@ private:
                         int firstVisibleBar = (int)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR);
                         if(firstVisibleBar <= 0)
                         {
-                            CV2EAUtils::LogError(StringFormat("Failed to get first visible bar. Error: %d", GetLastError()));
+                            CVSolUtils::LogError(StringFormat("Failed to get first visible bar. Error: %d", GetLastError()));
                             firstVisibleTime = TimeCurrent();
                         }
                         else
                         {
                             firstVisibleTime = iTime(_Symbol, Period(), firstVisibleBar);
-                            CV2EAUtils::LogInfo(StringFormat("First visible bar: %d, Time: %s", 
+                            CVSolUtils::LogInfo(StringFormat("First visible bar: %d, Time: %s", 
                                 firstVisibleBar, TimeToString(firstVisibleTime)));
                         }
                         
@@ -2133,30 +2133,30 @@ private:
                             // Store label name for cleanup
                             m_chartLines[size].labelName = labelName;
                             
-                            CV2EAUtils::LogInfo(StringFormat("Successfully created label %s at price %.5f with text '%s'", 
+                            CVSolUtils::LogInfo(StringFormat("Successfully created label %s at price %.5f with text '%s'", 
                                 labelName, m_currentKeyLevels[i].price, labelText));
                         }
                         else
                         {
                             int error = GetLastError();
-                            CV2EAUtils::LogError(StringFormat("Failed to create label %s. Error: %d - %s", 
+                            CVSolUtils::LogError(StringFormat("Failed to create label %s. Error: %d - %s", 
                                 labelName, error, ErrorDescription(error)));
                         }
                     }
                     
-                    CV2EAUtils::LogInfo(StringFormat("Created new line %s at %.5f", lineName, m_currentKeyLevels[i].price));
+                    CVSolUtils::LogInfo(StringFormat("Created new line %s at %.5f", lineName, m_currentKeyLevels[i].price));
                 }
                 else
                 {
                     int error = GetLastError();
-                    CV2EAUtils::LogError(StringFormat("Failed to create line %s. Error: %d", lineName, error));
+                    CVSolUtils::LogError(StringFormat("Failed to create line %s. Error: %d", lineName, error));
                 }
             }
         }
         
         m_lastChartUpdate = currentTime;
         ChartRedraw(0);  // Force chart redraw
-        CV2EAUtils::LogInfo("Chart lines updated and redrawn");
+        CVSolUtils::LogInfo("Chart lines updated and redrawn");
     }
     
     void ClearInactiveChartLines()
@@ -2178,7 +2178,7 @@ private:
                 {
                     int error = GetLastError();
                     if(error != ERR_OBJECT_DOES_NOT_EXIST)
-                        CV2EAUtils::LogError(StringFormat("Failed to delete line %s. Error: %d", m_chartLines[i].name, error));
+                        CVSolUtils::LogError(StringFormat("Failed to delete line %s. Error: %d", m_chartLines[i].name, error));
                 }
                 
                 // Delete associated label if it exists
@@ -2188,7 +2188,7 @@ private:
                     {
                         int error = GetLastError();
                         if(error != ERR_OBJECT_DOES_NOT_EXIST)
-                            CV2EAUtils::LogError(StringFormat("Failed to delete label %s. Error: %d", m_chartLines[i].labelName, error));
+                            CVSolUtils::LogError(StringFormat("Failed to delete label %s. Error: %d", m_chartLines[i].labelName, error));
                     }
                 }
             }
@@ -2211,9 +2211,9 @@ private:
         
         // Create temporary array for active lines
         SChartLine tempLines[];
-        if(!CV2EAUtils::SafeResizeArray(tempLines, activeCount, "CV2EABreakouts::ClearInactiveChartLines - tempLines"))
+        if(!CVSolUtils::SafeResizeArray(tempLines, activeCount, "CVSolStrategy::ClearInactiveChartLines - tempLines"))
         {
-            CV2EAUtils::LogError("Failed to resize temporary lines array");
+            CVSolUtils::LogError("Failed to resize temporary lines array");
             return;
         }
         
@@ -2233,9 +2233,9 @@ private:
         
         // Free original array and resize to new size
         ArrayFree(m_chartLines);
-        if(!CV2EAUtils::SafeResizeArray(m_chartLines, activeCount, "CV2EABreakouts::ClearInactiveChartLines - m_chartLines"))
+        if(!CVSolUtils::SafeResizeArray(m_chartLines, activeCount, "CVSolStrategy::ClearInactiveChartLines - m_chartLines"))
         {
-            CV2EAUtils::LogError("Failed to resize chart lines array to final size");
+            CVSolUtils::LogError("Failed to resize chart lines array to final size");
             return;
         }
         
@@ -2249,12 +2249,12 @@ private:
     //--- Volume Detection Helper Methods
     double GetAverageVolume(const long &volumes[], int startIndex, int barsToAverage)
     {
-        return CV2EAMarketDataBase::GetAverageVolume(volumes, startIndex, barsToAverage);
+        return CVSolMarketBase::GetAverageVolume(volumes, startIndex, barsToAverage);
     }
     
     bool IsVolumeSpike(const long &volumes[], int index)
     {
-        return CV2EAMarketDataBase::IsVolumeSpike(volumes, index);
+        return CVSolMarketBase::IsVolumeSpike(volumes, index);
     }
     
     double GetVolumeStrengthBonus(const long &volumes[], int index)
@@ -2275,7 +2275,7 @@ private:
             
             if(m_showDebugPrints)
             {
-                CV2EAUtils::LogInfo(StringFormat(
+                CVSolUtils::LogInfo(StringFormat(
                     "Volume spike detected at bar %d:\n" +
                     "Current Volume: %d\n" +
                     "Average Volume: %.2f\n" +
@@ -2297,12 +2297,12 @@ private:
     
     bool ValidateBounce(const double &prices[], double price, double level, double minBounceSize)
     {
-        return CV2EAMarketDataBase::ValidateBounce(prices, price, level, minBounceSize);
+        return CVSolMarketBase::ValidateBounce(prices, price, level, minBounceSize);
     }
     
     bool IsTouchValid(double price, double level, double touchZone)
     {
-        return CV2EAMarketDataBase::IsTouchValid(price, level, touchZone);
+        return CVSolMarketBase::IsTouchValid(price, level, touchZone);
     }
 
     // Add this function before ProcessStrategy()
@@ -2368,7 +2368,7 @@ private:
         
         if(m_showDebugPrints)
         {
-            CV2EAUtils::LogInfo(StringFormat(
+            CVSolUtils::LogInfo(StringFormat(
                 "Volume Analysis:\n" +
                 "Pre-breakout Avg: %.2f\n" +
                 "Breakout Avg: %.2f\n" +
@@ -2411,7 +2411,7 @@ private:
         
         if(m_showDebugPrints)
         {
-            CV2EAUtils::LogInfo(StringFormat(
+            CVSolUtils::LogInfo(StringFormat(
                 "Retest Volume Analysis:\n" +
                 "Retest Avg Volume: %.2f\n" +
                 "Pre-retest Avg: %.2f\n" +

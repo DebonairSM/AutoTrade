@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                               V-2-EA-ForexData.mqh |
+//|                                            VSol.Market.Forex.mqh |
 //|                 Forex-Specific Market Data Analysis Module         |
 //+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
@@ -7,15 +7,15 @@
 #property version   "1.00"
 #property strict
 
-#ifndef __V2_EA_FOREXDATA_MQH__
-#define __V2_EA_FOREXDATA_MQH__
+#ifndef __VSOL_MARKET_FOREX_MQH__
+#define __VSOL_MARKET_FOREX_MQH__
 
-#include "V-2-EA-MarketData.mqh"
+#include "VSol.Market.mqh"
 
 //+------------------------------------------------------------------+
 //| Forex Configuration Class                                          |
 //+------------------------------------------------------------------+
-class CV2EAForexData
+class CVSolForexData
 {
 private:
     static double m_forexTouchZones[];      // Touch zones in pips per timeframe
@@ -148,11 +148,11 @@ public:
     // Session-specific volume adjustments
     static double GetSessionVolumeFactor()
     {
-        int hourET = CV2EAUtils::GetCurrentHourET();
+        int hourET = CVSolUtils::GetCurrentHourET();
         
-        bool isAsianSession = CV2EAUtils::IsWithinSession(hourET, 0, 8);   // 00:00-08:00 ET
-        bool isLondonSession = CV2EAUtils::IsWithinSession(hourET, 3, 11); // 03:00-11:00 ET
-        bool isNYSession = CV2EAUtils::IsWithinSession(hourET, 8, 17);     // 08:00-17:00 ET
+        bool isAsianSession = CVSolUtils::IsWithinSession(hourET, 0, 8);   // 00:00-08:00 ET
+        bool isLondonSession = CVSolUtils::IsWithinSession(hourET, 3, 11); // 03:00-11:00 ET
+        bool isNYSession = CVSolUtils::IsWithinSession(hourET, 8, 17);     // 08:00-17:00 ET
         
         if(isLondonSession && isNYSession) return 1.3;  // London-NY overlap
         if(isAsianSession && isLondonSession) return 1.2;  // Asian-London overlap
@@ -164,18 +164,18 @@ public:
 };
 
 // Initialize static members
-double CV2EAForexData::m_forexTouchZones[];
-double CV2EAForexData::m_forexBounceMinSizes[];
-int    CV2EAForexData::m_forexMinTouches[];
-double CV2EAForexData::m_forexMinStrengths[];
-int    CV2EAForexData::m_forexLookbacks[];
-int    CV2EAForexData::m_forexMaxBounceDelays[];
-bool   CV2EAForexData::m_initialized = false;
+double CVSolForexData::m_forexTouchZones[];
+double CVSolForexData::m_forexBounceMinSizes[];
+int    CVSolForexData::m_forexMinTouches[];
+double CVSolForexData::m_forexMinStrengths[];
+int    CVSolForexData::m_forexLookbacks[];
+int    CVSolForexData::m_forexMaxBounceDelays[];
+bool   CVSolForexData::m_initialized = false;
 
 //+------------------------------------------------------------------+
 //| Forex-specific market data analysis class                          |
 //+------------------------------------------------------------------+
-class CV2EAForexData : public CV2EAMarketDataBase
+class CVSolForexData : public CVSolMarketBase
 {
 private:
     //--- Forex Specific Settings
@@ -231,7 +231,7 @@ public:
 //+------------------------------------------------------------------+
 //| Initialize Forex specific settings                                 |
 //+------------------------------------------------------------------+
-void CV2EAForexData::InitializeForexSettings()
+void CVSolForexData::InitializeForexSettings()
 {
     // Current timeframe settings
     ENUM_TIMEFRAMES tf = Period();
@@ -255,7 +255,7 @@ void CV2EAForexData::InitializeForexSettings()
 //+------------------------------------------------------------------+
 //| Get Forex setting based on timeframe                              |
 //+------------------------------------------------------------------+
-double CV2EAForexData::GetForexSetting(const double &settings[], ENUM_TIMEFRAMES timeframe)
+double CVSolForexData::GetForexSetting(const double &settings[], ENUM_TIMEFRAMES timeframe)
 {
     int index = 0;
     
@@ -278,7 +278,7 @@ double CV2EAForexData::GetForexSetting(const double &settings[], ENUM_TIMEFRAMES
 //+------------------------------------------------------------------+
 //| Get Forex integer setting based on timeframe                       |
 //+------------------------------------------------------------------+
-int CV2EAForexData::GetForexIntSetting(const int &settings[], ENUM_TIMEFRAMES timeframe)
+int CVSolForexData::GetForexIntSetting(const int &settings[], ENUM_TIMEFRAMES timeframe)
 {
     int index = 0;
     
@@ -301,27 +301,27 @@ int CV2EAForexData::GetForexIntSetting(const int &settings[], ENUM_TIMEFRAMES ti
 //+------------------------------------------------------------------+
 //| Public getter methods for Forex settings                           |
 //+------------------------------------------------------------------+
-double CV2EAForexData::GetForexTouchZone(ENUM_TIMEFRAMES timeframe)
+double CVSolForexData::GetForexTouchZone(ENUM_TIMEFRAMES timeframe)
 {
     return GetForexSetting(m_forexTouchZones, timeframe);
 }
 
-int CV2EAForexData::GetForexMinTouches(ENUM_TIMEFRAMES timeframe)
+int CVSolForexData::GetForexMinTouches(ENUM_TIMEFRAMES timeframe)
 {
     return GetForexIntSetting(m_forexMinTouches, timeframe);
 }
 
-double CV2EAForexData::GetForexMinStrength(ENUM_TIMEFRAMES timeframe)
+double CVSolForexData::GetForexMinStrength(ENUM_TIMEFRAMES timeframe)
 {
     return GetForexSetting(m_forexMinStrengths, timeframe);
 }
 
-int CV2EAForexData::GetForexLookback(ENUM_TIMEFRAMES timeframe)
+int CVSolForexData::GetForexLookback(ENUM_TIMEFRAMES timeframe)
 {
     return GetForexIntSetting(m_forexLookbacks, timeframe);
 }
 
-int CV2EAForexData::GetForexMaxBounceDelay(ENUM_TIMEFRAMES timeframe)
+int CVSolForexData::GetForexMaxBounceDelay(ENUM_TIMEFRAMES timeframe)
 {
     return GetForexIntSetting(m_forexMaxBounceDelays, timeframe);
 }
@@ -329,7 +329,7 @@ int CV2EAForexData::GetForexMaxBounceDelay(ENUM_TIMEFRAMES timeframe)
 //+------------------------------------------------------------------+
 //| Update pip values for the current symbol                          |
 //+------------------------------------------------------------------+
-void CV2EAForexData::UpdatePipValues(string symbol)
+void CVSolForexData::UpdatePipValues(string symbol)
 {
     // Get symbol digits and calculate pip position
     m_pipDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
@@ -346,7 +346,7 @@ void CV2EAForexData::UpdatePipValues(string symbol)
 //+------------------------------------------------------------------+
 //| Convert pips to price for the current symbol                      |
 //+------------------------------------------------------------------+
-double CV2EAForexData::PipsToPrice(double pips)
+double CVSolForexData::PipsToPrice(double pips)
 {
     if(m_pipValue == 0)
         UpdatePipValues(_Symbol);
@@ -357,7 +357,7 @@ double CV2EAForexData::PipsToPrice(double pips)
 //+------------------------------------------------------------------+
 //| Convert price to pips for the current symbol                      |
 //+------------------------------------------------------------------+
-double CV2EAForexData::PriceToPips(double price)
+double CVSolForexData::PriceToPips(double price)
 {
     if(m_pipValue == 0)
         UpdatePipValues(_Symbol);
@@ -368,7 +368,7 @@ double CV2EAForexData::PriceToPips(double price)
 //+------------------------------------------------------------------+
 //| Get current spread and validate against maximum allowed           |
 //+------------------------------------------------------------------+
-double CV2EAForexData::GetCurrentSpread(string symbol)
+double CVSolForexData::GetCurrentSpread(string symbol)
 {
     datetime current_time = TimeCurrent();
     
@@ -392,7 +392,7 @@ double CV2EAForexData::GetCurrentSpread(string symbol)
 //+------------------------------------------------------------------+
 //| Check if current spread is acceptable                             |
 //+------------------------------------------------------------------+
-bool CV2EAForexData::IsSpreadAcceptable(string symbol)
+bool CVSolForexData::IsSpreadAcceptable(string symbol)
 {
     return GetCurrentSpread(symbol) <= m_maxAllowedSpread;
 }
@@ -400,7 +400,7 @@ bool CV2EAForexData::IsSpreadAcceptable(string symbol)
 //+------------------------------------------------------------------+
 //| Validate if price is a valid touch for Forex                      |
 //+------------------------------------------------------------------+
-bool CV2EAForexData::ValidateForexTouch(const double price, const double level, ENUM_TIMEFRAMES timeframe)
+bool CVSolForexData::ValidateForexTouch(const double price, const double level, ENUM_TIMEFRAMES timeframe)
 {
     // Convert touch zone from pips to price
     double touchZone = PipsToPrice(GetForexTouchZone(timeframe));
@@ -415,7 +415,7 @@ bool CV2EAForexData::ValidateForexTouch(const double price, const double level, 
 //+------------------------------------------------------------------+
 //| Calculate strength for Forex level                                |
 //+------------------------------------------------------------------+
-double CV2EAForexData::CalculateForexStrength(const SKeyLevel &level, const STouch &touches[])
+double CVSolForexData::CalculateForexStrength(const SKeyLevel &level, const STouch &touches[])
 {
     ENUM_TIMEFRAMES tf = Period();
     
@@ -467,7 +467,7 @@ double CV2EAForexData::CalculateForexStrength(const SKeyLevel &level, const STou
 //+------------------------------------------------------------------+
 //| Find key levels specific to Forex                                 |
 //+------------------------------------------------------------------+
-bool CV2EAForexData::FindForexKeyLevels(string symbol, SKeyLevel &outStrongestLevel)
+bool CVSolForexData::FindForexKeyLevels(string symbol, SKeyLevel &outStrongestLevel)
 {
     // Update pip values for the symbol
     UpdatePipValues(symbol);
@@ -603,4 +603,4 @@ bool CV2EAForexData::FindForexKeyLevels(string symbol, SKeyLevel &outStrongestLe
     return false;
 }
 
-#endif // __V2_EA_FOREXDATA_MQH__ 
+#endif // __VSOL_MARKET_FOREX_MQH__ 

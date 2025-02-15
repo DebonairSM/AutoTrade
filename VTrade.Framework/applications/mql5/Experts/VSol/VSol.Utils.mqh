@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                                   V-2-EA-Utils.mqh |
+//|                                                   VSol.Utils.mqh    |
 //|                                                                    |
 //| Purpose: Common Trading Utility Functions for VSol Trading Systems |
 //| Version: 1.00                                                      |
@@ -15,7 +15,7 @@
 #include <Trade\Trade.mqh>
 
 //+------------------------------------------------------------------+
-//| CV2EAUtils - Core Trading Utility Class                            |
+//| CVSolUtils - Core Trading Utility Class                            |
 //|                                                                    |
 //| Provides essential trading utilities including:                    |
 //| - Position sizing and risk management                             |
@@ -24,7 +24,7 @@
 //| - Position tracking and management                                |
 //| - Array manipulation and debug utilities                          |
 //+------------------------------------------------------------------+
-class CV2EAUtils
+class CVSolUtils
 {
 private:
     //--- Trading Objects
@@ -197,19 +197,19 @@ public:
 };
 
 //--- Initialize static class members
-CTrade CV2EAUtils::m_trade;
-bool   CV2EAUtils::m_showDebugPrints = false;
-bool   CV2EAUtils::m_restrictTradingHours = true;
-int    CV2EAUtils::m_londonOpenHour = 3;
-int    CV2EAUtils::m_londonCloseHour = 11;
-int    CV2EAUtils::m_newYorkOpenHour = 9;
-int    CV2EAUtils::m_newYorkCloseHour = 16;
-int    CV2EAUtils::m_brokerToLocalOffsetHours = 7;
+CTrade CVSolUtils::m_trade;
+bool   CVSolUtils::m_showDebugPrints = false;
+bool   CVSolUtils::m_restrictTradingHours = true;
+int    CVSolUtils::m_londonOpenHour = 3;
+int    CVSolUtils::m_londonCloseHour = 11;
+int    CVSolUtils::m_newYorkOpenHour = 9;
+int    CVSolUtils::m_newYorkCloseHour = 16;
+int    CVSolUtils::m_brokerToLocalOffsetHours = 7;
 
 //+------------------------------------------------------------------+
 //| Calculate position size based on risk                              |
 //+------------------------------------------------------------------+
-double CV2EAUtils::CalculateLotSize(double stopLossPrice, 
+double CVSolUtils::CalculateLotSize(double stopLossPrice, 
                                    double entryPrice, 
                                    double riskPercentage,
                                    string symbol = NULL)
@@ -292,7 +292,7 @@ double CV2EAUtils::CalculateLotSize(double stopLossPrice,
 //+------------------------------------------------------------------+
 //| Place trade with all validations                                   |
 //+------------------------------------------------------------------+
-bool CV2EAUtils::PlaceTrade(bool isBullish, 
+bool CVSolUtils::PlaceTrade(bool isBullish, 
                            double entryPrice, 
                            double slPrice, 
                            double tpPrice, 
@@ -333,7 +333,7 @@ bool CV2EAUtils::PlaceTrade(bool isBullish,
 //+------------------------------------------------------------------+
 //| Check if trading is allowed based on session times                 |
 //+------------------------------------------------------------------+
-bool CV2EAUtils::IsTradeAllowed(void)
+bool CVSolUtils::IsTradeAllowed(void)
 {
     if(!m_restrictTradingHours)
         return true;
@@ -349,7 +349,7 @@ bool CV2EAUtils::IsTradeAllowed(void)
 //+------------------------------------------------------------------+
 //| Check if current hour is within session hours                      |
 //+------------------------------------------------------------------+
-bool CV2EAUtils::IsWithinSession(int currentHourET, int sessionOpenHour, int sessionCloseHour)
+bool CVSolUtils::IsWithinSession(int currentHourET, int sessionOpenHour, int sessionCloseHour)
 {
     return (currentHourET >= sessionOpenHour && currentHourET < sessionCloseHour);
 }
@@ -357,7 +357,7 @@ bool CV2EAUtils::IsWithinSession(int currentHourET, int sessionOpenHour, int ses
 //+------------------------------------------------------------------+
 //| Get current hour in Eastern Time                                   |
 //+------------------------------------------------------------------+
-int CV2EAUtils::GetCurrentHourET(void)
+int CVSolUtils::GetCurrentHourET(void)
 {
     datetime now = TimeCurrent();
     MqlDateTime dt;
@@ -369,7 +369,7 @@ int CV2EAUtils::GetCurrentHourET(void)
 //+------------------------------------------------------------------+
 //| Check for new bar and update tracking variables                    |
 //+------------------------------------------------------------------+
-bool CV2EAUtils::CheckNewBar(string symbol, ENUM_TIMEFRAMES timeframe, 
+bool CVSolUtils::CheckNewBar(string symbol, ENUM_TIMEFRAMES timeframe, 
                            datetime &lastBarTime, int &lastBarIndex)
 {
     datetime currentBarTime = iTime(symbol, timeframe, 0);
@@ -387,7 +387,7 @@ bool CV2EAUtils::CheckNewBar(string symbol, ENUM_TIMEFRAMES timeframe,
 //+------------------------------------------------------------------+
 //| Check if there's an open position for symbol/magic number          |
 //+------------------------------------------------------------------+
-bool CV2EAUtils::HasOpenPosition(string symbol, int magicNumber)
+bool CVSolUtils::HasOpenPosition(string symbol, int magicNumber)
 {
     if(symbol == NULL) symbol = _Symbol;
     
@@ -405,7 +405,7 @@ bool CV2EAUtils::HasOpenPosition(string symbol, int magicNumber)
 //+------------------------------------------------------------------+
 //| Get count of open positions for symbol/magic number                |
 //+------------------------------------------------------------------+
-int CV2EAUtils::GetOpenPositionsCount(string symbol, int magicNumber)
+int CVSolUtils::GetOpenPositionsCount(string symbol, int magicNumber)
 {
     int count = 0;
     for(int i = 0; i < PositionsTotal(); i++)
