@@ -13,21 +13,38 @@
 #include "VSol.Market.mqh"
 
 //+------------------------------------------------------------------+
-//| Forex Configuration Class                                          |
+//| Forex-specific market data analysis class                          |
 //+------------------------------------------------------------------+
-class CVSolForexData
+class CVSolForexData : public CVSolMarketBase
 {
 private:
-    static double m_forexTouchZones[];      // Touch zones in pips per timeframe
-    static double m_forexBounceMinSizes[];  // Minimum bounce sizes
-    static int    m_forexMinTouches[];      // Minimum number of touches
-    static double m_forexMinStrengths[];    // Minimum acceptable strength
-    static int    m_forexLookbacks[];       // Lookback periods
-    static int    m_forexMaxBounceDelays[]; // Maximum allowed bounce delays
+    //--- Forex Specific Settings
+    static double   m_forexTouchZones[];      // Touch zones by timeframe (in pips)
+    static double   m_forexBounceMinSizes[];  // Minimum bounce sizes by timeframe (in pips)
+    static int      m_forexMinTouches[];      // Minimum touches by timeframe
+    static double   m_forexMinStrengths[];    // Minimum strengths by timeframe
+    static int      m_forexLookbacks[];       // Lookback periods by timeframe
+    static int      m_forexMaxBounceDelays[]; // Maximum bounce delays by timeframe
+    static double   m_pipValue;               // Current symbol pip value
+    static int      m_pipDigits;             // Digits for pip calculation
     
-    static bool   m_initialized;            // Initialization state
+    //--- Forex Market State
+    static double   m_lastSpread;             // Last calculated spread
+    static datetime m_lastSpreadUpdate;       // Last spread update time
+    static double   m_maxAllowedSpread;       // Maximum allowed spread in pips
+    static bool     m_initialized;            // Initialization state
     
+    //--- Helper Methods
+    static void InitializeForexSettings();
+    static double GetForexSetting(const double &settings[], ENUM_TIMEFRAMES timeframe);
+    static int GetForexIntSetting(const int &settings[], ENUM_TIMEFRAMES timeframe);
+    static double CalculateForexStrength(const SKeyLevel &level, const STouch &touches[]);
+    static bool ValidateForexTouch(const double price, const double level, ENUM_TIMEFRAMES timeframe);
+    static double GetCurrentSpread(string symbol);
+    static void UpdatePipValues(string symbol);
+
 public:
+    //--- Initialization
     static void Initialize()
     {
         if(m_initialized) return;
@@ -109,6 +126,18 @@ public:
         m_initialized = true;
     }
     
+    //--- Forex Specific Methods
+    static void InitForex(bool showDebugPrints=false)
+    {
+        Init(showDebugPrints);  // Initialize base class
+        Initialize();           // Initialize Forex settings
+        m_maxAllowedSpread = 20.0;  // Default max spread of 2.0 pips
+        m_lastSpread = 0;
+        m_lastSpreadUpdate = 0;
+        m_pipValue = 0;
+        m_pipDigits = 0;
+    }
+    
     static double GetTouchZone(ENUM_TIMEFRAMES timeframe)
     {
         if(!m_initialized) Initialize();
@@ -161,6 +190,8 @@ public:
         if(isAsianSession) return 1.0;  // Asian session
         return 0.8;  // Off-hours
     }
+    
+    // ... existing code for other methods ...
 };
 
 // Initialize static members
@@ -170,437 +201,11 @@ int    CVSolForexData::m_forexMinTouches[];
 double CVSolForexData::m_forexMinStrengths[];
 int    CVSolForexData::m_forexLookbacks[];
 int    CVSolForexData::m_forexMaxBounceDelays[];
+double CVSolForexData::m_pipValue;
+int    CVSolForexData::m_pipDigits;
+double CVSolForexData::m_lastSpread;
+datetime CVSolForexData::m_lastSpreadUpdate;
+double CVSolForexData::m_maxAllowedSpread;
 bool   CVSolForexData::m_initialized = false;
-
-//+------------------------------------------------------------------+
-//| Forex-specific market data analysis class                          |
-//+------------------------------------------------------------------+
-class CVSolForexData : public CVSolMarketBase
-{
-private:
-    //--- Forex Specific Settings
-    static double   m_forexTouchZones[];      // Touch zones by timeframe (in pips)
-    static double   m_forexBounceMinSizes[];  // Minimum bounce sizes by timeframe (in pips)
-    static int      m_forexMinTouches[];      // Minimum touches by timeframe
-    static double   m_forexMinStrengths[];    // Minimum strengths by timeframe
-    static int      m_forexLookbacks[];       // Lookback periods by timeframe
-    static int      m_forexMaxBounceDelays[]; // Maximum bounce delays by timeframe
-    static double   m_pipValue;               // Current symbol pip value
-    static int      m_pipDigits;             // Digits for pip calculation
-    
-    //--- Forex Market State
-    static double   m_lastSpread;             // Last calculated spread
-    static datetime m_lastSpreadUpdate;       // Last spread update time
-    static double   m_maxAllowedSpread;       // Maximum allowed spread in pips
-    
-    //--- Helper Methods
-    static void InitializeForexSettings();
-    static double GetForexSetting(const double &settings[], ENUM_TIMEFRAMES timeframe);
-    static int GetForexIntSetting(const int &settings[], ENUM_TIMEFRAMES timeframe);
-    static double CalculateForexStrength(const SKeyLevel &level, const STouch &touches[]);
-    static bool ValidateForexTouch(const double price, const double level, ENUM_TIMEFRAMES timeframe);
-    static double GetCurrentSpread(string symbol);
-    static void UpdatePipValues(string symbol);
-
-public:
-    //--- Initialization
-    static void InitForex(bool showDebugPrints=false)
-    {
-        Init(showDebugPrints);  // Initialize base class
-        InitializeForexSettings();
-        m_maxAllowedSpread = 20.0;  // Default max spread of 2.0 pips
-        m_lastSpread = 0;
-        m_lastSpreadUpdate = 0;
-        m_pipValue = 0;
-        m_pipDigits = 0;
-    }
-    
-    //--- Forex Specific Methods
-    static bool FindForexKeyLevels(string symbol, SKeyLevel &outStrongestLevel);
-    static bool IsForexTouch(const double price, const double level, ENUM_TIMEFRAMES timeframe);
-    static double GetForexTouchZone(ENUM_TIMEFRAMES timeframe);
-    static int GetForexMinTouches(ENUM_TIMEFRAMES timeframe);
-    static double GetForexMinStrength(ENUM_TIMEFRAMES timeframe);
-    static int GetForexLookback(ENUM_TIMEFRAMES timeframe);
-    static int GetForexMaxBounceDelay(ENUM_TIMEFRAMES timeframe);
-    static double PipsToPrice(double pips);
-    static double PriceToPips(double price);
-    static bool IsSpreadAcceptable(string symbol);
-};
-
-//+------------------------------------------------------------------+
-//| Initialize Forex specific settings                                 |
-//+------------------------------------------------------------------+
-void CVSolForexData::InitializeForexSettings()
-{
-    // Current timeframe settings
-    ENUM_TIMEFRAMES tf = Period();
-    
-    // Configure base class with Forex specific settings
-    ConfigureLevelDetection(
-        GetForexLookback(tf),           // Lookback period
-        GetForexMinStrength(tf),        // Minimum strength
-        GetForexTouchZone(tf),          // Touch zone
-        GetForexMinTouches(tf),         // Minimum touches
-        0.5,                            // Touch score weight
-        0.3,                            // Recency weight
-        0.2,                            // Duration weight
-        12                              // Minimum duration hours
-    );
-    
-    // Configure volume analysis
-    ConfigureVolumeAnalysis(1.5, VOLUME_TICK);  // Require 1.5x average volume
-}
-
-//+------------------------------------------------------------------+
-//| Get Forex setting based on timeframe                              |
-//+------------------------------------------------------------------+
-double CVSolForexData::GetForexSetting(const double &settings[], ENUM_TIMEFRAMES timeframe)
-{
-    int index = 0;
-    
-    switch(timeframe) {
-        case PERIOD_MN1: index = 0; break;
-        case PERIOD_W1:  index = 1; break;
-        case PERIOD_D1:  index = 2; break;
-        case PERIOD_H4:  index = 3; break;
-        case PERIOD_H1:  index = 4; break;
-        case PERIOD_M30: index = 5; break;
-        case PERIOD_M15: index = 6; break;
-        case PERIOD_M5:  index = 7; break;
-        case PERIOD_M1:  index = 8; break;
-        default: return settings[6];  // Default to M15 settings
-    }
-    
-    return settings[index];
-}
-
-//+------------------------------------------------------------------+
-//| Get Forex integer setting based on timeframe                       |
-//+------------------------------------------------------------------+
-int CVSolForexData::GetForexIntSetting(const int &settings[], ENUM_TIMEFRAMES timeframe)
-{
-    int index = 0;
-    
-    switch(timeframe) {
-        case PERIOD_MN1: index = 0; break;
-        case PERIOD_W1:  index = 1; break;
-        case PERIOD_D1:  index = 2; break;
-        case PERIOD_H4:  index = 3; break;
-        case PERIOD_H1:  index = 4; break;
-        case PERIOD_M30: index = 5; break;
-        case PERIOD_M15: index = 6; break;
-        case PERIOD_M5:  index = 7; break;
-        case PERIOD_M1:  index = 8; break;
-        default: return settings[6];  // Default to M15 settings
-    }
-    
-    return settings[index];
-}
-
-//+------------------------------------------------------------------+
-//| Public getter methods for Forex settings                           |
-//+------------------------------------------------------------------+
-double CVSolForexData::GetForexTouchZone(ENUM_TIMEFRAMES timeframe)
-{
-    return GetForexSetting(m_forexTouchZones, timeframe);
-}
-
-int CVSolForexData::GetForexMinTouches(ENUM_TIMEFRAMES timeframe)
-{
-    return GetForexIntSetting(m_forexMinTouches, timeframe);
-}
-
-double CVSolForexData::GetForexMinStrength(ENUM_TIMEFRAMES timeframe)
-{
-    return GetForexSetting(m_forexMinStrengths, timeframe);
-}
-
-int CVSolForexData::GetForexLookback(ENUM_TIMEFRAMES timeframe)
-{
-    return GetForexIntSetting(m_forexLookbacks, timeframe);
-}
-
-int CVSolForexData::GetForexMaxBounceDelay(ENUM_TIMEFRAMES timeframe)
-{
-    return GetForexIntSetting(m_forexMaxBounceDelays, timeframe);
-}
-
-//+------------------------------------------------------------------+
-//| Update pip values for the current symbol                          |
-//+------------------------------------------------------------------+
-void CVSolForexData::UpdatePipValues(string symbol)
-{
-    // Get symbol digits and calculate pip position
-    m_pipDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-    
-    // For Forex pairs, usually:
-    // 5 digits = 0.0001 point value (4 digit broker)
-    // 3 digits = 0.01 point value (2 digit broker)
-    if(m_pipDigits == 5 || m_pipDigits == 3)
-        m_pipDigits--;
-        
-    m_pipValue = MathPow(10, -m_pipDigits);
-}
-
-//+------------------------------------------------------------------+
-//| Convert pips to price for the current symbol                      |
-//+------------------------------------------------------------------+
-double CVSolForexData::PipsToPrice(double pips)
-{
-    if(m_pipValue == 0)
-        UpdatePipValues(_Symbol);
-        
-    return pips * m_pipValue;
-}
-
-//+------------------------------------------------------------------+
-//| Convert price to pips for the current symbol                      |
-//+------------------------------------------------------------------+
-double CVSolForexData::PriceToPips(double price)
-{
-    if(m_pipValue == 0)
-        UpdatePipValues(_Symbol);
-        
-    return price / m_pipValue;
-}
-
-//+------------------------------------------------------------------+
-//| Get current spread and validate against maximum allowed           |
-//+------------------------------------------------------------------+
-double CVSolForexData::GetCurrentSpread(string symbol)
-{
-    datetime current_time = TimeCurrent();
-    
-    // Return cached value if recent enough
-    if(current_time - m_lastSpreadUpdate < PeriodSeconds(PERIOD_M1) && m_lastSpread > 0)
-        return m_lastSpread;
-        
-    // Calculate new spread in pips
-    double spread = PriceToPips(SymbolInfoDouble(symbol, SYMBOL_ASK) - 
-                               SymbolInfoDouble(symbol, SYMBOL_BID));
-                               
-    if(spread > 0)
-    {
-        m_lastSpread = spread;
-        m_lastSpreadUpdate = current_time;
-    }
-    
-    return spread;
-}
-
-//+------------------------------------------------------------------+
-//| Check if current spread is acceptable                             |
-//+------------------------------------------------------------------+
-bool CVSolForexData::IsSpreadAcceptable(string symbol)
-{
-    return GetCurrentSpread(symbol) <= m_maxAllowedSpread;
-}
-
-//+------------------------------------------------------------------+
-//| Validate if price is a valid touch for Forex                      |
-//+------------------------------------------------------------------+
-bool CVSolForexData::ValidateForexTouch(const double price, const double level, ENUM_TIMEFRAMES timeframe)
-{
-    // Convert touch zone from pips to price
-    double touchZone = PipsToPrice(GetForexTouchZone(timeframe));
-    
-    // Add spread to touch zone for more conservative validation
-    if(m_lastSpread > 0)
-        touchZone += PipsToPrice(m_lastSpread);
-        
-    return IsTouchValid(price, level, touchZone);
-}
-
-//+------------------------------------------------------------------+
-//| Calculate strength for Forex level                                |
-//+------------------------------------------------------------------+
-double CVSolForexData::CalculateForexStrength(const SKeyLevel &level, const STouch &touches[])
-{
-    ENUM_TIMEFRAMES tf = Period();
-    
-    // Base strength from touch count
-    double touchBase = 0;
-    switch(level.touchCount) {
-        case 2: touchBase = 0.50; break;
-        case 3: touchBase = 0.65; break;
-        case 4: touchBase = 0.75; break;
-        case 5: touchBase = 0.85; break;
-        default: touchBase = MathMin(0.90 + ((level.touchCount - 6) * 0.01), 0.95);
-    }
-    
-    // Calculate average bounce strength
-    double totalBounceStrength = 0;
-    double bounceCount = 0;
-    
-    for(int i = 0; i < ArraySize(touches); i++)
-    {
-        if(touches[i].isValid)
-        {
-            totalBounceStrength += touches[i].strength;
-            bounceCount++;
-        }
-    }
-    
-    double avgBounceStrength = (bounceCount > 0) ? totalBounceStrength / bounceCount : 0;
-    
-    // Time-based decay
-    double recencyMod = 0;
-    int barsElapsed = (int)((TimeCurrent() - level.lastTouch) / PeriodSeconds(tf));
-    
-    if(barsElapsed <= GetForexLookback(tf) / 8)
-        recencyMod = 0.20;  // Very recent
-    else if(barsElapsed <= GetForexLookback(tf) / 4)
-        recencyMod = 0.10;  // Recent
-    else if(barsElapsed <= GetForexLookback(tf) / 2)
-        recencyMod = 0;     // Neutral
-    else
-        recencyMod = -0.30; // Old
-        
-    // Calculate final strength
-    double strength = touchBase * (1.0 + avgBounceStrength * 0.2 + recencyMod);
-    
-    // Ensure bounds
-    return MathMin(MathMax(strength, 0.45), 0.98);
-}
-
-//+------------------------------------------------------------------+
-//| Find key levels specific to Forex                                 |
-//+------------------------------------------------------------------+
-bool CVSolForexData::FindForexKeyLevels(string symbol, SKeyLevel &outStrongestLevel)
-{
-    // Update pip values for the symbol
-    UpdatePipValues(symbol);
-    
-    // Check spread
-    if(!IsSpreadAcceptable(symbol))
-    {
-        if(m_showDebugPrints)
-            Print("❌ Spread too high for Forex level detection: ", m_lastSpread, " pips");
-        return false;
-    }
-    
-    // Get price data
-    MqlRates rates[];
-    ArraySetAsSeries(rates, true);
-    
-    int bars = GetForexLookback(Period());
-    if(CopyRates(symbol, Period(), 0, bars, rates) != bars)
-    {
-        Print("❌ Failed to copy price data for Forex level detection");
-        return false;
-    }
-    
-    // Initialize arrays for high/low prices and volume
-    double highs[], lows[];
-    datetime times[];
-    long volumes[];
-    ArrayResize(highs, bars);
-    ArrayResize(lows, bars);
-    ArrayResize(times, bars);
-    ArraySetAsSeries(highs, true);
-    ArraySetAsSeries(lows, true);
-    ArraySetAsSeries(times, true);
-    
-    // Get volume data for validation
-    if(!GetVolumeData(symbol, volumes, bars))
-    {
-        Print("❌ Failed to get volume data for Forex level detection");
-        return false;
-    }
-    
-    // Fill arrays
-    for(int i = 0; i < bars; i++)
-    {
-        highs[i] = rates[i].high;
-        lows[i] = rates[i].low;
-        times[i] = rates[i].time;
-    }
-    
-    // Find potential levels
-    SKeyLevel levels[];
-    int levelCount = 0;
-    
-    // Process swing highs and lows
-    for(int i = 2; i < bars - 2; i++)
-    {
-        // Check swing high
-        if(highs[i] > highs[i-1] && highs[i] > highs[i-2] &&
-           highs[i] > highs[i+1] && highs[i] > highs[i+2])
-        {
-            SKeyLevel level;
-            level.price = highs[i];
-            level.isResistance = true;
-            level.firstTouch = times[i];
-            level.lastTouch = times[i];
-            
-            // Add volume validation
-            if(IsVolumeSpike(volumes, i))
-                level.volumeConfirmed = true;
-            
-            if(CountTouchesEnhanced(symbol, highs, lows, times, level.price, level))
-            {
-                // Add volume strength bonus if confirmed by volume
-                if(level.volumeConfirmed)
-                    level.strength += GetVolumeStrengthBonus(volumes, i);
-                
-                if(level.strength >= GetForexMinStrength(Period()))
-                {
-                    ArrayResize(levels, levelCount + 1);
-                    levels[levelCount++] = level;
-                }
-            }
-        }
-        
-        // Check swing low
-        if(lows[i] < lows[i-1] && lows[i] < lows[i-2] &&
-           lows[i] < lows[i+1] && lows[i] < lows[i+2])
-        {
-            SKeyLevel level;
-            level.price = lows[i];
-            level.isResistance = false;
-            level.firstTouch = times[i];
-            level.lastTouch = times[i];
-            
-            // Add volume validation
-            if(IsVolumeSpike(volumes, i))
-                level.volumeConfirmed = true;
-            
-            if(CountTouchesEnhanced(symbol, highs, lows, times, level.price, level))
-            {
-                // Add volume strength bonus if confirmed by volume
-                if(level.volumeConfirmed)
-                    level.strength += GetVolumeStrengthBonus(volumes, i);
-                
-                if(level.strength >= GetForexMinStrength(Period()))
-                {
-                    ArrayResize(levels, levelCount + 1);
-                    levels[levelCount++] = level;
-                }
-            }
-        }
-    }
-    
-    // Find strongest level
-    if(levelCount > 0)
-    {
-        int strongestIdx = 0;
-        double maxStrength = levels[0].strength;
-        
-        for(int i = 1; i < levelCount; i++)
-        {
-            if(levels[i].strength > maxStrength)
-            {
-                maxStrength = levels[i].strength;
-                strongestIdx = i;
-            }
-        }
-        
-        outStrongestLevel = levels[strongestIdx];
-        return true;
-    }
-    
-    return false;
-}
 
 #endif // __VSOL_MARKET_FOREX_MQH__ 

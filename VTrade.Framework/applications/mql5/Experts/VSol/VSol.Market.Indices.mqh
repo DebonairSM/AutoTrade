@@ -5,13 +5,20 @@
 #property copyright "VSol Trading Systems"
 #property link      "https://vsol-systems.com"
 #property version   "1.01"
+#property strict
+
+#ifndef __VSOL_MARKET_INDICES_MQH__
+#define __VSOL_MARKET_INDICES_MQH__
+
+#include "VSol.Market.mqh"
 
 //+------------------------------------------------------------------+
-//| US500 Configuration Class                                          |
+//| US500-specific market data analysis class                          |
 //+------------------------------------------------------------------+
-class CVSolIndicesData
+class CVSolIndicesData : public CVSolMarketBase
 {
 private:
+    //--- US500 Specific Settings
     static double m_us500TouchZones[];      // Touch zones in points per timeframe
     static double m_us500BounceMinSizes[];  // Minimum bounce sizes
     static int    m_us500MinTouches[];      // Minimum number of touches
@@ -21,7 +28,112 @@ private:
     
     static bool   m_initialized;            // Initialization state
     
+    //--- Helper Methods
+    static double GetIndicesSetting(const double &settings[], ENUM_TIMEFRAMES timeframe)
+    {
+        int index = 0;
+        
+        switch(timeframe) {
+            case PERIOD_MN1: index = 0; break;
+            case PERIOD_W1:  index = 1; break;
+            case PERIOD_D1:  index = 2; break;
+            case PERIOD_H4:  index = 3; break;
+            case PERIOD_H1:  index = 4; break;
+            case PERIOD_M30: index = 5; break;
+            case PERIOD_M15: index = 6; break;
+            case PERIOD_M5:  index = 7; break;
+            case PERIOD_M1:  index = 8; break;
+            default: return settings[6];  // Default to M15 settings
+        }
+        
+        return settings[index];
+    }
+    
+    static int GetIndicesIntSetting(const int &settings[], ENUM_TIMEFRAMES timeframe)
+    {
+        int index = 0;
+        
+        switch(timeframe) {
+            case PERIOD_MN1: index = 0; break;
+            case PERIOD_W1:  index = 1; break;
+            case PERIOD_D1:  index = 2; break;
+            case PERIOD_H4:  index = 3; break;
+            case PERIOD_H1:  index = 4; break;
+            case PERIOD_M30: index = 5; break;
+            case PERIOD_M15: index = 6; break;
+            case PERIOD_M5:  index = 7; break;
+            case PERIOD_M1:  index = 8; break;
+            default: return settings[6];  // Default to M15 settings
+        }
+        
+        return settings[index];
+    }
+    
+    static double CalculateIndicesStrength(const SKeyLevel &level, const STouch &touches[])
+    {
+        ENUM_TIMEFRAMES tf = Period();
+        
+        // Base strength from touch count
+        double touchBase = 0;
+        switch(level.touchCount) {
+            case 2: touchBase = 0.55; break;  // Higher base for indices
+            case 3: touchBase = 0.70; break;
+            case 4: touchBase = 0.80; break;
+            case 5: touchBase = 0.90; break;
+            default: touchBase = MathMin(0.95 + ((level.touchCount - 6) * 0.01), 0.98);
+        }
+        
+        // Calculate average bounce strength
+        double totalBounceStrength = 0;
+        double bounceCount = 0;
+        
+        for(int i = 0; i < ArraySize(touches); i++)
+        {
+            if(touches[i].isValid)
+            {
+                totalBounceStrength += touches[i].strength;
+                bounceCount++;
+            }
+        }
+        
+        double avgBounceStrength = (bounceCount > 0) ? totalBounceStrength / bounceCount : 0;
+        
+        // Time-based decay
+        double recencyMod = 0;
+        int barsElapsed = (int)((TimeCurrent() - level.lastTouch) / PeriodSeconds(tf));
+        
+        if(barsElapsed <= GetLookback(tf) / 8)
+            recencyMod = 0.20;  // Very recent
+        else if(barsElapsed <= GetLookback(tf) / 4)
+            recencyMod = 0.10;  // Recent
+        else if(barsElapsed <= GetLookback(tf) / 2)
+            recencyMod = 0;     // Neutral
+        else
+            recencyMod = -0.30; // Old
+            
+        // Calculate final strength with market hours factor
+        double marketHoursMod = GetMarketHoursFactor() - 1.0;  // Convert to modifier
+        double strength = touchBase * (1.0 + avgBounceStrength * 0.2 + recencyMod + marketHoursMod);
+        
+        // Ensure bounds
+        return MathMin(MathMax(strength, 0.50), 0.98);  // Higher minimum for indices
+    }
+    
+    static bool ValidateIndicesLevel(const double price, const double level, ENUM_TIMEFRAMES timeframe)
+    {
+        // Get touch zone in points
+        double touchZone = GetTouchZone(timeframe);
+        
+        // Add market hours factor for more conservative validation during off-hours
+        double marketHoursFactor = GetMarketHoursFactor();
+        if(marketHoursFactor < 1.0)
+            touchZone *= (2.0 - marketHoursFactor);  // Increase zone size in off-hours
+            
+        return IsTouchValid(price, level, touchZone);
+    }
+    
 public:
+    //--- Initialization
     static void Initialize()
     {
         if(m_initialized) return;
@@ -103,6 +215,29 @@ public:
         m_initialized = true;
     }
     
+    //--- Indices Specific Methods
+    static void InitIndices(bool showDebugPrints=false)
+    {
+        Init(showDebugPrints);  // Initialize base class
+        Initialize();           // Initialize Indices settings
+        
+        // Configure base class with indices-specific settings
+        ENUM_TIMEFRAMES tf = Period();
+        ConfigureLevelDetection(
+            GetLookback(tf),           // Lookback period
+            GetMinStrength(tf),        // Minimum strength
+            GetTouchZone(tf),          // Touch zone
+            GetMinTouches(tf),         // Minimum touches
+            0.5,                       // Touch score weight
+            0.3,                       // Recency weight
+            0.2,                       // Duration weight
+            12                         // Minimum duration hours
+        );
+        
+        // Configure volume analysis with higher threshold for indices
+        ConfigureVolumeAnalysis(2.0, VOLUME_TICK);  // Require 2.0x average volume
+    }
+    
     static double GetTouchZone(ENUM_TIMEFRAMES timeframe)
     {
         if(!m_initialized) Initialize();
@@ -159,6 +294,131 @@ public:
         // Overnight
         return 0.5;
     }
+    
+    static bool FindIndicesKeyLevels(string symbol, SKeyLevel &outStrongestLevel)
+    {
+        // Get price data
+        MqlRates rates[];
+        ArraySetAsSeries(rates, true);
+        
+        int bars = GetLookback(Period());
+        if(CopyRates(symbol, Period(), 0, bars, rates) != bars)
+        {
+            Print("❌ Failed to copy price data for indices level detection");
+            return false;
+        }
+        
+        // Initialize arrays for high/low prices and volume
+        double highs[], lows[];
+        datetime times[];
+        long volumes[];
+        ArrayResize(highs, bars);
+        ArrayResize(lows, bars);
+        ArrayResize(times, bars);
+        ArraySetAsSeries(highs, true);
+        ArraySetAsSeries(lows, true);
+        ArraySetAsSeries(times, true);
+        
+        // Get volume data for validation
+        if(!GetVolumeData(symbol, volumes, bars))
+        {
+            Print("❌ Failed to get volume data for indices level detection");
+            return false;
+        }
+        
+        // Fill arrays
+        for(int i = 0; i < bars; i++)
+        {
+            highs[i] = rates[i].high;
+            lows[i] = rates[i].low;
+            times[i] = rates[i].time;
+        }
+        
+        // Find potential levels
+        SKeyLevel levels[];
+        int levelCount = 0;
+        
+        // Process swing highs and lows
+        for(int i = 2; i < bars - 2; i++)
+        {
+            // Check swing high
+            if(highs[i] > highs[i-1] && highs[i] > highs[i-2] &&
+               highs[i] > highs[i+1] && highs[i] > highs[i+2])
+            {
+                SKeyLevel level;
+                level.price = highs[i];
+                level.isResistance = true;
+                level.firstTouch = times[i];
+                level.lastTouch = times[i];
+                
+                // Add volume validation
+                if(IsVolumeSpike(volumes, i))
+                    level.volumeConfirmed = true;
+                
+                if(CountTouchesEnhanced(symbol, highs, lows, times, level.price, level))
+                {
+                    // Add volume strength bonus if confirmed by volume
+                    if(level.volumeConfirmed)
+                        level.strength += GetVolumeStrengthBonus(volumes, i);
+                    
+                    if(level.strength >= GetMinStrength(Period()))
+                    {
+                        ArrayResize(levels, levelCount + 1);
+                        levels[levelCount++] = level;
+                    }
+                }
+            }
+            
+            // Check swing low
+            if(lows[i] < lows[i-1] && lows[i] < lows[i-2] &&
+               lows[i] < lows[i+1] && lows[i] < lows[i+2])
+            {
+                SKeyLevel level;
+                level.price = lows[i];
+                level.isResistance = false;
+                level.firstTouch = times[i];
+                level.lastTouch = times[i];
+                
+                // Add volume validation
+                if(IsVolumeSpike(volumes, i))
+                    level.volumeConfirmed = true;
+                
+                if(CountTouchesEnhanced(symbol, highs, lows, times, level.price, level))
+                {
+                    // Add volume strength bonus if confirmed by volume
+                    if(level.volumeConfirmed)
+                        level.strength += GetVolumeStrengthBonus(volumes, i);
+                    
+                    if(level.strength >= GetMinStrength(Period()))
+                    {
+                        ArrayResize(levels, levelCount + 1);
+                        levels[levelCount++] = level;
+                    }
+                }
+            }
+        }
+        
+        // Find strongest level
+        if(levelCount > 0)
+        {
+            int strongestIdx = 0;
+            double maxStrength = levels[0].strength;
+            
+            for(int i = 1; i < levelCount; i++)
+            {
+                if(levels[i].strength > maxStrength)
+                {
+                    maxStrength = levels[i].strength;
+                    strongestIdx = i;
+                }
+            }
+            
+            outStrongestLevel = levels[strongestIdx];
+            return true;
+        }
+        
+        return false;
+    }
 };
 
 // Initialize static members
@@ -168,4 +428,6 @@ int    CVSolIndicesData::m_us500MinTouches[];
 double CVSolIndicesData::m_us500MinStrengths[];
 int    CVSolIndicesData::m_us500Lookbacks[];
 int    CVSolIndicesData::m_us500MaxBounceDelays[];
-bool   CVSolIndicesData::m_initialized = false; 
+bool   CVSolIndicesData::m_initialized = false;
+
+#endif // __VSOL_MARKET_INDICES_MQH__ 
