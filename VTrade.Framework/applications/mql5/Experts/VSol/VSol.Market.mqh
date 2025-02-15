@@ -333,38 +333,6 @@ public:
     }
     
     /**
-     * @brief Calculate market-specific strength.
-     */
-    double CalculateStrength(const SKeyLevel &level, const STouch &touches[])
-    {
-        return 0.0;  // Base implementation, should be overridden
-    }
-    
-    /**
-     * @brief Validate market-specific level.
-     */
-    bool ValidateLevel(const double price, const double level, ENUM_TIMEFRAMES timeframe)
-    {
-        return IsTouchValid(price, level, m_touchZone);  // Base implementation
-    }
-    
-    /**
-     * @brief Find market-specific key levels.
-     */
-    bool FindKeyLevels(string symbol, SKeyLevel &outStrongestLevel)
-    {
-        return false;  // Base implementation, should be overridden
-    }
-    
-    /**
-     * @brief Get market-specific session factor.
-     */
-    double GetSessionFactor()
-    {
-        return 1.0;  // Base implementation, no session adjustment
-    }
-    
-    /**
      * @brief Detect the market type for a given symbol
      */
     static ENUM_MARKET_TYPE GetMarketType(const string symbol)
@@ -372,9 +340,17 @@ public:
         // Get the symbol's trade calculation mode
         ENUM_SYMBOL_CALC_MODE calc_mode = (ENUM_SYMBOL_CALC_MODE)SymbolInfoInteger(symbol, SYMBOL_TRADE_CALC_MODE);
         
-        // Check for Forex
-        if(calc_mode == SYMBOL_CALC_MODE_FOREX)
-            return MARKET_TYPE_FOREX;
+        // Check for Forex - include both FOREX and FOREX_NO_LEVERAGE modes
+        if(calc_mode == SYMBOL_CALC_MODE_FOREX || 
+           calc_mode == SYMBOL_CALC_MODE_FOREX_NO_LEVERAGE ||
+           StringLen(symbol) == 6)  // Standard Forex pair length
+        {
+            // Additional validation for Forex pairs
+            string base = StringSubstr(symbol, 0, 3);
+            string quote = StringSubstr(symbol, 3, 3);
+            if(base != quote && StringLen(base) == 3 && StringLen(quote) == 3)
+                return MARKET_TYPE_FOREX;
+        }
             
         // Check for US500/SPX
         if(StringFind(symbol, "US500") >= 0 || StringFind(symbol, "SPX") >= 0)
@@ -383,12 +359,16 @@ public:
         return MARKET_TYPE_UNKNOWN;
     }
     
+    //--- Virtual Interface Methods
+    virtual double CalculateStrength(const SKeyLevel &level, const STouch &touches[]) { return 0.0; }
+    virtual bool ValidateLevel(const double price, const double level, ENUM_TIMEFRAMES timeframe) { return IsTouchValid(price, level, m_touchZone); }
+    virtual bool FindKeyLevels(string symbol, SKeyLevel &outStrongestLevel) { return false; }
+    virtual double GetSessionFactor() { return 1.0; }
+    
     virtual ~CVSolMarketBase() {}  // Virtual destructor for proper cleanup
 };
 
-//+------------------------------------------------------------------+
-//| Initialize static members                                          |
-//+------------------------------------------------------------------+
+// Initialize static members
 int      CVSolMarketBase::m_lookbackPeriod;
 double   CVSolMarketBase::m_minStrength;
 double   CVSolMarketBase::m_touchZone;
