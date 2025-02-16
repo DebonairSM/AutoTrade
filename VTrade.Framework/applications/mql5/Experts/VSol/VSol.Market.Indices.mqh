@@ -31,41 +31,51 @@ private:
     //--- Helper Methods
     static double GetIndicesSetting(const double &settings[], ENUM_TIMEFRAMES timeframe)
     {
-        int index = 0;
+        int index = 6;  // Default to M15 settings (index 6)
         
+        // Map timeframe to array index
         switch(timeframe) {
-            case PERIOD_MN1: index = 0; break;
-            case PERIOD_W1:  index = 1; break;
-            case PERIOD_D1:  index = 2; break;
-            case PERIOD_H4:  index = 3; break;
-            case PERIOD_H1:  index = 4; break;
-            case PERIOD_M30: index = 5; break;
-            case PERIOD_M15: index = 6; break;
-            case PERIOD_M5:  index = 7; break;
-            case PERIOD_M1:  index = 8; break;
-            default: return settings[6];  // Default to M15 settings
+            case PERIOD_MN1: index = 0; break;  // Monthly
+            case PERIOD_W1:  index = 1; break;  // Weekly
+            case PERIOD_D1:  index = 2; break;  // Daily
+            case PERIOD_H4:  index = 3; break;  // 4 Hours
+            case PERIOD_H1:  index = 4; break;  // 1 Hour
+            case PERIOD_M30: index = 5; break;  // 30 Minutes
+            case PERIOD_M15: index = 6; break;  // 15 Minutes
+            case PERIOD_M5:  index = 7; break;  // 5 Minutes
+            case PERIOD_M1:  index = 8; break;  // 1 Minute
+            default: index = 6; break;          // Default to M15
         }
         
+        // Ensure index is within bounds
+        if(index >= ArraySize(settings))
+            index = 6;  // Fallback to M15 settings if out of range
+            
         return settings[index];
     }
     
     static int GetIndicesIntSetting(const int &settings[], ENUM_TIMEFRAMES timeframe)
     {
-        int index = 0;
+        int index = 6;  // Default to M15 settings (index 6)
         
+        // Map timeframe to array index
         switch(timeframe) {
-            case PERIOD_MN1: index = 0; break;
-            case PERIOD_W1:  index = 1; break;
-            case PERIOD_D1:  index = 2; break;
-            case PERIOD_H4:  index = 3; break;
-            case PERIOD_H1:  index = 4; break;
-            case PERIOD_M30: index = 5; break;
-            case PERIOD_M15: index = 6; break;
-            case PERIOD_M5:  index = 7; break;
-            case PERIOD_M1:  index = 8; break;
-            default: return settings[6];  // Default to M15 settings
+            case PERIOD_MN1: index = 0; break;  // Monthly
+            case PERIOD_W1:  index = 1; break;  // Weekly
+            case PERIOD_D1:  index = 2; break;  // Daily
+            case PERIOD_H4:  index = 3; break;  // 4 Hours
+            case PERIOD_H1:  index = 4; break;  // 1 Hour
+            case PERIOD_M30: index = 5; break;  // 30 Minutes
+            case PERIOD_M15: index = 6; break;  // 15 Minutes
+            case PERIOD_M5:  index = 7; break;  // 5 Minutes
+            case PERIOD_M1:  index = 8; break;  // 1 Minute
+            default: index = 6; break;          // Default to M15
         }
         
+        // Ensure index is within bounds
+        if(index >= ArraySize(settings))
+            index = 6;  // Fallback to M15 settings if out of range
+            
         return settings[index];
     }
     
@@ -138,79 +148,94 @@ public:
     {
         if(m_initialized) return;
         
-        // Initialize arrays
-        ArrayResize(m_us500TouchZones, 9);      // One for each timeframe
-        ArrayResize(m_us500BounceMinSizes, 9);
-        ArrayResize(m_us500MinTouches, 9);
-        ArrayResize(m_us500MinStrengths, 9);
-        ArrayResize(m_us500Lookbacks, 9);
-        ArrayResize(m_us500MaxBounceDelays, 9);
+        // Initialize arrays with safe size
+        const int TIMEFRAME_COUNT = 9;  // Total number of timeframes we support
         
+        // Initialize arrays with explicit size
+        ArrayResize(m_us500TouchZones, TIMEFRAME_COUNT);
+        ArrayResize(m_us500BounceMinSizes, TIMEFRAME_COUNT);
+        ArrayResize(m_us500MinTouches, TIMEFRAME_COUNT);
+        ArrayResize(m_us500MinStrengths, TIMEFRAME_COUNT);
+        ArrayResize(m_us500Lookbacks, TIMEFRAME_COUNT);
+        ArrayResize(m_us500MaxBounceDelays, TIMEFRAME_COUNT);
+        
+        // Initialize with default values first
+        for(int i = 0; i < TIMEFRAME_COUNT; i++)
+        {
+            m_us500TouchZones[i] = 5.0;        // Default 5 points
+            m_us500BounceMinSizes[i] = 10.0;   // Default 10 points
+            m_us500MinTouches[i] = 3;          // Default 3 touches
+            m_us500MinStrengths[i] = 0.65;     // Default 0.65 strength
+            m_us500Lookbacks[i] = 200;         // Default 200 bars
+            m_us500MaxBounceDelays[i] = 8;     // Default 8 bars
+        }
+        
+        // Now set specific values for each timeframe
         // Touch zones in points
-        m_us500TouchZones[PERIOD_MN1] = 50.0;  // 50 points
-        m_us500TouchZones[PERIOD_W1]  = 30.0;  // 30 points
-        m_us500TouchZones[PERIOD_D1]  = 20.0;  // 20 points
-        m_us500TouchZones[PERIOD_H4]  = 15.0;  // 15 points
-        m_us500TouchZones[PERIOD_H1]  = 10.0;  // 10 points
-        m_us500TouchZones[PERIOD_M30] = 7.5;   // 7.5 points
-        m_us500TouchZones[PERIOD_M15] = 5.0;   // 5 points
-        m_us500TouchZones[PERIOD_M5]  = 3.0;   // 3 points
-        m_us500TouchZones[PERIOD_M1]  = 2.0;   // 2 points
+        m_us500TouchZones[0] = 50.0;  // MN1: 50 points
+        m_us500TouchZones[1] = 30.0;  // W1:  30 points
+        m_us500TouchZones[2] = 20.0;  // D1:  20 points
+        m_us500TouchZones[3] = 15.0;  // H4:  15 points
+        m_us500TouchZones[4] = 10.0;  // H1:  10 points
+        m_us500TouchZones[5] = 7.5;   // M30: 7.5 points
+        m_us500TouchZones[6] = 5.0;   // M15: 5 points
+        m_us500TouchZones[7] = 3.0;   // M5:  3 points
+        m_us500TouchZones[8] = 2.0;   // M1:  2 points
         
         // Minimum bounce sizes (in points)
-        m_us500BounceMinSizes[PERIOD_MN1] = 200.0;
-        m_us500BounceMinSizes[PERIOD_W1]  = 150.0;
-        m_us500BounceMinSizes[PERIOD_D1]  = 100.0;
-        m_us500BounceMinSizes[PERIOD_H4]  = 50.0;
-        m_us500BounceMinSizes[PERIOD_H1]  = 25.0;
-        m_us500BounceMinSizes[PERIOD_M30] = 15.0;
-        m_us500BounceMinSizes[PERIOD_M15] = 10.0;
-        m_us500BounceMinSizes[PERIOD_M5]  = 6.0;
-        m_us500BounceMinSizes[PERIOD_M1]  = 4.0;
+        m_us500BounceMinSizes[0] = 200.0;  // MN1
+        m_us500BounceMinSizes[1] = 150.0;  // W1
+        m_us500BounceMinSizes[2] = 100.0;  // D1
+        m_us500BounceMinSizes[3] = 50.0;   // H4
+        m_us500BounceMinSizes[4] = 25.0;   // H1
+        m_us500BounceMinSizes[5] = 15.0;   // M30
+        m_us500BounceMinSizes[6] = 10.0;   // M15
+        m_us500BounceMinSizes[7] = 6.0;    // M5
+        m_us500BounceMinSizes[8] = 4.0;    // M1
         
         // Minimum touches required (higher due to more noise)
-        m_us500MinTouches[PERIOD_MN1] = 2;
-        m_us500MinTouches[PERIOD_W1]  = 2;
-        m_us500MinTouches[PERIOD_D1]  = 3;
-        m_us500MinTouches[PERIOD_H4]  = 3;
-        m_us500MinTouches[PERIOD_H1]  = 4;
-        m_us500MinTouches[PERIOD_M30] = 4;
-        m_us500MinTouches[PERIOD_M15] = 4;
-        m_us500MinTouches[PERIOD_M5]  = 5;
-        m_us500MinTouches[PERIOD_M1]  = 5;
+        m_us500MinTouches[0] = 2;  // MN1
+        m_us500MinTouches[1] = 2;  // W1
+        m_us500MinTouches[2] = 3;  // D1
+        m_us500MinTouches[3] = 3;  // H4
+        m_us500MinTouches[4] = 4;  // H1
+        m_us500MinTouches[5] = 4;  // M30
+        m_us500MinTouches[6] = 4;  // M15
+        m_us500MinTouches[7] = 5;  // M5
+        m_us500MinTouches[8] = 5;  // M1
         
         // Minimum strength thresholds (higher due to more noise)
-        m_us500MinStrengths[PERIOD_MN1] = 0.55;
-        m_us500MinStrengths[PERIOD_W1]  = 0.55;
-        m_us500MinStrengths[PERIOD_D1]  = 0.60;
-        m_us500MinStrengths[PERIOD_H4]  = 0.65;
-        m_us500MinStrengths[PERIOD_H1]  = 0.70;
-        m_us500MinStrengths[PERIOD_M30] = 0.75;
-        m_us500MinStrengths[PERIOD_M15] = 0.75;
-        m_us500MinStrengths[PERIOD_M5]  = 0.80;
-        m_us500MinStrengths[PERIOD_M1]  = 0.85;
+        m_us500MinStrengths[0] = 0.55;  // MN1
+        m_us500MinStrengths[1] = 0.55;  // W1
+        m_us500MinStrengths[2] = 0.60;  // D1
+        m_us500MinStrengths[3] = 0.65;  // H4
+        m_us500MinStrengths[4] = 0.70;  // H1
+        m_us500MinStrengths[5] = 0.75;  // M30
+        m_us500MinStrengths[6] = 0.75;  // M15
+        m_us500MinStrengths[7] = 0.80;  // M5
+        m_us500MinStrengths[8] = 0.85;  // M1
         
         // Lookback periods
-        m_us500Lookbacks[PERIOD_MN1] = 24;   // 24 months
-        m_us500Lookbacks[PERIOD_W1]  = 52;   // 52 weeks
-        m_us500Lookbacks[PERIOD_D1]  = 200;  // 200 days
-        m_us500Lookbacks[PERIOD_H4]  = 200;  // 200 4h bars
-        m_us500Lookbacks[PERIOD_H1]  = 200;  // 200 1h bars
-        m_us500Lookbacks[PERIOD_M30] = 200;  // 200 30m bars
-        m_us500Lookbacks[PERIOD_M15] = 200;  // 200 15m bars
-        m_us500Lookbacks[PERIOD_M5]  = 200;  // 200 5m bars
-        m_us500Lookbacks[PERIOD_M1]  = 200;  // 200 1m bars
+        m_us500Lookbacks[0] = 24;   // MN1: 24 months
+        m_us500Lookbacks[1] = 52;   // W1:  52 weeks
+        m_us500Lookbacks[2] = 200;  // D1:  200 days
+        m_us500Lookbacks[3] = 200;  // H4:  200 4h bars
+        m_us500Lookbacks[4] = 200;  // H1:  200 1h bars
+        m_us500Lookbacks[5] = 200;  // M30: 200 30m bars
+        m_us500Lookbacks[6] = 200;  // M15: 200 15m bars
+        m_us500Lookbacks[7] = 200;  // M5:  200 5m bars
+        m_us500Lookbacks[8] = 200;  // M1:  200 1m bars
         
         // Maximum bounce delays (in bars)
-        m_us500MaxBounceDelays[PERIOD_MN1] = 3;
-        m_us500MaxBounceDelays[PERIOD_W1]  = 4;
-        m_us500MaxBounceDelays[PERIOD_D1]  = 5;
-        m_us500MaxBounceDelays[PERIOD_H4]  = 6;
-        m_us500MaxBounceDelays[PERIOD_H1]  = 8;
-        m_us500MaxBounceDelays[PERIOD_M30] = 10;
-        m_us500MaxBounceDelays[PERIOD_M15] = 12;
-        m_us500MaxBounceDelays[PERIOD_M5]  = 15;
-        m_us500MaxBounceDelays[PERIOD_M1]  = 20;
+        m_us500MaxBounceDelays[0] = 3;   // MN1
+        m_us500MaxBounceDelays[1] = 4;   // W1
+        m_us500MaxBounceDelays[2] = 5;   // D1
+        m_us500MaxBounceDelays[3] = 6;   // H4
+        m_us500MaxBounceDelays[4] = 8;   // H1
+        m_us500MaxBounceDelays[5] = 10;  // M30
+        m_us500MaxBounceDelays[6] = 12;  // M15
+        m_us500MaxBounceDelays[7] = 15;  // M5
+        m_us500MaxBounceDelays[8] = 20;  // M1
         
         m_initialized = true;
     }
