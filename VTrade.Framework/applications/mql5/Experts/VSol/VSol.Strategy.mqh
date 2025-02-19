@@ -957,78 +957,86 @@ public:
 
 private:
     //--- Key Level Helper Methods
-    bool IsSwingHigh(const double &prices[], int index)
+    bool IsSwingHigh(const double &prices[], const int index)
     {
-        // Validate array bounds
-        int size = ArraySize(prices);
-        if(index < 2 || index >= size - 2)
+        if(index < 2 || index >= ArraySize(prices) - 2)
             return false;
             
-        // Basic swing high pattern
-        bool basicPattern = prices[index] > prices[index-1] && 
-                          prices[index] > prices[index-2] &&
-                          prices[index] > prices[index+1] && 
-                          prices[index] > prices[index+2];
-                          
-        if(!basicPattern) return false;
-        
-        // Calculate slopes for better validation
-        double leftSlope1 = prices[index] - prices[index-1];
-        double leftSlope2 = prices[index-1] - prices[index-2];
-        double rightSlope1 = prices[index] - prices[index+1];
-        double rightSlope2 = prices[index+1] - prices[index+2];
-        
-        // Validate slope consistency
-        bool validSlopes = (leftSlope1 > 0 && leftSlope2 >= 0) &&    // Increasing slope on left
-                          (rightSlope1 > 0 && rightSlope2 >= 0);      // Decreasing slope on right
-        
-        if(!validSlopes) return false;
-        
-        // Calculate the minimum required height based on timeframe
+        // Adjust parameters based on market type and timeframe
         double minHeight;
         int windowSize;
         
-        // Adjust requirements based on timeframe
-        switch(Period()) {
-            case PERIOD_MN1: 
-                minHeight = _Point * 200;
-                windowSize = 5;
-                break;
-            case PERIOD_W1:  
-                minHeight = _Point * 150;
-                windowSize = 4;
-                break;
-            case PERIOD_D1:  
-                minHeight = _Point * 100;
-                windowSize = 4;
-                break;
-            case PERIOD_H4:  
-                minHeight = _Point * 50;
-                windowSize = 3;
-                break;
-            case PERIOD_H1:
-                minHeight = _Point * 25;
-                windowSize = 3;
-                break;
-            case PERIOD_M30:
-                minHeight = _Point * 15;
-                windowSize = 2;
-                break;
-            case PERIOD_M15:
-                minHeight = _Point * 10;
-                windowSize = 2;
-                break;
-            case PERIOD_M5:
-                minHeight = _Point * 6;
-                windowSize = 2;
-                break;
-            case PERIOD_M1:
-                minHeight = _Point * 4;
-                windowSize = 2;
-                break;
-            default:         
-                minHeight = _Point * 10;
-                windowSize = 2;
+        // Get market type from base class
+        ENUM_MARKET_TYPE marketType = CVSolMarketBase::GetMarketType(_Symbol);
+        
+        // Adjust parameters based on market type and timeframe
+        if(marketType == MARKET_TYPE_CRYPTO)
+        {
+            switch(Period())
+            {
+                case PERIOD_M15:
+                    minHeight = _Point * 50;  // 0.5% of price for crypto
+                    windowSize = 3;
+                    break;
+                case PERIOD_M30:
+                    minHeight = _Point * 75;  // 0.75% of price for crypto
+                    windowSize = 3;
+                    break;
+                case PERIOD_H1:
+                    minHeight = _Point * 100;  // 1% of price for crypto
+                    windowSize = 4;
+                    break;
+                case PERIOD_H2:
+                case PERIOD_H4:
+                    minHeight = _Point * 150;  // 1.5% of price for crypto
+                    windowSize = 4;
+                    break;
+                default:
+                    minHeight = _Point * 200;  // 2% of price for crypto
+                    windowSize = 5;
+            }
+        }
+        else
+        {
+            // Original logic for forex and indices
+            switch(Period())
+            {
+                case PERIOD_M15:
+                    minHeight = _Point * 5;
+                    windowSize = 2;
+                    break;
+                case PERIOD_M30:
+                    minHeight = _Point * 7;
+                    windowSize = 2;
+                    break;
+                case PERIOD_H1:
+                    minHeight = _Point * 10;
+                    windowSize = 3;
+                    break;
+                case PERIOD_H4:
+                    minHeight = _Point * 15;
+                    windowSize = 3;
+                    break;
+                case PERIOD_D1:
+                    minHeight = _Point * 20;
+                    windowSize = 4;
+                    break;
+                case PERIOD_W1:
+                    minHeight = _Point * 30;
+                    windowSize = 4;
+                    break;
+                case PERIOD_MN1:
+                    minHeight = _Point * 40;
+                    windowSize = 5;
+                    break;
+                case PERIOD_M1:
+                    minHeight = _Point * 4;
+                    windowSize = 2;
+                    break;
+                default:         
+                    minHeight = _Point * 10;
+                    windowSize = 2;
+            }
         }
         
         // Check if the swing is significant enough
@@ -1042,83 +1050,96 @@ private:
         // Additional validation: check if it's the highest in a wider window
         for(int i = index-windowSize; i <= index+windowSize; i++)
         {
-            if(i != index && i >= 0 && i < size)
+            if(i != index && i >= 0 && i < ArraySize(prices))
             {
                 if(prices[i] > prices[index])
                     return false;  // Found a higher point nearby
             }
         }
         
-        // Optional: Check volume if available
-        double volume = (double)iVolume(_Symbol, Period(), index);
-        double volumePrev = (double)iVolume(_Symbol, Period(), index-1);
-        double volumeNext = (double)iVolume(_Symbol, Period(), index+1);
-        
-        if(volume > 0.0 && volumePrev > 0.0 && volumeNext > 0.0)
-        {
-            // Volume should be higher at the swing point
-            if(volume <= (volumePrev + volumeNext) / 2.0)
-                return false;
-        }
-        
         return true;
     }
     
-    bool IsSwingLow(const double &prices[], int index)
+    bool IsSwingLow(const double &prices[], const int index)
     {
-        // Basic swing low pattern
-        bool basicPattern = prices[index] < prices[index-1] && 
-                          prices[index] < prices[index-2] &&
-                          prices[index] < prices[index+1] && 
-                          prices[index] < prices[index+2];
-                          
-        if(!basicPattern) return false;
-        
-        // Calculate the minimum required height based on timeframe
+        if(index < 2 || index >= ArraySize(prices) - 2)
+            return false;
+            
+        // Adjust parameters based on market type and timeframe
         double minHeight;
         int windowSize;
         
-        // Adjust requirements based on timeframe
-        switch(Period()) {
-            case PERIOD_MN1: 
-                minHeight = _Point * 200;  // 200 points for monthly
-                windowSize = 5;            // Increased for better monthly validation
-                break;
-            case PERIOD_W1:  
-                minHeight = _Point * 150;  // 150 points for weekly
-                windowSize = 4;
-                break;
-            case PERIOD_D1:  
-                minHeight = _Point * 100;  // 100 points for daily
-                windowSize = 4;
-                break;
-            case PERIOD_H4:  
-                minHeight = _Point * 50;   // 50 points for 4h
-                windowSize = 3;
-                break;
-            case PERIOD_H1:
-                minHeight = _Point * 25;   // Reduced from 30 to 25 for 1h
-                windowSize = 3;
-                break;
-            case PERIOD_M30:
-                minHeight = _Point * 15;   // Reduced from 20 to 15 for M30
-                windowSize = 2;            // Reduced window size for faster timeframes
-                break;
-            case PERIOD_M15:
-                minHeight = _Point * 10;   // Reduced from 15 to 10 for M15
-                windowSize = 2;
-                break;
-            case PERIOD_M5:
-                minHeight = _Point * 6;    // Reduced from 8 to 6 for M5
-                windowSize = 2;
-                break;
-            case PERIOD_M1:
-                minHeight = _Point * 4;    // Reduced from 5 to 4 for M1
-                windowSize = 2;
-                break;
-            default:         
-                minHeight = _Point * 10;   // Default fallback
-                windowSize = 2;
+        // Get market type from base class
+        ENUM_MARKET_TYPE marketType = CVSolMarketBase::GetMarketType(_Symbol);
+        
+        // Adjust parameters based on market type and timeframe
+        if(marketType == MARKET_TYPE_CRYPTO)
+        {
+            switch(Period())
+            {
+                case PERIOD_M15:
+                    minHeight = _Point * 50;  // 0.5% of price for crypto
+                    windowSize = 3;
+                    break;
+                case PERIOD_M30:
+                    minHeight = _Point * 75;  // 0.75% of price for crypto
+                    windowSize = 3;
+                    break;
+                case PERIOD_H1:
+                    minHeight = _Point * 100;  // 1% of price for crypto
+                    windowSize = 4;
+                    break;
+                case PERIOD_H2:
+                case PERIOD_H4:
+                    minHeight = _Point * 150;  // 1.5% of price for crypto
+                    windowSize = 4;
+                    break;
+                default:
+                    minHeight = _Point * 200;  // 2% of price for crypto
+                    windowSize = 5;
+            }
+        }
+        else
+        {
+            // Original logic for forex and indices
+            switch(Period())
+            {
+                case PERIOD_M15:
+                    minHeight = _Point * 5;
+                    windowSize = 2;
+                    break;
+                case PERIOD_M30:
+                    minHeight = _Point * 7;
+                    windowSize = 2;
+                    break;
+                case PERIOD_H1:
+                    minHeight = _Point * 10;
+                    windowSize = 3;
+                    break;
+                case PERIOD_H4:
+                    minHeight = _Point * 15;
+                    windowSize = 3;
+                    break;
+                case PERIOD_D1:
+                    minHeight = _Point * 20;
+                    windowSize = 4;
+                    break;
+                case PERIOD_W1:
+                    minHeight = _Point * 30;
+                    windowSize = 4;
+                    break;
+                case PERIOD_MN1:
+                    minHeight = _Point * 40;
+                    windowSize = 5;
+                    break;
+                case PERIOD_M1:
+                    minHeight = _Point * 4;
+                    windowSize = 2;
+                    break;
+                default:         
+                    minHeight = _Point * 10;
+                    windowSize = 2;
+            }
         }
         
         // Check if the swing is significant enough
@@ -1144,13 +1165,38 @@ private:
     
     bool IsNearExistingLevel(const double price)
     {
-        // Calculate appropriate touch zone based on timeframe
+        // Calculate appropriate touch zone based on market type and timeframe
         double adjustedTouchZone = m_touchZone;
-        switch(Period()) {
-            case PERIOD_MN1: adjustedTouchZone *= 2.0; break;
-            case PERIOD_W1:  adjustedTouchZone *= 1.8; break;
-            case PERIOD_D1:  adjustedTouchZone *= 1.5; break;
-            case PERIOD_H4:  adjustedTouchZone *= 1.2; break;
+        ENUM_MARKET_TYPE marketType = CVSolMarketBase::GetMarketType(_Symbol);
+        
+        if(marketType == MARKET_TYPE_CRYPTO)
+        {
+            // For crypto, use percentage-based zones
+            double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            adjustedTouchZone = currentPrice * 0.005;  // 0.5% of current price
+            
+            // Adjust based on timeframe
+            switch(Period()) {
+                case PERIOD_MN1: adjustedTouchZone *= 4.0; break;
+                case PERIOD_W1:  adjustedTouchZone *= 3.0; break;
+                case PERIOD_D1:  adjustedTouchZone *= 2.0; break;
+                case PERIOD_H4:  adjustedTouchZone *= 1.5; break;
+                case PERIOD_H2:  adjustedTouchZone *= 1.2; break;
+                case PERIOD_H1:  adjustedTouchZone *= 1.0; break;
+                case PERIOD_M30: adjustedTouchZone *= 0.8; break;
+                case PERIOD_M15: adjustedTouchZone *= 0.5; break;
+                default: break;
+            }
+        }
+        else
+        {
+            // Original logic for forex and indices
+            switch(Period()) {
+                case PERIOD_MN1: adjustedTouchZone *= 2.0; break;
+                case PERIOD_W1:  adjustedTouchZone *= 1.8; break;
+                case PERIOD_D1:  adjustedTouchZone *= 1.5; break;
+                case PERIOD_H4:  adjustedTouchZone *= 1.2; break;
+            }
         }
         
         for(int i = 0; i < m_keyLevelCount; i++)
@@ -1165,13 +1211,38 @@ private:
     
     bool IsNearExistingLevel(const double price, SKeyLevel &nearestLevel, double &distance)
     {
-        // Calculate appropriate touch zone based on timeframe
+        // Calculate appropriate touch zone based on market type and timeframe
         double adjustedTouchZone = m_touchZone;
-        switch(Period()) {
-            case PERIOD_MN1: adjustedTouchZone *= 2.0; break;
-            case PERIOD_W1:  adjustedTouchZone *= 1.8; break;
-            case PERIOD_D1:  adjustedTouchZone *= 1.5; break;
-            case PERIOD_H4:  adjustedTouchZone *= 1.2; break;
+        ENUM_MARKET_TYPE marketType = CVSolMarketBase::GetMarketType(_Symbol);
+        
+        if(marketType == MARKET_TYPE_CRYPTO)
+        {
+            // For crypto, use percentage-based zones
+            double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            adjustedTouchZone = currentPrice * 0.005;  // 0.5% of current price
+            
+            // Adjust based on timeframe
+            switch(Period()) {
+                case PERIOD_MN1: adjustedTouchZone *= 4.0; break;
+                case PERIOD_W1:  adjustedTouchZone *= 3.0; break;
+                case PERIOD_D1:  adjustedTouchZone *= 2.0; break;
+                case PERIOD_H4:  adjustedTouchZone *= 1.5; break;
+                case PERIOD_H2:  adjustedTouchZone *= 1.2; break;
+                case PERIOD_H1:  adjustedTouchZone *= 1.0; break;
+                case PERIOD_M30: adjustedTouchZone *= 0.8; break;
+                case PERIOD_M15: adjustedTouchZone *= 0.5; break;
+                default: break;
+            }
+        }
+        else
+        {
+            // Original logic for forex and indices
+            switch(Period()) {
+                case PERIOD_MN1: adjustedTouchZone *= 2.0; break;
+                case PERIOD_W1:  adjustedTouchZone *= 1.8; break;
+                case PERIOD_D1:  adjustedTouchZone *= 1.5; break;
+                case PERIOD_H4:  adjustedTouchZone *= 1.2; break;
+            }
         }
         
         bool found = false;

@@ -13,6 +13,7 @@
 #include "VSol.Utils.mqh"
 #include "VSol.Market.Forex.mqh"    // Add Forex market data
 #include "VSol.Market.Indices.mqh"  // Add Indices market data
+#include "VSol.MarketHours.mqh"
 
 // Version tracking
 #define EA_VERSION "1.0.3"
@@ -25,6 +26,7 @@ input int     LookbackPeriod = 100;    // Lookback period for analysis
 input double  MinStrength = 0.55;      // Minimum strength for key levels
 input int     MinTouches = 2;          // Minimum touches required
 input bool    ShowDebugPrints = true;  // Show debug prints
+input bool    EnforceMarketHours = true;  // Enforce market hours restrictions
 
 input group "Forex Settings"
 input double  ForexTouchZone = 2.5;     // Touch zone size in pips
@@ -34,12 +36,20 @@ input group "US500 Settings"
 input double  IndexTouchZone = 5.0;        // Touch zone size in points
 input double  IndexMinBounce = 2.0;        // Minimum bounce size in points
 
+input group "Crypto Settings"
+input double  CryptoTouchZone = 500.0;      // Touch zone size in USD (e.g. $500 for BTC)
+input double  CryptoMinBounce = 250.0;      // Minimum bounce size in USD (e.g. $250 for BTC)
+
 //--- Global Variables
 CVSolStrategy g_strategy;
 CVSolMarketConfig g_marketConfig;  // Add market configuration
 datetime g_lastBarTime = 0;
 ENUM_TIMEFRAMES g_lastTimeframe = PERIOD_CURRENT;
 ENUM_MARKET_TYPE g_marketType = MARKET_TYPE_UNKNOWN;  // Store market type globally
+
+//--- Static variables for time tracking
+static datetime s_lastDebugTime = 0;    // Static variable to track last debug print
+static datetime s_lastProcessTime = 0;   // Static variable to track last processing time
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -65,9 +75,13 @@ int OnInit()
     {
         case MARKET_TYPE_FOREX:     marketTypeStr = "Forex"; break;
         case MARKET_TYPE_INDEX_US500: marketTypeStr = "US500/SPX"; break;
+        case MARKET_TYPE_CRYPTO:    marketTypeStr = "Crypto"; break;
         default: marketTypeStr = "Unknown"; break;
     }
     Print("Market Type: ", marketTypeStr);
+    
+    // Log time conversion details on initialization
+    CVSolMarketHours::LogTimeConversion();
     
     // Validate market type
     if(g_marketType == MARKET_TYPE_UNKNOWN)
@@ -89,11 +103,48 @@ int OnInit()
     {
         case MARKET_TYPE_FOREX:
             CVSolForexData::InitForex(ShowDebugPrints);
-            CVSolForexData::ConfigureForex(ForexTouchZone, ForexMinBounce);  // Configure with pip values
+            CVSolForexData::ConfigureForex(ForexTouchZone, ForexMinBounce);
             break;
             
         case MARKET_TYPE_INDEX_US500:
             CVSolIndicesData::InitIndices(ShowDebugPrints);
+            break;
+            
+        case MARKET_TYPE_CRYPTO:
+            {  // Added scope
+                // For crypto, we use direct price values (in USD)
+                double cryptoTouchZone = CryptoTouchZone;
+                double cryptoMinBounce = CryptoMinBounce;
+                
+                // Adjust based on price scale if needed
+                double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                if(currentPrice > 10000)  // For high-value coins like BTC
+                {
+                    cryptoTouchZone = MathMax(cryptoTouchZone, currentPrice * 0.005);  // At least 0.5% of price
+                    cryptoMinBounce = MathMax(cryptoMinBounce, currentPrice * 0.0025);  // At least 0.25% of price
+                }
+                
+                if(ShowDebugPrints)
+                {
+                    Print(StringFormat(
+                        "Configuring crypto settings for %s:\n" +
+                        "Current Price: $%.2f\n" +
+                        "Touch Zone: $%.2f (%.2f%%)\n" +
+                        "Min Bounce: $%.2f (%.2f%%)",
+                        _Symbol,
+                        currentPrice,
+                        cryptoTouchZone,
+                        (cryptoTouchZone / currentPrice) * 100,
+                        cryptoMinBounce,
+                        (cryptoMinBounce / currentPrice) * 100
+                    ));
+                }
+                
+                CVSolForexData::InitForex(ShowDebugPrints);
+                // Convert to points since we're using direct price values
+                double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+                CVSolForexData::ConfigureForex(cryptoTouchZone / point, cryptoMinBounce / point);
+            }
             break;
             
         default:
@@ -102,10 +153,24 @@ int OnInit()
     }
     
     // Select market-specific parameters and configure market settings
-    double touchZone = (g_marketType == MARKET_TYPE_FOREX) ? 
-                      CVSolForexData::PipsToPrice(ForexTouchZone) : IndexTouchZone;
-    double minBounce = (g_marketType == MARKET_TYPE_FOREX) ? 
-                      CVSolForexData::PipsToPrice(ForexMinBounce) : IndexMinBounce;
+    double touchZone = 0.0;
+    double minBounce = 0.0;
+    
+    switch(g_marketType)
+    {
+        case MARKET_TYPE_FOREX:
+            touchZone = CVSolForexData::PipsToPrice(ForexTouchZone);
+            minBounce = CVSolForexData::PipsToPrice(ForexMinBounce);
+            break;
+        case MARKET_TYPE_INDEX_US500:
+            touchZone = IndexTouchZone;
+            minBounce = IndexMinBounce;
+            break;
+        case MARKET_TYPE_CRYPTO:
+            touchZone = CryptoTouchZone;
+            minBounce = CryptoMinBounce;
+            break;
+    }
     
     // Configure market settings
     g_marketConfig.Configure(
@@ -133,6 +198,17 @@ int OnInit()
                 ForexMinBounce, units, minBounce
             ));
         }
+        else if(g_marketType == MARKET_TYPE_CRYPTO)
+        {
+            Print(StringFormat(
+                "Using %s settings:\n" +
+                "Touch Zone: $%.2f\n" +
+                "Min Bounce: $%.2f",
+                marketTypeStr,
+                touchZone,
+                minBounce
+            ));
+        }
         else
         {
             Print(StringFormat(
@@ -153,9 +229,12 @@ int OnInit()
         return INIT_FAILED;
     }
     
-    // Store initial state
+    // Store initial state with proper server time
     g_lastBarTime = iTime(_Symbol, Period(), 0);
     g_lastTimeframe = Period();
+    
+    // Initialize the last process time to current server time
+    s_lastProcessTime = TimeCurrent();
     
     // Print timeframe info
     int periodMinutes = PeriodSeconds(g_lastTimeframe) / 60;
@@ -185,12 +264,18 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
+    datetime currentBarTime = iTime(_Symbol, Period(), 0);
+    bool isNewBar = (currentBarTime != g_lastBarTime);
+    bool shouldPrintDebug = ShowDebugPrints && isNewBar;  // Only print debug on new bars
+    
     // Get detailed market status
     ENUM_SYMBOL_TRADE_MODE tradeMode = (ENUM_SYMBOL_TRADE_MODE)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE);
     bool isTradeAllowed = tradeMode == SYMBOL_TRADE_MODE_FULL;
-    bool isSessionOpen = (bool)SymbolInfoInteger(_Symbol, SYMBOL_SESSION_DEALS) > 0;
+    bool isSessionOpen = (g_marketType == MARKET_TYPE_CRYPTO || g_marketType == MARKET_TYPE_FOREX) ? true : 
+                        (bool)SymbolInfoInteger(_Symbol, SYMBOL_SESSION_DEALS) > 0;
     
-    if(ShowDebugPrints)
+    // Print market status only on new bars if debug is enabled
+    if(shouldPrintDebug)
     {
         string tradeModeStr = "";
         switch(tradeMode)
@@ -210,40 +295,27 @@ void OnTick()
     }
     
     // Check if market is closed or trading is restricted
-    if(tradeMode != SYMBOL_TRADE_MODE_FULL || !isTradeAllowed || !isSessionOpen)
+    if(EnforceMarketHours && !CVSolMarketHours::IsMarketOpen(g_marketType, isTradeAllowed))
     {
-        if(ShowDebugPrints)
+        if(shouldPrintDebug)  // Only print on new bars
             Print("Market is closed or restricted for ", _Symbol, ", skipping processing");
         return;
     }
     
-    // Check for new bar or timeframe change
-    datetime currentBarTime = iTime(_Symbol, Period(), 0);
-    if(currentBarTime == g_lastBarTime && Period() == g_lastTimeframe)
-    {
-        if(ShowDebugPrints)
-            Print("No new bar for ", _Symbol, ", last bar time: ", TimeToString(g_lastBarTime));
-        return;
-    }
-        
-    if(ShowDebugPrints)
-        Print("Processing new bar at ", TimeToString(currentBarTime), " for ", _Symbol);
-        
-    // Update state
+    // Update state before processing
     g_lastBarTime = currentBarTime;
     g_lastTimeframe = Period();
-    
-    // Process strategy
-    if(ShowDebugPrints)
-        Print("Starting strategy processing for ", _Symbol);
-        
+    s_lastProcessTime = TimeCurrent();
+
+    // Process the strategy (this is where key levels are computed and lines drawn)
     g_strategy.ProcessStrategy();
-    
-    // Find key levels
-    SKeyLevel strongestLevel;
-    if(g_strategy.FindKeyLevels(strongestLevel))
+    ChartRedraw();
+
+    // Find and log key levels (only on new bars)
+    if(shouldPrintDebug)
     {
-        if(ShowDebugPrints)
+        SKeyLevel strongestLevel;
+        if(g_strategy.FindKeyLevels(strongestLevel))
         {
             string volumeInfo = strongestLevel.volumeConfirmed ? 
                 StringFormat(", Volume Ratio=%.2f", strongestLevel.volumeRatio) : 
@@ -263,12 +335,14 @@ void OnTick()
                   volumeInfo,
                   "\n", touchInfo
             );
+            
+            Print("Processing trading logic for ", _Symbol);
+        }
+        else
+        {
+            Print("No key levels found for ", _Symbol);
         }
     }
-    else if(ShowDebugPrints)
-    {
-        Print("No key levels found for ", _Symbol);
-    }
     
-    ChartRedraw();
+    // ... Trading logic here ...
 }

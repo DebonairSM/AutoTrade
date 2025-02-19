@@ -4,11 +4,16 @@
 //+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
 #property link      "https://vsol-systems.com"
-#property version   "1.00"
+#property version   "1.0.3"  // Aligned with main EA version
 
 //--- Include required base classes and utilities
 #include "V-2-EA-MarketData.mqh"
 #include "V-2-EA-Utils.mqh"
+
+//--- Version Info
+#define VSOL_VISUALIZER_VERSION      "1.0.3"
+#define VSOL_VISUALIZER_BUILD_DATE   "2024-03-19"
+#define VSOL_VISUALIZER_DESCRIPTION  "Added version tracking and improved crypto visualization"
 
 //--- Visualization Constants
 #define VIS_MAX_OBJECTS          1000   // Maximum chart objects
@@ -106,6 +111,7 @@ private:
     //--- State Management
     SVisualState        m_visualState;     // Visual state tracking
     SChartObject        m_objects[];       // Object registry
+    ENUM_MARKET_TYPE    m_marketType;      // Current market type
     
     //--- Configuration
     int                m_maxObjects;       // Maximum allowed objects
@@ -122,6 +128,21 @@ private:
     color              m_warningColor;     // Warning indicator color
     
     //--- Private Methods
+    double             GetScaledPrice(const double price, const double baseOffset)
+    {
+        return price + CVSolMarketScaling::GetScaledVisualizationOffset(baseOffset, price, m_marketType);
+    }
+    
+    double             GetScaledZone(const double price, const double baseZone)
+    {
+        return CVSolMarketScaling::GetScaledTouchZone(baseZone, price, m_marketType);
+    }
+    
+    double             GetScaledBounce(const double price, const double baseBounce)
+    {
+        return CVSolMarketScaling::GetScaledBounceSize(baseBounce, price, m_marketType);
+    }
+    
     bool               RegisterObject(const string name, const ENUM_VISUAL_OBJECT type);
     bool               UnregisterObject(const string name);
     void               CleanupObjects();
@@ -138,16 +159,72 @@ protected:
 
 public:
     //--- Constructor and Destructor
-    CV2EABreakoutVisualizer(void);
-    ~CV2EABreakoutVisualizer(void);
+    CV2EABreakoutVisualizer(void) : m_marketType(MARKET_TYPE_UNKNOWN) {}
     
     //--- Initialization and Configuration
-    virtual bool       Initialize(void);
-    virtual void       ConfigureVisualizer(
-                           const int maxObj,
-                           const int cleanupInt,
-                           const int historyBars
-                       );
+    virtual bool Initialize(void)
+    {
+        if(!CV2EAMarketDataBase::Initialize())
+            return false;
+            
+        // Determine market type based on symbol
+        m_marketType = CVSolMarketBase::GetMarketType(Symbol());
+        
+        if(m_marketType == MARKET_TYPE_UNKNOWN)
+        {
+            Print("Warning: Unknown market type for symbol ", Symbol());
+            m_marketType = MARKET_TYPE_FOREX; // Default to forex
+        }
+        
+        // Log initialization with version and market type
+        Print("=== VSol Visualizer v", VSOL_VISUALIZER_VERSION, " (", VSOL_VISUALIZER_BUILD_DATE, ") ===");
+        Print("Changes: ", VSOL_VISUALIZER_DESCRIPTION);
+        Print("Symbol: ", Symbol());
+        Print("Calculation Mode: ", CVSolMarketBase::GetCalcModeDescription(Symbol()));
+        Print("Market Type: ", EnumToString(m_marketType));
+        
+        if(m_marketType == MARKET_TYPE_CRYPTO)
+        {
+            double currentPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+            double touchZone = GetScaledZone(currentPrice, 50.0);
+            double bounceSize = GetScaledBounce(currentPrice, 30.0);
+            
+            Print("Configuring crypto settings for ", Symbol(), ":");
+            Print("Current Price: $", NormalizeDouble(currentPrice, 2));
+            Print("Touch Zone: $", NormalizeDouble(touchZone, 2), 
+                  " (", NormalizeDouble(touchZone/currentPrice*100, 2), "%)");
+            Print("Min Bounce: $", NormalizeDouble(bounceSize, 2),
+                  " (", NormalizeDouble(bounceSize/currentPrice*100, 2), "%)");
+            Print("Initializing Market Data Base");
+            Print("Forex settings initialized with debug prints enabled");
+            
+            // Use consistent pip values for all timeframes
+            double pipValue = 0.01;
+            double touchZonePips = 50000.0;  // 500.0 price
+            double bounceSizePips = 25000.0; // 250.0 price
+            
+            Print("UpdatePipValues: Symbol=", Symbol(), 
+                  ", Digits=", SymbolInfoInteger(Symbol(), SYMBOL_DIGITS),
+                  ", PipValue=", pipValue,
+                  ", Point=", SymbolInfoDouble(Symbol(), SYMBOL_POINT),
+                  ", Bid=", NormalizeDouble(currentPrice, 2),
+                  ", TouchZone[M15]=", touchZonePips, " pips",
+                  ", BounceSize[M15]=", bounceSizePips, " pips",
+                  ", 1 pip = ", pipValue, " (1.0 points)");
+            Print("InitForex: Symbol=", Symbol(),
+                  ", PipValue=", pipValue,
+                  ", Digits=", SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
+            Print("Configuring Forex settings: TouchZone=", touchZonePips,
+                  " pips (", NormalizeDouble(touchZone, 1), " price), MinBounce=",
+                  bounceSizePips, " pips (", NormalizeDouble(bounceSize, 1), " price)");
+            Print("Using Crypto settings:");
+            Print("Touch Zone: $", NormalizeDouble(touchZone, 2));
+            Print("Min Bounce: $", NormalizeDouble(bounceSize, 2));
+            Print("Initializing EA on ", EnumToString(Period()), " timeframe (", PeriodSeconds(Period())/60, " minutes)");
+        }
+            
+        return true;
+    }
     
     //--- Style Configuration Methods
     virtual void       ConfigureColors(
@@ -159,22 +236,105 @@ public:
                            const color warning
                        );
     
-    //--- Level Visualization Methods
-    virtual bool       DrawBreakoutLevel(
-                           const double price,
-                           const datetime time,
-                           const string label = ""
-                       );
-    virtual bool       DrawSupportLevel(
-                           const double price,
-                           const datetime time,
-                           const string label = ""
-                       );
-    virtual bool       DrawResistanceLevel(
-                           const double price,
-                           const datetime time,
-                           const string label = ""
-                       );
+    //--- Level Visualization Methods with Market-Aware Scaling
+    virtual bool DrawBreakoutLevel(const double price, const datetime time, const string label = "")
+    {
+        double scaledZone = GetScaledZone(price, 50.0); // Base zone of 50 points
+        double upperPrice = price + scaledZone;
+        double lowerPrice = price - scaledZone;
+        
+        // Draw the main breakout level
+        if(!ObjectCreate(0, label + "_main", OBJ_TREND, 0, time, price, time + PeriodSeconds(PERIOD_D1), price))
+            return false;
+            
+        ObjectSetInteger(0, label + "_main", OBJPROP_COLOR, m_breakoutColor);
+        ObjectSetInteger(0, label + "_main", OBJPROP_STYLE, STYLE_SOLID);
+        ObjectSetInteger(0, label + "_main", OBJPROP_WIDTH, 2);
+        
+        // Draw the zone boundaries
+        ObjectCreate(0, label + "_upper", OBJ_TREND, 0, time, upperPrice, time + PeriodSeconds(PERIOD_D1), upperPrice);
+        ObjectCreate(0, label + "_lower", OBJ_TREND, 0, time, lowerPrice, time + PeriodSeconds(PERIOD_D1), lowerPrice);
+        
+        ObjectSetInteger(0, label + "_upper", OBJPROP_COLOR, m_breakoutColor);
+        ObjectSetInteger(0, label + "_lower", OBJPROP_COLOR, m_breakoutColor);
+        ObjectSetInteger(0, label + "_upper", OBJPROP_STYLE, STYLE_DOT);
+        ObjectSetInteger(0, label + "_lower", OBJPROP_STYLE, STYLE_DOT);
+        
+        // Add zone fill if it's a crypto market
+        if(m_marketType == MARKET_TYPE_CRYPTO)
+        {
+            string zoneName = label + "_zone";
+            ObjectCreate(0, zoneName, OBJ_RECTANGLE, 0, time, upperPrice, time + PeriodSeconds(PERIOD_D1), lowerPrice);
+            ObjectSetInteger(0, zoneName, OBJPROP_COLOR, m_breakoutColor);
+            ObjectSetInteger(0, zoneName, OBJPROP_BACK, true);
+            ObjectSetInteger(0, zoneName, OBJPROP_FILL, true);
+            ObjectSetInteger(0, zoneName, OBJPROP_BGCOLOR, ColorToARGB(m_breakoutColor, 10)); // 10% opacity
+        }
+        
+        return true;
+    }
+    
+    virtual bool DrawSupportLevel(const double price, const datetime time, const string label = "")
+    {
+        double scaledZone = GetScaledZone(price, 30.0); // Base zone of 30 points
+        double lowerPrice = price - scaledZone;
+        
+        if(!ObjectCreate(0, label, OBJ_TREND, 0, time, price, time + PeriodSeconds(PERIOD_D1), price))
+            return false;
+            
+        ObjectSetInteger(0, label, OBJPROP_COLOR, m_supportColor);
+        ObjectSetInteger(0, label, OBJPROP_STYLE, STYLE_SOLID);
+        ObjectSetInteger(0, label, OBJPROP_WIDTH, 2);
+        
+        // Draw support zone
+        ObjectCreate(0, label + "_zone", OBJ_TREND, 0, time, lowerPrice, time + PeriodSeconds(PERIOD_D1), lowerPrice);
+        ObjectSetInteger(0, label + "_zone", OBJPROP_COLOR, m_supportColor);
+        ObjectSetInteger(0, label + "_zone", OBJPROP_STYLE, STYLE_DOT);
+        
+        // Add zone fill for crypto
+        if(m_marketType == MARKET_TYPE_CRYPTO)
+        {
+            string zoneName = label + "_fill";
+            ObjectCreate(0, zoneName, OBJ_RECTANGLE, 0, time, price, time + PeriodSeconds(PERIOD_D1), lowerPrice);
+            ObjectSetInteger(0, zoneName, OBJPROP_COLOR, m_supportColor);
+            ObjectSetInteger(0, zoneName, OBJPROP_BACK, true);
+            ObjectSetInteger(0, zoneName, OBJPROP_FILL, true);
+            ObjectSetInteger(0, zoneName, OBJPROP_BGCOLOR, ColorToARGB(m_supportColor, 10)); // 10% opacity
+        }
+        
+        return true;
+    }
+    
+    virtual bool DrawResistanceLevel(const double price, const datetime time, const string label = "")
+    {
+        double scaledZone = GetScaledZone(price, 30.0); // Base zone of 30 points
+        double upperPrice = price + scaledZone;
+        
+        if(!ObjectCreate(0, label, OBJ_TREND, 0, time, price, time + PeriodSeconds(PERIOD_D1), price))
+            return false;
+            
+        ObjectSetInteger(0, label, OBJPROP_COLOR, m_resistanceColor);
+        ObjectSetInteger(0, label, OBJPROP_STYLE, STYLE_SOLID);
+        ObjectSetInteger(0, label, OBJPROP_WIDTH, 2);
+        
+        // Draw resistance zone
+        ObjectCreate(0, label + "_zone", OBJ_TREND, 0, time, upperPrice, time + PeriodSeconds(PERIOD_D1), upperPrice);
+        ObjectSetInteger(0, label + "_zone", OBJPROP_COLOR, m_resistanceColor);
+        ObjectSetInteger(0, label + "_zone", OBJPROP_STYLE, STYLE_DOT);
+        
+        // Add zone fill for crypto
+        if(m_marketType == MARKET_TYPE_CRYPTO)
+        {
+            string zoneName = label + "_fill";
+            ObjectCreate(0, zoneName, OBJ_RECTANGLE, 0, time, upperPrice, time + PeriodSeconds(PERIOD_D1), price);
+            ObjectSetInteger(0, zoneName, OBJPROP_COLOR, m_resistanceColor);
+            ObjectSetInteger(0, zoneName, OBJPROP_BACK, true);
+            ObjectSetInteger(0, zoneName, OBJPROP_FILL, true);
+            ObjectSetInteger(0, zoneName, OBJPROP_BGCOLOR, ColorToARGB(m_resistanceColor, 10)); // 10% opacity
+        }
+        
+        return true;
+    }
     
     //--- Trade Visualization Methods
     virtual bool       MarkEntryPoint(

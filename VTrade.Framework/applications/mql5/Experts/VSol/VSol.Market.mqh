@@ -4,11 +4,16 @@
 //+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
 #property link      "https://vsol-systems.com"
-#property version   "1.00"
+#property version   "1.0.3"  // Aligned with main EA version
 #property strict
 
 #ifndef __VSOL_MARKET_MQH__
 #define __VSOL_MARKET_MQH__
+
+//--- Version Info
+#define VSOL_MARKET_VERSION      "1.0.3"
+#define VSOL_MARKET_BUILD_DATE   "2024-03-19"
+#define VSOL_MARKET_DESCRIPTION  "Added version tracking and improved crypto visualization"
 
 //+------------------------------------------------------------------+
 //| Key Level and Touch Structures                                     |
@@ -66,7 +71,8 @@ enum ENUM_MARKET_TYPE
 {
     MARKET_TYPE_UNKNOWN = -1,    // Unknown market type
     MARKET_TYPE_FOREX,           // Forex market
-    MARKET_TYPE_INDEX_US500      // US500/SPX market
+    MARKET_TYPE_INDEX_US500,     // US500/SPX market
+    MARKET_TYPE_CRYPTO           // Cryptocurrency market
 };
 
 //+------------------------------------------------------------------+
@@ -128,7 +134,64 @@ public:
     
     string GetUnits() const
     {
-        return (m_marketType == MARKET_TYPE_FOREX) ? "pips" : "points";
+        switch(m_marketType)
+        {
+            case MARKET_TYPE_FOREX:
+                return "pips";
+            case MARKET_TYPE_CRYPTO:
+                return "USD";
+            default:
+                return "points";
+        }
+    }
+};
+
+//+------------------------------------------------------------------+
+//| Market Scaling Functions                                           |
+//+------------------------------------------------------------------+
+class CVSolMarketScaling
+{
+public:
+    static double GetScaledTouchZone(const double baseZone, const double currentPrice, const ENUM_MARKET_TYPE marketType)
+    {
+        switch(marketType)
+        {
+            case MARKET_TYPE_CRYPTO:
+                return MathMax(baseZone, currentPrice * 0.005); // 0.5% of price
+            
+            case MARKET_TYPE_FOREX:
+            case MARKET_TYPE_INDEX_US500:
+            default:
+                return baseZone;
+        }
+    }
+    
+    static double GetScaledBounceSize(const double baseBounce, const double currentPrice, const ENUM_MARKET_TYPE marketType)
+    {
+        switch(marketType)
+        {
+            case MARKET_TYPE_CRYPTO:
+                return MathMax(baseBounce, currentPrice * 0.0025); // 0.25% of price
+            
+            case MARKET_TYPE_FOREX:
+            case MARKET_TYPE_INDEX_US500:
+            default:
+                return baseBounce;
+        }
+    }
+    
+    static double GetScaledVisualizationOffset(const double baseOffset, const double currentPrice, const ENUM_MARKET_TYPE marketType)
+    {
+        switch(marketType)
+        {
+            case MARKET_TYPE_CRYPTO:
+                return MathMax(baseOffset, currentPrice * 0.01); // 1% of price
+            
+            case MARKET_TYPE_FOREX:
+            case MARKET_TYPE_INDEX_US500:
+            default:
+                return baseOffset;
+        }
     }
 };
 
@@ -184,7 +247,33 @@ protected:
             return false;
             
         double bounceSize = MathAbs(prices[0] - level);
-        return bounceSize >= minBounceSize;
+        
+        // For crypto, adjust bounce size based on price scale
+        double effectiveBounceSize = minBounceSize;
+        if(price > 10000)  // High-value coins like BTC
+        {
+            // Use percentage-based bounce (0.25% of price)
+            effectiveBounceSize = MathMax(minBounceSize, price * 0.0025);
+        }
+        
+        return bounceSize >= effectiveBounceSize;
+    }
+    
+    /**
+     * @brief Validate if a price point is a valid touch of a level.
+     */
+    static bool IsTouchValid(const double price, const double level, const double touchZone)
+    {
+        // For crypto, we use direct price differences
+        double effectiveZone = touchZone;
+        if(price > 10000)  // High-value coins like BTC
+        {
+            // Use percentage-based zone (0.5% of price)
+            effectiveZone = MathMax(touchZone, price * 0.005);
+        }
+        
+        double priceDiff = MathAbs(price - level);
+        return priceDiff <= effectiveZone;
     }
     
 public:
@@ -240,14 +329,6 @@ public:
     }
     
     /**
-     * @brief Validate if a price point is a valid touch of a level.
-     */
-    static bool IsTouchValid(const double price, const double level, const double touchZone)
-    {
-        return MathAbs(price - level) <= touchZone;
-    }
-    
-    /**
      * @brief Check if there is a volume spike at the given bar.
      */
     static bool IsVolumeSpike(const long &volumes[], const int index, const int barsToAverage=10, const double multiplier=1.5)
@@ -259,8 +340,15 @@ public:
         if(avgVolume <= 0)
             return false;
             
+        // For crypto, we use a more sensitive volume spike detection
+        double effectiveMultiplier = multiplier;
+        if(SymbolInfoDouble(Symbol(), SYMBOL_BID) > 10000)  // High-value coins like BTC
+        {
+            effectiveMultiplier = 1.25;  // More sensitive for crypto
+        }
+            
         double volumeRatio = (double)volumes[index] / avgVolume;
-        return volumeRatio >= multiplier;
+        return volumeRatio >= effectiveMultiplier;
     }
     
     /**
@@ -333,30 +421,55 @@ public:
     }
     
     /**
-     * @brief Detect the market type for a given symbol
+     * @brief Detect the market type based on symbol characteristics
      */
     static ENUM_MARKET_TYPE GetMarketType(const string symbol)
     {
-        // Get the symbol's trade calculation mode
+        // Get symbol properties
         ENUM_SYMBOL_CALC_MODE calc_mode = (ENUM_SYMBOL_CALC_MODE)SymbolInfoInteger(symbol, SYMBOL_TRADE_CALC_MODE);
         
-        // Check for Forex - include both FOREX and FOREX_NO_LEVERAGE modes
-        if(calc_mode == SYMBOL_CALC_MODE_FOREX || 
-           calc_mode == SYMBOL_CALC_MODE_FOREX_NO_LEVERAGE ||
-           StringLen(symbol) == 6)  // Standard Forex pair length
+        // Check for crypto pairs (BTC, ETH, etc.)
+        if(StringFind(symbol, "BTC") >= 0 || StringFind(symbol, "ETH") >= 0 ||
+           StringFind(symbol, "XRP") >= 0 || StringFind(symbol, "DOGE") >= 0)
         {
-            // Additional validation for Forex pairs
-            string base = StringSubstr(symbol, 0, 3);
-            string quote = StringSubstr(symbol, 3, 3);
-            if(base != quote && StringLen(base) == 3 && StringLen(quote) == 3)
-                return MARKET_TYPE_FOREX;
+            return MARKET_TYPE_CRYPTO;
         }
-            
-        // Check for US500/SPX
+        
+        // Check for US500
         if(StringFind(symbol, "US500") >= 0 || StringFind(symbol, "SPX") >= 0)
+        {
             return MARKET_TYPE_INDEX_US500;
-            
+        }
+        
+        // Check for Forex
+        if(calc_mode == SYMBOL_CALC_MODE_FOREX)
+        {
+            return MARKET_TYPE_FOREX;
+        }
+        
         return MARKET_TYPE_UNKNOWN;
+    }
+    
+    /**
+     * @brief Get the calculation mode description for the current symbol
+     */
+    static string GetCalcModeDescription(const string symbol)
+    {
+        ENUM_SYMBOL_CALC_MODE calc_mode = (ENUM_SYMBOL_CALC_MODE)SymbolInfoInteger(symbol, SYMBOL_TRADE_CALC_MODE);
+        string desc = "SYMBOL_CALC_MODE_";
+        
+        switch(calc_mode)
+        {
+            case SYMBOL_CALC_MODE_FOREX: return "SYMBOL_CALC_MODE_FOREX";
+            case SYMBOL_CALC_MODE_CFD: return "SYMBOL_CALC_MODE_CFD";
+            case SYMBOL_CALC_MODE_FUTURES: return "SYMBOL_CALC_MODE_FUTURES";
+            case SYMBOL_CALC_MODE_CFDINDEX: return "SYMBOL_CALC_MODE_CFDINDEX";
+            case SYMBOL_CALC_MODE_CFDLEVERAGE: return "SYMBOL_CALC_MODE_CFDLEVERAGE";
+            case SYMBOL_CALC_MODE_EXCH_STOCKS: return "SYMBOL_CALC_MODE_EXCH_STOCKS";
+            case SYMBOL_CALC_MODE_EXCH_FUTURES: return "SYMBOL_CALC_MODE_EXCH_FUTURES";
+            case SYMBOL_CALC_MODE_EXCH_OPTIONS: return "SYMBOL_CALC_MODE_EXCH_OPTIONS";
+            default: return desc + IntegerToString(calc_mode);
+        }
     }
     
     //--- Virtual Interface Methods

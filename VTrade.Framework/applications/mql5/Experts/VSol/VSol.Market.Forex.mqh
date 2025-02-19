@@ -287,10 +287,7 @@ public:
         
         if(isLondonSession && isNYSession) return 1.3;  // London-NY overlap
         if(isAsianSession && isLondonSession) return 1.2;  // Asian-London overlap
-        if(isLondonSession) return 1.1;  // London session
-        if(isNYSession) return 1.1;  // NY session
-        if(isAsianSession) return 1.0;  // Asian session
-        return 0.8;  // Off-hours
+        return 1.0;
     }
     
     /**
