@@ -2404,17 +2404,18 @@ private:
         preBreakoutAvg /= preBreakoutBars;
         
         // Calculate breakout volume metrics
-        double avgVolume = 0;
-        double maxVolume = volumes[0];
-        double minVolume = volumes[0];
-        double volumeSum = 0;
+        double avgVolume = 0.0;
+        double maxVolume = (double)volumes[0];
+        double minVolume = (double)volumes[0];
+        double volumeSum = 0.0;
         
         for(int i = 0; i < lookback; i++)
         {
-            avgVolume += volumes[i];
-            maxVolume = MathMax(maxVolume, volumes[i]);
-            minVolume = MathMin(minVolume, volumes[i]);
-            volumeSum += volumes[i];
+            double vol = (double)volumes[i];
+            avgVolume += vol;
+            maxVolume = MathMax(maxVolume, vol);
+            minVolume = MathMin(minVolume, vol);
+            volumeSum += vol;
         }
         avgVolume /= lookback;
         
@@ -2464,17 +2465,17 @@ private:
         if(bars < 2) return false;
         
         // Calculate average volume during retest
-        double avgVolume = 0;
+        double avgVolume = 0.0;
         for(int i = 0; i < bars; i++)
-            avgVolume += volumes[i];
+            avgVolume += (double)volumes[i];
         avgVolume /= bars;
         
         // Get pre-retest volume average
-        double preRetestAvg = 0;
+        double preRetestAvg = 0.0;
         int preRetestBars = MathMin(VOLUME_PRE_BREAKOUT_BARS, ArraySize(volumes) - bars);
         
         for(int i = bars; i < bars + preRetestBars; i++)
-            preRetestAvg += volumes[i];
+            preRetestAvg += (double)volumes[i];
         preRetestAvg /= preRetestBars;
         
         // Volume should be at least VOLUME_RETEST_MIN_RATIO of pre-retest average

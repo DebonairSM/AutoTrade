@@ -1,14 +1,13 @@
 //+------------------------------------------------------------------+
-//|                                           V-2-EA-RiskManager.mqh |
-//|                                    Risk Management Implementation |
+//|                                                VSol.Risk.mqh      |
+//|                        Risk Management Implementation              |
 //+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
 #property link      "https://vsol-systems.com"
-#property version   "1.00"
+#property version   "1.01"
 
-//--- Include required base classes and utilities
-#include "V-2-EA-MarketData.mqh"
-#include "V-2-EA-Utils.mqh"
+#include "VSol.Market.mqh"
+#include "VSol.Utils.mqh"
 
 //--- Risk Analysis Constants
 #define RISK_MAX_ACCOUNT_PERCENT    2.0    // Maximum risk per trade (% of account)
@@ -83,10 +82,73 @@ struct SRiskPerformance
     }
 };
 
+class CVSolRisk : public CVSolMarketBase
+{
+private:
+    double m_riskPercent;
+    double m_maxDrawdown;
+    double m_maxDailyLoss;
+    
+public:
+    bool Init(double riskPercent, double maxDrawdown, double maxDailyLoss)
+    {
+        m_riskPercent = riskPercent;
+        m_maxDrawdown = maxDrawdown;
+        m_maxDailyLoss = maxDailyLoss;
+        return true;
+    }
+    
+    double CalculateLotSize(double stopLossPips)
+    {
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double riskAmount = balance * m_riskPercent / 100.0;
+        double tickValue = 0.0, lotStep = 0.0;
+        
+        if(!SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE, tickValue) ||
+           !SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP, lotStep))
+            return 0.0;
+        
+        if(tickValue <= 0 || lotStep <= 0 || stopLossPips <= 0)
+            return 0.0;
+        
+        double lotSize = NormalizeDouble(riskAmount / (stopLossPips * tickValue), 2);
+        lotSize = MathFloor(lotSize / lotStep) * lotStep;
+        
+        return lotSize;
+    }
+    
+    bool ValidateRisk(double lotSize, double stopLossPips)
+    {
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        double tickValue = 0.0;
+        
+        if(!SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE, tickValue))
+            return false;  // Can't validate without tick value
+        
+        // Calculate potential loss
+        double potentialLoss = lotSize * stopLossPips * tickValue;
+        
+        // Check against risk percent
+        if(potentialLoss > balance * m_riskPercent / 100.0)
+            return false;
+            
+        // Check drawdown
+        double currentDrawdown = (balance - equity) / balance * 100.0;
+        if(currentDrawdown > m_maxDrawdown)
+            return false;
+            
+        // Check daily loss
+        // TODO: Implement daily loss tracking
+        
+        return true;
+    }
+};
+
 //+------------------------------------------------------------------+
 //| Main Risk Manager Class                                            |
 //+------------------------------------------------------------------+
-class CV2EABreakoutRiskManager : public CV2EAMarketDataBase
+class CVSolRiskManager : public CVSolMarketBase
 {
 private:
     //--- State Management
@@ -104,78 +166,415 @@ private:
     double              m_maxSpreadRatio;   // Maximum spread ratio
     
     //--- Private Methods
-    bool                ValidateAccountRisk(const double riskAmount);
-    bool                ValidateDailyRisk(const double riskAmount);
-    bool                CheckDrawdownLimit();
-    bool                ValidatePositionCorrelation();
-    bool                CheckMarginRequirements();
-    void                UpdateRiskMetrics(const ENUM_RISK_CHECK checkType, const bool passed);
-    void                LogRiskStatus();
-    double              CalculatePositionCorrelation();
+    bool ValidateAccountRisk(const double riskAmount)
+    {
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double riskPercent = (riskAmount / balance) * 100.0;
+        return (riskPercent <= m_maxAccountRisk);
+    }
+    
+    bool ValidateDailyRisk(const double riskAmount)
+    {
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double currentDailyRisk = m_currentRisk.dailyRiskUsed;
+        double newDailyRisk = currentDailyRisk + (riskAmount / balance) * 100.0;
+        return (newDailyRisk <= m_maxDailyRisk);
+    }
+    
+    bool CheckDrawdownLimit()
+    {
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        double drawdown = (balance - equity) / balance * 100.0;
+        return (drawdown <= m_maxDrawdown);
+    }
+    
+    bool ValidatePositionCorrelation()
+    {
+        double correlation = CalculatePositionCorrelation();
+        return (correlation <= m_maxCorrelation);
+    }
+    
+    bool CheckMarginRequirements()
+    {
+        double marginLevel = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+        return (marginLevel >= m_minMarginLevel);
+    }
+    
+    void UpdateRiskMetrics(const ENUM_RISK_CHECK checkType, const bool passed)
+    {
+        m_performance.totalChecks++;
+        if(passed)
+            m_performance.passedChecks++;
+        else
+            m_performance.failedChecks++;
+    }
+    
+    void LogRiskStatus()
+    {
+        Print("Risk Status Update:");
+        Print("Account Risk: ", m_currentRisk.currentAccountRisk, "%");
+        Print("Daily Risk Used: ", m_currentRisk.dailyRiskUsed, "%");
+        Print("Current Drawdown: ", m_currentRisk.currentDrawdown, "%");
+        Print("Open Positions: ", m_currentRisk.openPositions);
+        Print("Margin Level: ", m_currentRisk.marginLevel, "%");
+    }
+    
+    double CalculatePositionCorrelation()
+    {
+        // Simple correlation calculation based on open positions
+        int totalPositions = PositionsTotal();
+        if(totalPositions <= 1)
+            return 0.0;
+            
+        double correlation = 0.0;
+        // TODO: Implement proper correlation calculation
+        return correlation;
+    }
     
 protected:
     //--- Protected utility methods
-    virtual bool        IsRiskAcceptable();
-    virtual bool        IsMarginSufficient();
-    virtual bool        AreSpreadsSafe();
-    virtual double      GetCurrentRiskExposure();
+    virtual bool IsRiskAcceptable()
+    {
+        return CheckDrawdownLimit() && 
+               CheckMarginRequirements() && 
+               ValidatePositionCorrelation();
+    }
+    
+    virtual bool IsMarginSufficient()
+    {
+        return CheckMarginRequirements();
+    }
+    
+    virtual bool AreSpreadsSafe()
+    {
+        double ask = 0.0, bid = 0.0;
+        long spread = 0;
+        
+        if(!SymbolInfoDouble(_Symbol, SYMBOL_ASK, ask) ||
+           !SymbolInfoDouble(_Symbol, SYMBOL_BID, bid) ||
+           !SymbolInfoInteger(_Symbol, SYMBOL_SPREAD, spread))
+            return false;
+            
+        double currentSpread = ask - bid;
+        double avgSpread = spread * _Point;
+        return (currentSpread <= avgSpread * m_maxSpreadRatio);
+    }
+    
+    virtual double GetCurrentRiskExposure()
+    {
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double exposure = 0.0;
+        
+        for(int i = 0; i < PositionsTotal(); i++)
+        {
+            if(PositionSelectByTicket(PositionGetTicket(i)))
+            {
+                double positionValue = PositionGetDouble(POSITION_VOLUME) * 
+                                     PositionGetDouble(POSITION_PRICE_OPEN);
+                exposure += positionValue;
+            }
+        }
+        
+        return (exposure / balance) * 100.0;
+    }
 
 public:
-    //--- Constructor and Destructor
-    CV2EABreakoutRiskManager(void);
-    ~CV2EABreakoutRiskManager(void);
-    
-    //--- Initialization and Configuration
-    virtual bool        Initialize(void);
-    virtual void        ConfigureRiskParameters(
-                           const double maxAccRisk,
-                           const double maxDayRisk,
-                           const double maxDD,
-                           const double minRR
-                       );
-    
     //--- Main Risk Management Methods
-    virtual bool        ValidateNewPosition(
-                           const double riskAmount,
-                           const double rewardAmount,
-                           const string symbol
-                       );
-    virtual bool        UpdateRiskState();
-    virtual bool        CheckRiskLimits();
-    virtual string      GetRiskWarnings();
+    virtual bool ValidateNewPosition(const double riskAmount,
+                                   const double rewardAmount,
+                                   const string symbol)
+    {
+        // Check risk-reward ratio
+        if(rewardAmount > 0 && (riskAmount / rewardAmount) > m_minRRRatio)
+            return false;
+            
+        // Check position limits
+        if(PositionsTotal() >= m_maxPositions)
+            return false;
+            
+        // Validate risk amounts
+        if(!ValidateAccountRisk(riskAmount) || !ValidateDailyRisk(riskAmount))
+            return false;
+            
+        // Check correlation if symbol is different
+        if(symbol != _Symbol && !ValidatePositionCorrelation())
+            return false;
+            
+        return IsRiskAcceptable();
+    }
+    
+    virtual bool UpdateRiskState()
+    {
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        
+        m_currentRisk.currentDrawdown = (balance - equity) / balance * 100.0;
+        m_currentRisk.marginLevel = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+        m_currentRisk.openPositions = PositionsTotal();
+        m_currentRisk.currentAccountRisk = GetCurrentRiskExposure();
+        m_currentRisk.correlationLevel = CalculatePositionCorrelation();
+        
+        m_currentRisk.isRiskValid = IsRiskAcceptable();
+        
+        LogRiskStatus();
+        return m_currentRisk.isRiskValid;
+    }
+    
+    virtual bool CheckRiskLimits()
+    {
+        if(!UpdateRiskState())
+            return false;
+            
+        if(m_currentRisk.currentDrawdown > m_maxDrawdown)
+        {
+            OnDrawdownLimitHit();
+            return false;
+        }
+        
+        if(m_currentRisk.marginLevel < m_minMarginLevel)
+        {
+            OnMarginCallWarning();
+            return false;
+        }
+        
+        if(m_currentRisk.dailyRiskUsed > m_maxDailyRisk)
+        {
+            OnDailyRiskLimitHit();
+            return false;
+        }
+        
+        return true;
+    }
+    
+    virtual string GetRiskWarnings()
+    {
+        string warnings = "";
+        
+        if(m_currentRisk.currentDrawdown > m_maxDrawdown * 0.8)
+            warnings += "High Drawdown Warning\n";
+            
+        if(m_currentRisk.marginLevel < m_minMarginLevel * 1.2)
+            warnings += "Low Margin Level Warning\n";
+            
+        if(m_currentRisk.dailyRiskUsed > m_maxDailyRisk * 0.8)
+            warnings += "Approaching Daily Risk Limit\n";
+            
+        if(m_currentRisk.openPositions >= m_maxPositions * 0.8)
+            warnings += "Approaching Position Limit\n";
+            
+        return warnings;
+    }
     
     //--- Position Risk Methods
-    virtual bool        ValidatePositionSize(const double lots);
-    virtual bool        ValidateStopLoss(const double price);
-    virtual bool        CheckPositionLimits();
-    virtual double      GetMaxPositionSize();
+    virtual bool ValidatePositionSize(const double lots)
+    {
+        double maxLots = GetMaxPositionSize();
+        return (lots <= maxLots);
+    }
+    
+    virtual bool ValidateStopLoss(const double price)
+    {
+        double currentPrice = 0.0;
+        if(!SymbolInfoDouble(_Symbol, SYMBOL_BID, currentPrice))
+            return false;
+            
+        double minDistance = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+        return (MathAbs(currentPrice - price) >= minDistance);
+    }
+    
+    virtual bool CheckPositionLimits()
+    {
+        return (PositionsTotal() < m_maxPositions);
+    }
+    
+    virtual double GetMaxPositionSize()
+    {
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double margin = 0.0;
+        
+        // Get margin requirement using proper enumeration
+        if(!SymbolInfoDouble(_Symbol, SYMBOL_MARGIN_INITIAL, margin))
+        {
+            // If margin info not available, use conservative estimate
+            double tickValue = 0.0;
+            if(SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE, tickValue))
+            {
+                margin = tickValue * 100;  // Assume 1:100 leverage
+            }
+            else
+            {
+                // Ultimate fallback - use very conservative estimate
+                margin = 1000.0;  // Assume high margin requirement
+            }
+        }
+        
+        double maxRiskAmount = balance * m_maxAccountRisk / 100.0;
+        
+        // Get minimum lot size with proper error checking
+        double minLot = 0.0, maxLot = 0.0, lotStep = 0.0;
+        if(!SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN, minLot)) minLot = 0.01;
+        if(!SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX, maxLot)) maxLot = 100.0;
+        if(!SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP, lotStep)) lotStep = 0.01;
+        
+        // Calculate maximum position size
+        double lotSize = NormalizeDouble(maxRiskAmount / margin, 2);
+        
+        // Ensure lot size is within allowed range and properly stepped
+        lotSize = MathMax(minLot, MathMin(maxLot, lotSize));
+        lotSize = MathFloor(lotSize / lotStep) * lotStep;
+        
+        return lotSize;
+    }
     
     //--- Correlation Management
-    virtual bool        CheckSymbolCorrelation(const string symbol);
-    virtual bool        UpdateCorrelationMatrix();
-    virtual double      GetSymbolCorrelation(const string symbol);
+    virtual bool CheckSymbolCorrelation(const string symbol)
+    {
+        // TODO: Implement proper correlation check
+        return true;
+    }
+    
+    virtual bool UpdateCorrelationMatrix()
+    {
+        // TODO: Implement correlation matrix update
+        return true;
+    }
+    
+    virtual double GetSymbolCorrelation(const string symbol)
+    {
+        // TODO: Implement correlation calculation
+        return 0.0;
+    }
     
     //--- Market Risk Methods
-    virtual bool        ValidateMarketConditions();
-    virtual bool        CheckVolatilityLevels();
-    virtual bool        ValidateSpreadLevels();
+    virtual bool ValidateMarketConditions()
+    {
+        return AreSpreadsSafe();
+    }
+    
+    virtual bool CheckVolatilityLevels()
+    {
+        // First check if ATR indicator is available
+        double atr[];
+        ArraySetAsSeries(atr, true);
+        int handle = iATR(_Symbol, PERIOD_CURRENT, 14);
+        
+        if(handle == INVALID_HANDLE)
+            return false;  // Failed to create ATR indicator
+            
+        if(CopyBuffer(handle, 0, 0, 1, atr) <= 0)
+        {
+            IndicatorRelease(handle);
+            return false;  // Failed to copy ATR data
+        }
+        
+        // Get current market prices
+        double avgATR = atr[0];
+        double ask = 0.0, bid = 0.0;
+        
+        if(!SymbolInfoDouble(_Symbol, SYMBOL_ASK, ask) ||
+           !SymbolInfoDouble(_Symbol, SYMBOL_BID, bid))
+        {
+            IndicatorRelease(handle);
+            return false;  // Failed to get price data
+        }
+        
+        // Calculate current volatility
+        double currentATR = MathAbs(ask - bid) / _Point;
+        bool result = (currentATR <= avgATR * 2.0);
+        
+        IndicatorRelease(handle);
+        return result;
+    }
+    
+    virtual bool ValidateSpreadLevels()
+    {
+        return AreSpreadsSafe();
+    }
     
     //--- Account Risk Methods
-    virtual bool        CheckAccountHealth();
-    virtual bool        ValidateMarginLevels();
-    virtual double      GetAvailableRisk();
+    virtual bool CheckAccountHealth()
+    {
+        return IsMarginSufficient() && CheckDrawdownLimit();
+    }
+    
+    virtual bool ValidateMarginLevels()
+    {
+        return IsMarginSufficient();
+    }
+    
+    virtual double GetAvailableRisk()
+    {
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double usedRisk = m_currentRisk.currentAccountRisk;
+        double availableRisk = m_maxAccountRisk - usedRisk;
+        return MathMax(0.0, availableRisk * balance / 100.0);
+    }
     
     //--- Utility and Information Methods
-    virtual void        GetRiskState(SRiskState &state) const;
-    virtual void        GetRiskPerformance(SRiskPerformance &perf) const;
-    virtual string      GetRiskReport(void) const;
-    virtual double      GetCurrentDrawdown(void) const;
-    virtual double      GetDailyRiskUsed(void) const;
+    virtual void GetRiskState(SRiskState &state) const
+    {
+        state = m_currentRisk;
+    }
+    
+    virtual void GetRiskPerformance(SRiskPerformance &perf) const
+    {
+        perf = m_performance;
+    }
+    
+    virtual string GetRiskReport(void) const
+    {
+        string report = "=== Risk Management Report ===\n";
+        report += StringFormat("Account Risk: %.2f%%\n", m_currentRisk.currentAccountRisk);
+        report += StringFormat("Daily Risk Used: %.2f%%\n", m_currentRisk.dailyRiskUsed);
+        report += StringFormat("Current Drawdown: %.2f%%\n", m_currentRisk.currentDrawdown);
+        report += StringFormat("Margin Level: %.2f%%\n", m_currentRisk.marginLevel);
+        report += StringFormat("Open Positions: %d\n", m_currentRisk.openPositions);
+        report += StringFormat("Risk Checks - Total: %d, Passed: %d, Failed: %d\n",
+                             m_performance.totalChecks,
+                             m_performance.passedChecks,
+                             m_performance.failedChecks);
+        return report;
+    }
+    
+    virtual double GetCurrentDrawdown(void) const
+    {
+        return m_currentRisk.currentDrawdown;
+    }
+    
+    virtual double GetDailyRiskUsed(void) const
+    {
+        return m_currentRisk.dailyRiskUsed;
+    }
     
     //--- Event Handlers
-    virtual void        OnRiskLimitExceeded(void);
-    virtual void        OnMarginCallWarning(void);
-    virtual void        OnDrawdownLimitHit(void);
-    virtual void        OnCorrelationLimitHit(void);
-    virtual void        OnDailyRiskLimitHit(void);
+    virtual void OnRiskLimitExceeded(void)
+    {
+        Print("⚠️ Risk limit exceeded!");
+        // TODO: Implement risk limit exceeded handling
+    }
+    
+    virtual void OnMarginCallWarning(void)
+    {
+        Print("⚠️ Margin call warning!");
+        // TODO: Implement margin call warning handling
+    }
+    
+    virtual void OnDrawdownLimitHit(void)
+    {
+        Print("⚠️ Drawdown limit hit!");
+        // TODO: Implement drawdown limit handling
+    }
+    
+    virtual void OnCorrelationLimitHit(void)
+    {
+        Print("⚠️ Correlation limit hit!");
+        // TODO: Implement correlation limit handling
+    }
+    
+    virtual void OnDailyRiskLimitHit(void)
+    {
+        Print("⚠️ Daily risk limit hit!");
+        // TODO: Implement daily risk limit handling
+    }
 }; 

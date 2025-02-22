@@ -36,7 +36,7 @@ private:
     static datetime m_lastSpreadUpdate;       // Last spread update time
     static double   m_maxAllowedSpread;       // Maximum allowed spread in pips
     static bool     m_initialized;            // Initialization state
-    static bool     m_showDebugPrints;       // Debug print flag
+    static bool     m_forexDebugPrints;       // Debug print flag for forex operations
     
     //--- Helper Methods
     static void InitializeForexSettings();
@@ -143,14 +143,14 @@ public:
         
         m_initialized = true;
         
-        if(m_showDebugPrints)
+        if(m_forexDebugPrints)
             Print("Forex settings initialized with debug prints enabled");
     }
     
     //--- Forex Specific Methods
     static void InitForex(bool showDebugPrints=false)
     {
-        m_showDebugPrints = showDebugPrints;  // Set debug flag first
+        m_forexDebugPrints = showDebugPrints;  // Set debug flag first
         Init(showDebugPrints);  // Initialize base class
         Initialize();           // Initialize Forex settings
         
@@ -162,7 +162,7 @@ public:
         m_lastSpread = 0;
         m_lastSpreadUpdate = 0;
         
-        if(m_showDebugPrints)
+        if(m_forexDebugPrints)
             Print("InitForex: Symbol=", _Symbol, ", PipValue=", m_pipValue, ", Digits=", m_pipDigits);
     }
     
@@ -179,7 +179,7 @@ public:
         // For other pairs (4-5 digits), multiply by 10 for standard scaling
         double touchZonePoints = touchZone * (m_pipDigits == 2 || m_pipDigits == 3 ? 100.0 : 10.0);
         
-        if(m_showDebugPrints)
+        if(m_forexDebugPrints)
             Print("Touch zone for ", _Symbol, " ", EnumToString(timeframe), ": ", 
                   touchZone, " pips = ", touchZonePoints, " points",
                   " (PipDigits=", m_pipDigits, ", PipValue=", m_pipValue, ")");
@@ -200,7 +200,7 @@ public:
         // For other pairs (4-5 digits), multiply by 10 for standard scaling
         double bounceSizePoints = bounceSize * (m_pipDigits == 2 || m_pipDigits == 3 ? 100.0 : 10.0);
         
-        if(m_showDebugPrints)
+        if(m_forexDebugPrints)
             Print("Bounce size for ", _Symbol, " ", EnumToString(timeframe), ": ",
                   bounceSize, " pips = ", bounceSizePoints, " points",
                   " (PipDigits=", m_pipDigits, ", PipValue=", m_pipValue, ")");
@@ -239,7 +239,7 @@ public:
         double touchZonePrice = PipsToPrice(touchZonePips);
         double minBouncePrice = PipsToPrice(minBouncePips);
         
-        if(m_showDebugPrints)
+        if(m_forexDebugPrints)
             Print("Configuring Forex settings: ",
                   "TouchZone=", touchZonePips, " pips (", touchZonePrice, " price), ",
                   "MinBounce=", minBouncePips, " pips (", minBouncePrice, " price)");
@@ -324,7 +324,7 @@ public:
     
     static bool FindForexKeyLevels(string symbol, SKeyLevel &outStrongestLevel)
     {
-        if(m_showDebugPrints)
+        if(m_forexDebugPrints)
             Print("Starting FindForexKeyLevels for ", symbol, " on ", EnumToString(Period()),
                   ", TouchZone=", GetTouchZone(Period()),
                   ", MinBounce=", GetBounceMinSize(Period()),
@@ -342,7 +342,7 @@ public:
             return false;
         }
         
-        if(m_showDebugPrints)
+        if(m_forexDebugPrints)
             Print("Copied ", bars, " bars of price data for ", symbol,
                   ", First bar=", TimeToString(rates[bars-1].time),
                   ", Last bar=", TimeToString(rates[0].time));
@@ -373,7 +373,7 @@ public:
             times[i] = rates[i].time;
         }
         
-        if(m_showDebugPrints)
+        if(m_forexDebugPrints)
             Print("Processing swing points for ", symbol, " with lookback=", bars);
         
         // Find potential levels
@@ -387,7 +387,7 @@ public:
             if(highs[i] > highs[i-1] && highs[i] > highs[i-2] &&
                highs[i] > highs[i+1] && highs[i] > highs[i+2])
             {
-                if(m_showDebugPrints)
+                if(m_forexDebugPrints)
                     Print("Found swing high at ", TimeToString(times[i]), " price=", highs[i]);
                     
                 SKeyLevel level;
@@ -400,13 +400,13 @@ public:
                 if(IsVolumeSpike(volumes, i))
                 {
                     level.volumeConfirmed = true;
-                    if(m_showDebugPrints)
+                    if(m_forexDebugPrints)
                         Print("Volume confirmed at swing high");
                 }
                 
                 if(CountTouchesEnhanced(symbol, highs, lows, times, level.price, level))
                 {
-                    if(m_showDebugPrints)
+                    if(m_forexDebugPrints)
                         Print("Level validated: Price=", level.price, ", Touches=", level.touchCount, 
                               ", Strength=", level.strength);
                               
@@ -426,7 +426,7 @@ public:
             if(lows[i] < lows[i-1] && lows[i] < lows[i-2] &&
                lows[i] < lows[i+1] && lows[i] < lows[i+2])
             {
-                if(m_showDebugPrints)
+                if(m_forexDebugPrints)
                     Print("Found swing low at ", TimeToString(times[i]), " price=", lows[i]);
                     
                 SKeyLevel level;
@@ -438,13 +438,13 @@ public:
                 if(IsVolumeSpike(volumes, i))
                 {
                     level.volumeConfirmed = true;
-                    if(m_showDebugPrints)
+                    if(m_forexDebugPrints)
                         Print("Volume confirmed at swing low");
                 }
                 
                 if(CountTouchesEnhanced(symbol, highs, lows, times, level.price, level))
                 {
-                    if(m_showDebugPrints)
+                    if(m_forexDebugPrints)
                         Print("Level validated: Price=", level.price, ", Touches=", level.touchCount,
                               ", Strength=", level.strength);
                               
@@ -460,7 +460,7 @@ public:
             }
         }
         
-        if(m_showDebugPrints)
+        if(m_forexDebugPrints)
             Print("Found ", levelCount, " valid levels for ", symbol);
         
         // Find strongest level
@@ -480,7 +480,7 @@ public:
             
             outStrongestLevel = levels[strongestIdx];
             
-            if(m_showDebugPrints)
+            if(m_forexDebugPrints)
                 Print("Selected strongest level: Price=", outStrongestLevel.price,
                       ", Strength=", outStrongestLevel.strength,
                       ", Touches=", outStrongestLevel.touchCount,
@@ -489,7 +489,7 @@ public:
             return true;
         }
         
-        if(m_showDebugPrints)
+        if(m_forexDebugPrints)
             Print("No valid levels found for ", symbol);
             
         return false;
@@ -512,7 +512,7 @@ double CVSolForexData::m_lastSpread;
 datetime CVSolForexData::m_lastSpreadUpdate;
 double CVSolForexData::m_maxAllowedSpread;
 bool   CVSolForexData::m_initialized = false;
-bool   CVSolForexData::m_showDebugPrints = false;
+bool   CVSolForexData::m_forexDebugPrints = false;
 
 //--- Helper Method Implementations
 void CVSolForexData::UpdatePipValues(string symbol)
@@ -528,7 +528,7 @@ void CVSolForexData::UpdatePipValues(string symbol)
     // We no longer scale the arrays here since the scaling will be done in GetTouchZone and GetBounceMinSize
     // This prevents double-scaling for JPY pairs
     
-    if(m_showDebugPrints)
+    if(m_forexDebugPrints)
         Print("UpdatePipValues: Symbol=", symbol, 
               ", Digits=", m_pipDigits, 
               ", PipValue=", m_pipValue, 

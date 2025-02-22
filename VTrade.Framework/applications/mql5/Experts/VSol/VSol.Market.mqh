@@ -494,4 +494,61 @@ double   CVSolMarketBase::m_volumeMultiplier;
 int      CVSolMarketBase::m_volumeType;
 bool     CVSolMarketBase::m_showDebugPrints;
 
+//+------------------------------------------------------------------+
+//| Market Test Data Interface                                         |
+//+------------------------------------------------------------------+
+class CVSolMarketTestData
+{
+protected:
+    static MqlRates m_testData[];  // Array to hold test data
+    static bool m_isTestMode;      // Flag to indicate if in test mode
+    
+public:
+    static bool IsTestMode() { return m_isTestMode; }  // Public accessor
+    
+    static void EnableTestMode(bool enable = true)
+    {
+        m_isTestMode = enable;
+        if(enable)
+            ArrayResize(m_testData, 0);
+    }
+    
+    static void AddTestCandle(datetime time, double open, double high, 
+                            double low, double close, long volume)
+    {
+        if(!m_isTestMode)
+            return;
+            
+        int size = ArraySize(m_testData);
+        ArrayResize(m_testData, size + 1);
+        
+        m_testData[size].time = time;
+        m_testData[size].open = open;
+        m_testData[size].high = high;
+        m_testData[size].low = low;
+        m_testData[size].close = close;
+        m_testData[size].tick_volume = volume;
+        m_testData[size].real_volume = volume;
+        m_testData[size].spread = 2;  // Default test spread
+    }
+    
+    static bool GetTestCandle(int shift, MqlRates &candle)
+    {
+        if(!m_isTestMode || shift >= ArraySize(m_testData))
+            return false;
+            
+        candle = m_testData[ArraySize(m_testData) - 1 - shift];
+        return true;
+    }
+    
+    static void ClearTestData()
+    {
+        ArrayResize(m_testData, 0);
+    }
+};
+
+// Initialize static members
+MqlRates CVSolMarketTestData::m_testData[];
+bool CVSolMarketTestData::m_isTestMode = false;
+
 #endif // __VSOL_MARKET_MQH__

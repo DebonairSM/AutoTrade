@@ -1,14 +1,13 @@
 //+------------------------------------------------------------------+
-//|                                          V-2-EA-FilterManager.mqh |
-//|                                   Trade Filter Implementation     |
+//|                                               VSol.Filter.mqh     |
+//|                        Trade Filtering Implementation              |
 //+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
 #property link      "https://vsol-systems.com"
-#property version   "1.00"
+#property version   "1.01"
 
-//--- Include required base classes and utilities
-#include "V-2-EA-MarketData.mqh"
-#include "V-2-EA-Utils.mqh"
+#include "VSol.Market.mqh"
+#include "VSol.Utils.mqh"
 
 //--- Filter Analysis Constants
 #define FILTER_MIN_ADR_POINTS      50     // Minimum Average Daily Range in points
@@ -102,10 +101,74 @@ struct SFilterPerformance
     }
 };
 
+class CVSolFilter : public CVSolMarketBase
+{
+private:
+    bool m_useNewsFilter;
+    bool m_useVolatilityFilter;
+    bool m_useSessionFilter;
+    double m_maxVolatility;
+    
+public:
+    bool Init(bool useNewsFilter, bool useVolatilityFilter, bool useSessionFilter, double maxVolatility)
+    {
+        m_useNewsFilter = useNewsFilter;
+        m_useVolatilityFilter = useVolatilityFilter;
+        m_useSessionFilter = useSessionFilter;
+        m_maxVolatility = maxVolatility;
+        return true;
+    }
+    
+    bool ValidateTradeConditions()
+    {
+        if(m_useNewsFilter && !IsNewsTimeValid())
+            return false;
+            
+        if(m_useVolatilityFilter && !IsVolatilityAcceptable())
+            return false;
+            
+        if(m_useSessionFilter && !IsSessionValid())
+            return false;
+            
+        return true;
+    }
+    
+    bool IsNewsTimeValid()
+    {
+        // TODO: Implement news filter
+        return true;
+    }
+    
+    bool IsVolatilityAcceptable()
+    {
+        double atr[];
+        ArraySetAsSeries(atr, true);
+        int handle = iATR(_Symbol, PERIOD_CURRENT, 14);
+        
+        if(CopyBuffer(handle, 0, 0, 1, atr) > 0)
+        {
+            return (atr[0] <= m_maxVolatility);
+        }
+        
+        return true;
+    }
+    
+    bool IsSessionValid()
+    {
+        datetime serverTime = TimeCurrent();
+        MqlDateTime dt;
+        TimeToStruct(serverTime, dt);
+        
+        // Example: Only trade during London/New York sessions
+        int hour = dt.hour;
+        return (hour >= 8 && hour <= 16);  // 8:00-16:00 GMT
+    }
+};
+
 //+------------------------------------------------------------------+
 //| Main Filter Manager Class                                          |
 //+------------------------------------------------------------------+
-class CV2EABreakoutFilterManager : public CV2EAMarketDataBase
+class CVSolFilterManager : public CVSolMarketBase
 {
 private:
     //--- State Management
@@ -131,78 +194,84 @@ private:
     datetime            m_nyClose;          // New York session close
     
     //--- Private Methods
-    bool                ValidateTimeFilter();
-    bool                CheckVolatilityFilter();
-    bool                ValidateTrendFilter();
-    bool                CheckVolumeFilter();
-    bool                ValidateNewsFilter();
-    bool                CheckPatternFilter();
-    void                UpdateFilterMetrics(const ENUM_FILTER_TYPE filterType, const bool passed);
-    void                LogFilterStatus();
-    ENUM_MARKET_CONDITION DetermineMarketCondition();
+    bool                ValidateTimeFilter() { return true; }
+    bool                CheckVolatilityFilter() { return true; }
+    bool                ValidateTrendFilter() { return true; }
+    bool                CheckVolumeFilter() { return true; }
+    bool                ValidateNewsFilter() { return true; }
+    bool                CheckPatternFilter() { return true; }
+    void                UpdateFilterMetrics(const ENUM_FILTER_TYPE filterType, const bool passed) {}
+    void                LogFilterStatus() {}
+    ENUM_MARKET_CONDITION DetermineMarketCondition() { return MARKET_CONDITION_NONE; }
     
 protected:
     //--- Protected utility methods
-    virtual bool        IsSessionActive();
-    virtual bool        IsVolatilityAcceptable();
-    virtual bool        IsTrendValid();
-    virtual bool        AreNewsConditionsSafe();
+    virtual bool        IsSessionActive() { return true; }
+    virtual bool        IsVolatilityAcceptable() { return true; }
+    virtual bool        IsTrendValid() { return true; }
+    virtual bool        AreNewsConditionsSafe() { return true; }
 
 public:
     //--- Constructor and Destructor
-    CV2EABreakoutFilterManager(void);
-    ~CV2EABreakoutFilterManager(void);
+    CVSolFilterManager(void) {}
+    ~CVSolFilterManager(void) {}
     
     //--- Initialization and Configuration
-    virtual bool        Initialize(void);
+    virtual bool        Initialize(void) { return true; }
     virtual void        ConfigureFilterParameters(
                            const double minAdr,
                            const double maxSprd,
                            const double minVol,
                            const int newsWin
-                       );
+                       )
+    {
+        m_minADR = minAdr;
+        m_maxSpread = maxSprd;
+        m_minVolume = minVol;
+        m_newsWindow = newsWin;
+    }
     
     //--- Main Filter Methods
-    virtual bool        ValidateTradeSetup();
-    virtual bool        UpdateFilterState();
-    virtual bool        CheckAllFilters();
-    virtual string      GetFilterWarnings();
+    virtual bool        ValidateTradeSetup() { return true; }
+    virtual bool        UpdateFilterState() { return true; }
+    virtual bool        CheckAllFilters() { return true; }
+    virtual string      GetFilterWarnings() { return ""; }
     
     //--- Session Management Methods
     virtual void        ConfigureSessions(
                            const string asianRange,
                            const string londonRange,
                            const string nyRange
-                       );
-    virtual bool        IsInActiveSession();
-    virtual ENUM_TRADING_SESSION GetCurrentSession();
+                       ) {}
+    virtual bool        IsInActiveSession() { return true; }
+    virtual ENUM_TRADING_SESSION GetCurrentSession() { return SESSION_NONE; }
     
     //--- Market Condition Methods
-    virtual bool        ValidateMarketCondition();
-    virtual bool        CheckVolatilityLevels();
-    virtual bool        ValidateTrendCondition();
+    virtual bool        ValidateMarketCondition() { return true; }
+    virtual bool        CheckVolatilityLevels() { return true; }
+    virtual bool        ValidateTrendCondition() { return true; }
     
     //--- News Filter Methods
-    virtual bool        CheckNewsEvents();
-    virtual bool        IsHighImpactNews();
-    virtual int         GetNextNewsMinutes();
+    virtual bool        CheckNewsEvents() { return true; }
+    virtual bool        IsHighImpactNews() { return false; }
+    virtual int         GetNextNewsMinutes() { return 0; }
     
     //--- Pattern Filter Methods
-    virtual bool        ValidateBreakoutPattern();
-    virtual bool        CheckSwingPoints();
-    virtual bool        ValidateGapSize();
+    virtual bool        ValidateBreakoutPattern() { return true; }
+    virtual bool        CheckSwingPoints() { return true; }
+    virtual bool        ValidateGapSize() { return true; }
     
     //--- Utility and Information Methods
-    virtual void        GetFilterState(SFilterState &state) const;
-    virtual void        GetFilterPerformance(SFilterPerformance &perf) const;
-    virtual string      GetFilterReport(void) const;
-    virtual double      GetCurrentVolatility(void) const;
-    virtual double      GetTrendStrength(void) const;
+    virtual void        GetFilterState(SFilterState &state) const { state.Reset(); }
+    virtual void        GetFilterPerformance(SFilterPerformance &perf) const { perf.Reset(); }
+    virtual string      GetFilterReport(void) const { return ""; }
+    virtual double      GetCurrentVolatility(void) const { return 0.0; }
+    virtual double      GetTrendStrength(void) const { return 0.0; }
     
     //--- Event Handlers
-    virtual void        OnFilterFailed(const ENUM_FILTER_TYPE filterType);
-    virtual void        OnNewsDetected();
-    virtual void        OnVolatilityExceeded();
-    virtual void        OnSessionChanged();
-    virtual void        OnMarketConditionChanged();
+    virtual void        OnFilterFailed(const ENUM_FILTER_TYPE filterType) {}
+    virtual void        OnNewsDetected() {}
+    virtual void        OnVolatilityExceeded() {}
+    virtual void        OnSessionChanged() {}
+    virtual void        OnMarketConditionChanged() {}
 }; 
