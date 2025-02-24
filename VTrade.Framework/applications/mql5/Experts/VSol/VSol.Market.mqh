@@ -499,56 +499,56 @@ bool     CVSolMarketBase::m_showDebugPrints;
 //+------------------------------------------------------------------+
 class CVSolMarketTestData
 {
-protected:
-    static MqlRates m_testData[];  // Array to hold test data
-    static bool m_isTestMode;      // Flag to indicate if in test mode
+private:
+    static bool m_isTestMode;
+    static MqlRates m_testCandles[];
+    static MqlRates m_h1TestCandles[];  // H1 test data
     
 public:
-    static bool IsTestMode() { return m_isTestMode; }  // Public accessor
-    
-    static void EnableTestMode(bool enable = true)
+    static void SetTestMode(bool isTestMode)
     {
-        m_isTestMode = enable;
-        if(enable)
-            ArrayResize(m_testData, 0);
+        m_isTestMode = isTestMode;
     }
     
-    static void AddTestCandle(datetime time, double open, double high, 
-                            double low, double close, long volume)
+    static bool IsTestMode()
     {
-        if(!m_isTestMode)
-            return;
-            
-        int size = ArraySize(m_testData);
-        ArrayResize(m_testData, size + 1);
-        
-        m_testData[size].time = time;
-        m_testData[size].open = open;
-        m_testData[size].high = high;
-        m_testData[size].low = low;
-        m_testData[size].close = close;
-        m_testData[size].tick_volume = volume;
-        m_testData[size].real_volume = volume;
-        m_testData[size].spread = 2;  // Default test spread
+        return m_isTestMode;
+    }
+    
+    static void SetTestCandles(const MqlRates &candles[])
+    {
+        ArrayResize(m_testCandles, ArraySize(candles));
+        ArrayCopy(m_testCandles, candles);
+    }
+    
+    static void SetH1TestCandles(const MqlRates &candles[])  // Add H1 test data
+    {
+        ArrayResize(m_h1TestCandles, ArraySize(candles));
+        ArrayCopy(m_h1TestCandles, candles);
     }
     
     static bool GetTestCandle(int shift, MqlRates &candle)
     {
-        if(!m_isTestMode || shift >= ArraySize(m_testData))
+        if(!m_isTestMode || shift >= ArraySize(m_testCandles))
             return false;
             
-        candle = m_testData[ArraySize(m_testData) - 1 - shift];
+        candle = m_testCandles[shift];
         return true;
     }
     
-    static void ClearTestData()
+    static bool GetH1TestCandle(int shift, MqlRates &candle)  // Add H1 test data getter
     {
-        ArrayResize(m_testData, 0);
+        if(!m_isTestMode || shift >= ArraySize(m_h1TestCandles))
+            return false;
+            
+        candle = m_h1TestCandles[shift];
+        return true;
     }
 };
 
 // Initialize static members
-MqlRates CVSolMarketTestData::m_testData[];
 bool CVSolMarketTestData::m_isTestMode = false;
+MqlRates CVSolMarketTestData::m_testCandles[];
+MqlRates CVSolMarketTestData::m_h1TestCandles[];  // Initialize H1 array
 
 #endif // __VSOL_MARKET_MQH__

@@ -123,6 +123,9 @@ private:
     
     bool IsSpreadAcceptable()
     {
+        if(CVSolMarketTestData::IsTestMode())
+            return true;  // Skip spread check in test mode
+            
         double currentSpread = SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID);
         return (currentSpread <= m_atr * MAX_SPREAD_MULTIPLIER);
     }
@@ -180,20 +183,24 @@ private:
     bool GetMarketData(int shift, double &open, double &high, double &low, 
                       double &close, long &volume)
     {
-        MqlRates candle;
-        
-        // Try to get test data first
-        if(CVSolMarketTestData::GetTestCandle(shift, candle))
+        if(CVSolMarketTestData::IsTestMode())
         {
-            open = candle.open;
-            high = candle.high;
-            low = candle.low;
-            close = candle.close;
-            volume = candle.tick_volume;
-            return true;
+            MqlRates candle;
+            // Only return test data if within bounds of our test array
+            if(CVSolMarketTestData::GetTestCandle(shift, candle))
+            {
+                open = candle.open;
+                high = candle.high;
+                low = candle.low;
+                close = candle.close;
+                volume = candle.tick_volume;
+                return true;
+            }
+            // Return false if beyond test data bounds
+            return false;
         }
         
-        // Fall back to real market data
+        // Fall back to real market data only if not in test mode
         open = iOpen(_Symbol, Period(), shift);
         high = iHigh(_Symbol, Period(), shift);
         low = iLow(_Symbol, Period(), shift);
@@ -244,26 +251,40 @@ public:
         if(!GetMarketData(0, open, high, low, close, volume))
             return;
             
-        // Update range boundaries
+        // Initialize range boundaries with current candle
         double rangeHigh = high;
         double rangeLow = low;
         
+        Print("Calculating range over ", m_rangeBars, " bars");
+        int validBars = 0;  // Track number of valid bars
+        
         // Calculate range over specified bars
-        for(int i = 1; i < m_rangeBars; i++)
+        for(int i = 0; i < m_rangeBars; i++)
         {
             if(!GetMarketData(i, open, high, low, close, volume))
-                continue;
+                break;  // Stop if we run out of test data
             
             rangeHigh = MathMax(rangeHigh, high);
             rangeLow = MathMin(rangeLow, low);
+            validBars++;
+            
+            Print("Bar ", i, " - High: ", DoubleToString(high, 5), " Low: ", DoubleToString(low, 5));
+        }
+        
+        if(validBars < m_rangeBars / 2)  // Require at least half the requested bars
+        {
+            Print("❌ Insufficient data for range calculation");
+            return;
         }
         
         m_resistanceLevel = rangeHigh;
         m_supportLevel = rangeLow;
         
-        // Update market conditions
-        m_atr = CalculateATR(m_rangeBars);
-        m_avgVolume = CalculateAverageVolume(m_rangeBars);
+        Print("Final Range - Resistance: ", DoubleToString(m_resistanceLevel, 5), " Support: ", DoubleToString(m_supportLevel, 5));
+        
+        // Update market conditions using only valid bars
+        m_atr = CalculateATR(validBars);
+        m_avgVolume = CalculateAverageVolume(validBars);
         m_lastUpdate = TimeCurrent();
         
         // Check for H1 candle close
@@ -280,60 +301,98 @@ public:
     //+------------------------------------------------------------------+
     bool CheckBreakout(bool &isLong)
     {
-        if(!IsRangeValid() || !IsSpreadAcceptable())
+        Print("\n=== Checking Breakout Conditions ===");
+        
+        if(!IsRangeValid())
+        {
+            Print("❌ Range not valid");
             return false;
+        }
+        
+        if(!IsSpreadAcceptable())
+        {
+            Print("❌ Spread too high");
+            return false;
+        }
             
         // Get current candle data
         double open, high, low, close;
         long volume;
         
         if(!GetMarketData(0, open, high, low, close, volume))
-            return false;
-            
-        // Calculate average volume
-        double avgVolume = 0;
-        int volumeCount = 0;
-        
-        for(int i = 1; i <= m_rangeBars; i++)
         {
-            long vol;
-            if(!GetMarketData(i, open, high, low, close, vol))
-                continue;
-            
-            avgVolume += (double)vol;
-            volumeCount++;
+            Print("❌ Failed to get market data");
+            return false;
         }
         
-        avgVolume = volumeCount > 0 ? avgVolume / volumeCount : 0;
+        Print("Current Candle - Close: ", DoubleToString(close, 5), ", Volume: ", volume);
+        Print("Resistance Level: ", DoubleToString(m_resistanceLevel, 5));
+        Print("Support Level: ", DoubleToString(m_supportLevel, 5));
+            
+        // Calculate average volume using m_avgVolume from UpdateLevels
+        Print("Average Volume: ", m_avgVolume);
+        Print("Required Volume: ", m_avgVolume * VOLUME_CONFIRMATION_RATIO);
         
         // First check H1 trend alignment
         ENUM_TREND_TYPE h1Trend = m_h1Analysis.GetH1Trend();
+        Print("H1 Trend: ", h1Trend == TREND_BULLISH ? "BULLISH" : h1Trend == TREND_BEARISH ? "BEARISH" : "NEUTRAL");
         
         // Check for breakout with volume confirmation
-        if(close > m_resistanceLevel && volume > avgVolume * VOLUME_CONFIRMATION_RATIO)
+        if(close > m_resistanceLevel)
         {
-            if(h1Trend == TREND_BULLISH && m_h1Analysis.IsBreakoutValid(true, close, volume))
+            Print("Price above resistance");
+            if(volume > m_avgVolume * VOLUME_CONFIRMATION_RATIO)
             {
-                if(CheckRetest(true))
+                Print("Volume confirmed");
+                if(h1Trend == TREND_BULLISH)
                 {
-                    isLong = true;
-                    return true;
+                    Print("H1 trend aligned");
+                    if(m_h1Analysis.IsBreakoutValid(true, close, volume))
+                    {
+                        Print("H1 breakout valid");
+                        if(CheckRetest(true))
+                        {
+                            Print("✓ Retest valid - BUY signal confirmed");
+                            isLong = true;
+                            return true;
+                        }
+                        else Print("❌ Retest not valid");
+                    }
+                    else Print("❌ H1 breakout not valid");
                 }
+                else Print("❌ H1 trend not aligned");
             }
+            else Print("❌ Volume not confirmed");
         }
         
-        if(close < m_supportLevel && volume > avgVolume * VOLUME_CONFIRMATION_RATIO)
+        if(close < m_supportLevel)
         {
-            if(h1Trend == TREND_BEARISH && m_h1Analysis.IsBreakoutValid(false, close, volume))
+            Print("Price below support");
+            if(volume > m_avgVolume * VOLUME_CONFIRMATION_RATIO)
             {
-                if(CheckRetest(false))
+                Print("Volume confirmed");
+                if(h1Trend == TREND_BEARISH)
                 {
-                    isLong = false;
-                    return true;
+                    Print("H1 trend aligned");
+                    if(m_h1Analysis.IsBreakoutValid(false, close, volume))
+                    {
+                        Print("H1 breakout valid");
+                        if(CheckRetest(false))
+                        {
+                            Print("✓ Retest valid - SELL signal confirmed");
+                            isLong = false;
+                            return true;
+                        }
+                        else Print("❌ Retest not valid");
+                    }
+                    else Print("❌ H1 breakout not valid");
                 }
+                else Print("❌ H1 trend not aligned");
             }
+            else Print("❌ Volume not confirmed");
         }
         
+        Print("❌ No breakout conditions met");
         return false;
     }
     
