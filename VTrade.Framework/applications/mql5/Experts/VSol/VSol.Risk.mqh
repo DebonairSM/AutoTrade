@@ -89,7 +89,102 @@ private:
     double m_maxDrawdown;
     double m_maxDailyLoss;
     
+    static double m_initialBalance;
+    static double m_maxRiskPerDay;
+    static int m_maxOpenTrades;
+    static bool m_compoundProfits;
+    static double m_maxLossPerMonth;
+    
+    static double m_dailyLoss;
+    static double m_monthlyLoss;
+    static int m_openPositions;
+    static datetime m_lastDayChecked;
+    static datetime m_lastMonthChecked;
+    
 public:
+    static void ConfigureMoneyManagement(double initialBalance, double maxRiskPerDay, int maxOpenTrades, bool compoundProfits, double maxLossPerMonth)
+    {
+        m_initialBalance = initialBalance;
+        m_maxRiskPerDay = maxRiskPerDay;
+        m_maxOpenTrades = maxOpenTrades;
+        m_compoundProfits = compoundProfits;
+        m_maxLossPerMonth = maxLossPerMonth;
+    }
+    
+    static void Reset()
+    {
+        m_dailyLoss = 0;
+        m_monthlyLoss = 0;
+        m_openPositions = 0;
+        m_lastDayChecked = 0;
+        m_lastMonthChecked = 0;
+    }
+    
+    static bool CanOpenNewPosition()
+    {
+        // Check max open positions
+        if(m_openPositions >= m_maxOpenTrades)
+            return false;
+            
+        // Reset daily/monthly trackers if needed
+        datetime now = TimeCurrent();
+        MqlDateTime dt;
+        TimeToStruct(now, dt);
+        
+        MqlDateTime lastDay;
+        TimeToStruct(m_lastDayChecked, lastDay);
+        
+        MqlDateTime lastMonth;
+        TimeToStruct(m_lastMonthChecked, lastMonth);
+        
+        // Check if day changed
+        if(dt.day != lastDay.day || dt.mon != lastDay.mon || dt.year != lastDay.year)
+        {
+            m_dailyLoss = 0;
+            m_lastDayChecked = now;
+        }
+        
+        // Check if month changed
+        if(dt.mon != lastMonth.mon || dt.year != lastMonth.year)
+        {
+            m_monthlyLoss = 0;
+            m_lastMonthChecked = now;
+        }
+        
+        // Check daily loss limit
+        if(m_dailyLoss >= m_initialBalance * m_maxRiskPerDay / 100)
+            return false;
+            
+        // Check monthly loss limit
+        if(m_monthlyLoss >= m_initialBalance * m_maxLossPerMonth / 100)
+            return false;
+            
+        return true;
+    }
+    
+    static void UpdatePositionCount(bool isOpen)
+    {
+        if(isOpen)
+            m_openPositions++;
+        else if(m_openPositions > 0)
+            m_openPositions--;
+    }
+    
+    static void UpdateLoss(double loss)
+    {
+        if(loss <= 0) return;
+        
+        m_dailyLoss += loss;
+        m_monthlyLoss += loss;
+    }
+    
+    static double GetAvailableRisk()
+    {
+        double dailyRemaining = m_initialBalance * m_maxRiskPerDay / 100 - m_dailyLoss;
+        double monthlyRemaining = m_initialBalance * m_maxLossPerMonth / 100 - m_monthlyLoss;
+        return MathMin(dailyRemaining, monthlyRemaining);
+    }
+    
     bool Init(double riskPercent, double maxDrawdown, double maxDailyLoss)
     {
         m_riskPercent = riskPercent;
@@ -144,6 +239,19 @@ public:
         return true;
     }
 };
+
+// Initialize static members
+double CVSolRisk::m_initialBalance = 10000;
+double CVSolRisk::m_maxRiskPerDay = 5.0;
+int CVSolRisk::m_maxOpenTrades = 3;
+bool CVSolRisk::m_compoundProfits = true;
+double CVSolRisk::m_maxLossPerMonth = 10.0;
+
+double CVSolRisk::m_dailyLoss = 0;
+double CVSolRisk::m_monthlyLoss = 0;
+int CVSolRisk::m_openPositions = 0;
+datetime CVSolRisk::m_lastDayChecked = 0;
+datetime CVSolRisk::m_lastMonthChecked = 0;
 
 //+------------------------------------------------------------------+
 //| Main Risk Manager Class                                            |

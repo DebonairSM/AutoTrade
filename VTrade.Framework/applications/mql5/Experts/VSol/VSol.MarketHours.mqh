@@ -7,13 +7,18 @@
 
 #include "VSol.Market.mqh"  // Include for ENUM_MARKET_TYPE definition
 
-class CVSolMarketHours
-  {
+class CVSolMarketHours : public CVSolMarketBase
+{
 private:
    // The offset in hours between the broker's server time and Eastern Time (ET).
    // Example: When it's 7:00 ET (Florida), server shows 14:00, so offset = 7
    // This means server time is 7 hours ahead of ET
    static const int s_serverToETOffset;
+   static bool m_useTimeFilter;
+   static string m_tradingHoursStart;
+   static string m_tradingHoursEnd;
+   static bool m_mondayFilter;
+   static bool m_fridayFilter;
 
 public:
    /**
@@ -156,9 +161,57 @@ public:
                 return false;
         }
      }
-  };
+
+   static void ConfigureTimeFilters(bool useTimeFilter, string tradingHoursStart, string tradingHoursEnd, bool mondayFilter, bool fridayFilter)
+   {
+       m_useTimeFilter = useTimeFilter;
+       m_tradingHoursStart = tradingHoursStart;
+       m_tradingHoursEnd = tradingHoursEnd;
+       m_mondayFilter = mondayFilter;
+       m_fridayFilter = fridayFilter;
+   }
+   
+   static bool IsWithinTradingHours()
+   {
+       if(!m_useTimeFilter) return true;
+       
+       datetime now = TimeCurrent();
+       MqlDateTime dt;
+       TimeToStruct(now, dt);
+       
+       // Check day filters
+       if(m_mondayFilter && dt.day_of_week == MONDAY) return false;
+       if(m_fridayFilter && dt.day_of_week == FRIDAY) return false;
+       
+       // Parse trading hours
+       string startParts[], endParts[];
+       StringSplit(m_tradingHoursStart, ':', startParts);
+       StringSplit(m_tradingHoursEnd, ':', endParts);
+       
+       if(ArraySize(startParts) != 2 || ArraySize(endParts) != 2)
+           return true;  // Invalid time format, allow trading
+           
+       int startHour = (int)StringToInteger(startParts[0]);
+       int startMin = (int)StringToInteger(startParts[1]);
+       int endHour = (int)StringToInteger(endParts[0]);
+       int endMin = (int)StringToInteger(endParts[1]);
+       
+       int currentMinute = dt.hour * 60 + dt.min;
+       int startMinute = startHour * 60 + startMin;
+       int endMinute = endHour * 60 + endMin;
+       
+       return (currentMinute >= startMinute && currentMinute <= endMinute);
+   }
+};
 
 // Define the static member outside the class
 const int CVSolMarketHours::s_serverToETOffset = 7;
+
+// Initialize static members
+bool CVSolMarketHours::m_useTimeFilter = false;
+string CVSolMarketHours::m_tradingHoursStart = "00:00";
+string CVSolMarketHours::m_tradingHoursEnd = "23:59";
+bool CVSolMarketHours::m_mondayFilter = false;
+bool CVSolMarketHours::m_fridayFilter = false;
 
 #endif // __VSOL_MARKETHOURS_MQH__ 

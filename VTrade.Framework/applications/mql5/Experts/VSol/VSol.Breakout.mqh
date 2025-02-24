@@ -32,6 +32,19 @@ private:
     double m_takeProfitPips;
     bool m_requireRetest;
     
+    // Volume analysis settings
+    double m_volumeFactor;
+    int m_volumeMA;
+    bool m_useRelativeVolume;
+    double m_minVolumeThreshold;
+    
+    // Risk management settings
+    double m_riskPercent;
+    bool m_useFixedLots;
+    bool m_useTrailingStop;
+    double m_trailingStart;
+    double m_trailingStep;
+    
     // Market state
     double m_resistanceLevel;
     double m_supportLevel;
@@ -233,7 +246,35 @@ public:
         m_isTrailing = false;
         m_h1BreakoutConfirmed = false;
         
+        // Initialize volume analysis settings with defaults
+        m_volumeFactor = 1.5;
+        m_volumeMA = 20;
+        m_useRelativeVolume = true;
+        m_minVolumeThreshold = 1000;
+        
+        // Initialize risk management settings with defaults
+        m_riskPercent = 2.0;
+        m_useFixedLots = false;
+        m_useTrailingStop = false;
+        m_trailingStart = 20;
+        m_trailingStep = 5;
+        
         return true;
+    }
+    
+    void ConfigureVolumeAnalysis(double volumeFactor, int volumeMA)
+    {
+        m_volumeFactor = volumeFactor;
+        m_volumeMA = volumeMA;
+    }
+    
+    void ConfigureRiskManagement(double riskPercent, bool useFixedLots, bool useTrailingStop, double trailingStart, double trailingStep)
+    {
+        m_riskPercent = riskPercent;
+        m_useFixedLots = useFixedLots;
+        m_useTrailingStop = useTrailingStop;
+        m_trailingStart = trailingStart;
+        m_trailingStep = trailingStep;
     }
     
     //+------------------------------------------------------------------+

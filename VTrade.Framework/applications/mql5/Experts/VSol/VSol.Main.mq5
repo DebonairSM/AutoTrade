@@ -15,11 +15,17 @@
 #include "VSol.Market.Indices.mqh"  // Add Indices market data
 #include "VSol.MarketHours.mqh"
 #include "VSol.Breakout.mqh"        // Add Breakout strategy
+#include "VSol.Statistics.mqh"      // Add Statistics class
 
 //--- Version and Configuration
 #define EA_VERSION "1.0.3"
 #define EA_VERSION_DATE "2024-03-19"
 #define EA_NAME "VSol.Main"
+
+//--- Backtesting Configuration
+#define OPTIMIZATION_MODE true         // Set to true when running optimization
+#define MAX_SPREAD 20                 // Maximum allowed spread in points
+#define MIN_TICKS_HISTORY 5000        // Minimum required ticks for accurate testing
 
 //--- Key Level Detection Settings
 #define KEY_LEVEL_REFRESH_TIMEFRAME    PERIOD_H4  // Timeframe for refreshing key levels
@@ -27,6 +33,36 @@
 #define REFRESH_ON_BREAKOUT           true        // Refresh after confirmed breakout
 #define SHOW_DEBUG_PRINTS             true        // Show debug information
 #define ENFORCE_MARKET_HOURS          true        // Enforce market hours restrictions
+
+//--- Optimization Parameters
+input group "Backtest Configuration"
+input datetime TestStartDate = D'2024.01.01';  // Backtest start date
+input datetime TestEndDate = D'2024.03.19';    // Backtest end date
+input bool     UseSpreadFilter = true;         // Filter trades based on spread
+input int      MaxSpreadPoints = 20;           // Maximum allowed spread in points
+input bool     UseRealVolume = false;          // Use real volume data if available
+
+//--- Strategy Parameters
+input group "Strategy Parameters"
+input int     LookbackPeriod = 100;    // Historical bars to analyze
+input double  MinStrength = 0.55;      // Level strength threshold (0.1-1.0)
+input int     MinTouches = 2;          // Minimum level touches required
+
+//--- Performance Metrics
+input group "Performance Settings"
+input double  MinWinRate = 55.0;       // Minimum required win rate %
+input double  MinProfitFactor = 1.5;   // Minimum required profit factor
+input int     MinTrades = 30;          // Minimum number of trades for validation
+input double  MaxDrawdown = 20.0;      // Maximum allowed drawdown %
+input bool    SaveOptimizationResults = true;  // Save detailed optimization results
+
+//--- Money Management
+input group "Money Management"
+input double  InitialBalance = 10000;  // Initial balance for testing
+input double  MaxRiskPerDay = 5.0;     // Maximum daily risk %
+input int     MaxOpenTrades = 3;       // Maximum simultaneous open trades
+input bool    CompoundProfits = true;  // Compound profits during testing
+input double  MaxLossPerMonth = 10.0;  // Maximum monthly loss %
 
 //--- Market Specific Constants
 // Forex
@@ -41,13 +77,14 @@
 #define CRYPTO_TOUCH_ZONE             500.0       // Touch zone size in USD
 #define CRYPTO_MIN_BOUNCE             250.0       // Minimum bounce size in USD
 
-//--- Optimization Parameters
-input group "Strategy Parameters"
-input int     LookbackPeriod = 100;    // Historical bars to analyze
-input double  MinStrength = 0.55;      // Level strength threshold (0.1-1.0)
-input int     MinTouches = 2;          // Minimum level touches required
+//--- Volume Analysis Parameters
+input group "Volume Configuration"
+input double  VolumeFactor = 1.5;      // Required volume multiplier (1.5 = 150% of average)
+input int     VolumeMA = 20;           // Periods for volume moving average
+input bool    UseRelativeVolume = true; // Use relative volume comparison
+input double  MinVolumeThreshold = 1000; // Minimum volume threshold
 
-//--- Breakout Strategy Parameters
+//--- Breakout Parameters
 input group "Breakout Parameters"
 input int    RangeBars        = 20;    // Number of bars for range
 input double LotSize          = 0.1;    // Trade lot size
@@ -56,6 +93,22 @@ input double StopLossPips     = 20;     // Stop Loss in pips
 input double TakeProfitPips   = 40;     // Take Profit in pips
 input bool   RequireRetest    = true;   // Wait for retest before entry
 input bool   ShowH1Levels     = true;   // Show H1 levels on chart
+
+//--- Risk Management
+input group "Risk Management"
+input double RiskPercent = 2.0;        // Risk per trade (% of balance)
+input bool   UseFixedLots = false;     // Use fixed lot size instead of risk %
+input bool   UseTrailingStop = true;   // Enable trailing stop
+input double TrailingStart = 20;       // Pips in profit before trailing
+input double TrailingStep = 5;         // Trailing step in pips
+
+//--- Time Filters
+input group "Trading Hours"
+input bool   UseTimeFilter = true;     // Enable time filter
+input string TradingHoursStart = "08:00";  // Trading session start (broker time)
+input string TradingHoursEnd = "16:00";    // Trading session end (broker time)
+input bool   MondayFilter = true;      // Filter out Monday
+input bool   FridayFilter = true;      // Filter out Friday
 
 //--- Global Variables
 CVSolStrategy g_strategy;
@@ -108,6 +161,44 @@ int OnInit()
     {
         Print("❌ Unsupported market type for symbol ", _Symbol);
         return INIT_FAILED;
+    }
+    
+    // Validate backtest dates
+    if(OPTIMIZATION_MODE)
+    {
+        datetime currentTime = TimeCurrent();
+        
+        // Ensure dates are valid
+        if(TestStartDate >= TestEndDate)
+        {
+            Print("❌ Invalid backtest dates: Start date must be before end date");
+            return INIT_FAILED;
+        }
+        
+        if(TestEndDate > currentTime)
+        {
+            Print("❌ End date cannot be in the future");
+            return INIT_FAILED;
+        }
+        
+        // Calculate testing periods
+        datetime optimizationStart = TestStartDate;
+        datetime optimizationEnd = TestEndDate;
+        datetime outOfSampleStart = optimizationEnd;
+        datetime outOfSampleEnd = currentTime;
+        
+        // Log testing configuration
+        Print("\n=== Backtest Configuration ===");
+        Print("Optimization Period: ", TimeToString(optimizationStart), " to ", TimeToString(optimizationEnd));
+        Print("Out-of-Sample Period: ", TimeToString(outOfSampleStart), " to ", TimeToString(outOfSampleEnd));
+        
+        // Store period information for statistics tracking
+        CVSolStatistics::ConfigureTestPeriods(
+            optimizationStart,
+            optimizationEnd,
+            outOfSampleStart,
+            outOfSampleEnd
+        );
     }
     
     // Wait for enough bars to be loaded
@@ -192,7 +283,7 @@ int OnInit()
             break;
     }
     
-    // Configure market settings
+    // Initialize market config with market-specific parameters
     g_marketConfig.Configure(
         _Symbol,
         g_marketType,
@@ -200,61 +291,71 @@ int OnInit()
         minBounce,
         MinStrength,
         MinTouches,
-        LookbackPeriod
-    );
+        LookbackPeriod);
     
-    // Print market-specific settings
-    if(SHOW_DEBUG_PRINTS)
-    {
-        string units = g_marketConfig.GetUnits();
-        if(g_marketType == MARKET_TYPE_FOREX)
-        {
-            Print(StringFormat(
-                "Using %s settings:\n" +
-                "Touch Zone: %.2f %s (%.5f price)\n" +
-                "Min Bounce: %.2f %s (%.5f price)",
-                marketTypeStr,
-                FOREX_TOUCH_ZONE, units, touchZone,
-                FOREX_MIN_BOUNCE, units, minBounce
-            ));
-        }
-        else if(g_marketType == MARKET_TYPE_CRYPTO)
-        {
-            Print(StringFormat(
-                "Using %s settings:\n" +
-                "Touch Zone: $%.2f\n" +
-                "Min Bounce: $%.2f",
-                marketTypeStr,
-                touchZone,
-                minBounce
-            ));
-        }
-        else
-        {
-            Print(StringFormat(
-                "Using %s settings:\n" +
-                "Touch Zone: %.2f %s\n" +
-                "Min Bounce: %.2f %s",
-                marketTypeStr,
-                touchZone, units,
-                minBounce, units
-            ));
-        }
-    }
-    
-    // Initialize strategy with market-specific parameters
-    if(!g_strategy.Init(LookbackPeriod, MinStrength, touchZone, MinTouches, SHOW_DEBUG_PRINTS))
+    // Initialize strategy with all parameters
+    if(!g_strategy.Init(
+        LookbackPeriod, 
+        MinStrength, 
+        touchZone, 
+        MinTouches, 
+        SHOW_DEBUG_PRINTS,
+        UseRealVolume))
     {
         Print("❌ Failed to initialize strategy");
         return INIT_FAILED;
     }
     
-    // Initialize breakout strategy
-    if(!g_breakout.Init(RangeBars, LotSize, Slippage, StopLossPips, TakeProfitPips, RequireRetest))
+    // Initialize breakout strategy with all parameters
+    if(!g_breakout.Init(
+        RangeBars,
+        LotSize,
+        Slippage,
+        StopLossPips,
+        TakeProfitPips,
+        RequireRetest))
     {
         Print("❌ Failed to initialize breakout strategy");
         return INIT_FAILED;
     }
+    
+    // Configure volume analysis
+    g_breakout.ConfigureVolumeAnalysis(VolumeFactor, VolumeMA);
+    
+    // Configure risk management
+    g_breakout.ConfigureRiskManagement(
+        RiskPercent,
+        UseFixedLots,
+        UseTrailingStop,
+        TrailingStart,
+        TrailingStep
+    );
+    
+    // Configure time filters
+    CVSolMarketHours::ConfigureTimeFilters(
+        UseTimeFilter,
+        TradingHoursStart,
+        TradingHoursEnd,
+        MondayFilter,
+        FridayFilter
+    );
+    
+    // Configure performance requirements
+    CVSolStatistics::ConfigurePerformanceRequirements(
+        MinWinRate,
+        MinProfitFactor,
+        MinTrades,
+        MaxDrawdown
+    );
+    
+    // Configure money management
+    CVSolRisk::ConfigureMoneyManagement(
+        InitialBalance,
+        MaxRiskPerDay,
+        MaxOpenTrades,
+        CompoundProfits,
+        MaxLossPerMonth
+    );
     
     // Draw initial levels if enabled
     if(ShowH1Levels)

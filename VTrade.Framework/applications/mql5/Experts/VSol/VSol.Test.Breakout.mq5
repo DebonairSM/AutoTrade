@@ -301,7 +301,7 @@ void TestOrderExecution()
     Print("\nInitial Range Analysis:");
     Print("Resistance: ", DoubleToString(resistance, 5));
     Print("Support: ", DoubleToString(support, 5));
-    Print("Range Size: ", DoubleToString((resistance - support) / _Point, 1), " pips");
+    Print("Range Size: ", DoubleToString((resistance - support) * 10000, 1), " pips");  // Multiply by 10000 for correct pip calculation
     
     // Process each candle to find breakout
     for(int i = 0; i < ArraySize(testData); i++)
@@ -369,8 +369,8 @@ void TestOrderExecution()
             Print("\nOrder Execution Details:");
             Print("Entry Type: BUY");
             Print("Entry Price: ", DoubleToString(candle.close, 5));
-            Print("Stop Loss: ", DoubleToString(candle.close - StopLossPips * _Point, 5));
-            Print("Take Profit: ", DoubleToString(candle.close + TakeProfitPips * _Point, 5));
+            Print("Stop Loss: ", DoubleToString(candle.close - (StopLossPips * 0.0001), 5));  // Convert pips to price
+            Print("Take Profit: ", DoubleToString(candle.close + (TakeProfitPips * 0.0001), 5));  // Convert pips to price
             Print("Lot Size: ", DoubleToString(LotSize, 2));
             Print("✓ Order executed successfully");
             return;
