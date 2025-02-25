@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("VTrade.Tests")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+cf2f6ed70cfe21dbc8c1883bc21251aa55db72e0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f876b15c683cab43126a2478d4c7554a94daf158")]
 [assembly: System.Reflection.AssemblyProductAttribute("VTrade.Tests")]
 [assembly: System.Reflection.AssemblyTitleAttribute("VTrade.Tests")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
