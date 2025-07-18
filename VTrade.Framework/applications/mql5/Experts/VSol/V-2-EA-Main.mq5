@@ -45,7 +45,7 @@ int OnInit()
     }
     
     // Store initial state
-    g_lastBarTime = iTime(_Symbol, Period(), 0);
+    g_lastBarTime = 0; // Will be set on first tick or timer
     
     // Print configuration info
     Print(StringFormat("⚙️ Main EA Configuration: Market Hours Enforcement = %s", EnforceMarketHours ? "ENABLED" : "DISABLED"));
@@ -53,19 +53,17 @@ int OnInit()
     Print(StringFormat("⚙️ CRITICAL: CurrentTimeframeOnly = %s", CurrentTimeframeOnly ? "TRUE" : "FALSE"));
     
     // Print timeframe info
-    Print(StringFormat(
-        "Initializing EA on %s timeframe",
-        EnumToString(Period())
-    ));
+    Print(StringFormat("Initializing EA on %s timeframe", EnumToString(Period())));
     
     // Add diagnostic information
-    Print("🔍 Diagnostic Information:");
-    Print("   Current Time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
-    Print("   Symbol: ", _Symbol);
-    Print("   Available Bars: ", Bars(_Symbol, Period()));
-    Print("   Last Bar Time: ", TimeToString(iTime(_Symbol, Period(), 0), TIME_DATE|TIME_SECONDS));
-    Print("   Account Server: ", AccountInfoString(ACCOUNT_SERVER));
-    Print("   Connection Status: ", TerminalInfoInteger(TERMINAL_CONNECTED) ? "Connected" : "Disconnected");
+    if(ShowDebugPrints) {
+        Print("🔍 Diagnostic Information:");
+        Print("   Current Time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
+        Print("   Symbol: ", _Symbol);
+        Print("   Available Bars: ", Bars(_Symbol, Period()));
+        Print("   Account Server: ", AccountInfoString(ACCOUNT_SERVER));
+        Print("   Connection Status: ", TerminalInfoInteger(TERMINAL_CONNECTED) ? "Connected" : "Disconnected");
+    }
     
     if(!CheckVersionCompatibility()) {
         Print("❌ Version mismatch between EA and Strategy");
@@ -74,30 +72,8 @@ int OnInit()
     
     // Set up timer for initial calculation if no ticks come
     EventSetTimer(5); // Check every 5 seconds for initial calculation
-    Print("⏰ Timer set for initial calculation (5 seconds)");
-    
-    // IMMEDIATE TEST: Try to calculate levels right in OnInit to see if it works
-    Print("🧪 IMMEDIATE TEST: Attempting level calculation in OnInit...");
-    datetime testBarTime = iTime(_Symbol, Period(), 0);
-    if(testBarTime > 0) {
-        Print(StringFormat("🧪 Test bar time: %s", TimeToString(testBarTime, TIME_DATE|TIME_SECONDS)));
-        g_lastBarTime = testBarTime; // Set this so OnTimer knows we tried
-        g_strategy.OnNewBar();
-        
-        SKeyLevelReport testReport;
-        g_strategy.GetReport(testReport);
-        if(testReport.isValid) {
-            Print("🧪 SUCCESS: Levels found in OnInit!");
-            PrintKeyLevelReport(testReport);
-            Print("🧪 Forcing chart update from OnInit...");
-            g_strategy.ForceChartUpdate();
-        } else {
-            Print("🧪 FAILED: No levels found in OnInit");
-            Print("🔧 Skipping diagnostics to prevent recursive loop");
-        }
-    } else {
-        Print("🧪 FAILED: Invalid bar time in OnInit");
-    }
+    if(ShowDebugPrints)
+        Print("⏰ Timer set for initial calculation (5 seconds)");
     
     return(INIT_SUCCEEDED);
 }
@@ -107,10 +83,14 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-    // Kill timer
+    // Kill timer (proper cleanup)
     EventKillTimer();
+    if(ShowDebugPrints)
+        Print("⏰ Timer stopped in OnDeinit");
     
     // Strategy object will clean up its own chart objects through destructor
+    if(ShowDebugPrints)
+        Print("🔧 EA deinitialization complete. Reason: ", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -119,55 +99,40 @@ void OnDeinit(const int reason)
 void OnTimer()
 {
     // Add immediate debug to see if timer fires at all
-    Print("⏰ OnTimer FIRED! Current time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
+    if(ShowDebugPrints)
+        Print("⏰ OnTimer FIRED! Current time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
     
     // Only process if we haven't done initial calculation yet
     if(g_lastBarTime != 0) {
-        Print("⏰ OnTimer: Already calculated, stopping timer");
-        EventKillTimer(); // Stop timer once we've done initial calculation
+        if(ShowDebugPrints)
+            Print("⏰ OnTimer: Already calculated, will continue running");
         return;
     }
     
-    Print("⏰ OnTimer: Attempting initial calculation (no ticks received)");
+    if(ShowDebugPrints)
+        Print("⏰ OnTimer: Attempting initial calculation (no ticks received)");
     
     // Check if data is available
     datetime currentBarTime = iTime(_Symbol, Period(), 0);
     if(currentBarTime == 0) {
-        Print("⚠️ OnTimer: Data not ready yet, will retry...");
+        if(ShowDebugPrints)
+            Print("⚠️ OnTimer: Data not ready yet, will retry...");
         return;
     }
     
     if(!SeriesInfoInteger(_Symbol, Period(), SERIES_SYNCHRONIZED)) {
-        Print("⚠️ OnTimer: Data not synchronized yet, will retry...");
+        if(ShowDebugPrints)
+            Print("⚠️ OnTimer: Data not synchronized yet, will retry...");
         return;
     }
     
     // Perform initial calculation
-    Print("🔍 OnTimer: Calculating initial key levels...");
     g_lastBarTime = currentBarTime;
-    g_strategy.OnNewBar();
+    HandleInitialCalculation("OnTimer");
     
-    // Get and display initial report
-    SKeyLevelReport report;
-    g_strategy.GetReport(report);
-    if(report.isValid) {
-        PrintKeyLevelReport(report);
-        Print("✅ OnTimer: Initial key levels calculated and displayed");
-        
-        // Force chart update to ensure lines are drawn
-        Print("🔧 Forcing chart line update...");
-        g_strategy.ForceChartUpdate();
-    } else {
-        Print("⚠️ OnTimer: No initial key levels found");
-        Print("🔧 Skipping diagnostics to prevent loop - trying force update...");
-        
-        // Try to force update anyway in case levels exist but report is invalid
-        g_strategy.ForceChartUpdate();
-    }
-    
-    // Stop timer since we're done
-    EventKillTimer();
-    Print("⏰ Timer stopped - initial calculation complete");
+    // Note: Timer continues running (don't kill it here)
+    if(ShowDebugPrints)
+        Print("⏰ Timer calculation complete - timer continues running");
 }
 
 //+------------------------------------------------------------------+
@@ -175,18 +140,23 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    // Add debug message to confirm OnTick is being called (always show this)
-    Print("📊 OnTick() FIRED! Current time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
+    // Add debug message to confirm OnTick is being called (respect debug setting)
+    if(ShowDebugPrints)
+        Print("📊 OnTick() FIRED! Current time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
     
     // Check data synchronization first
     datetime currentBarTime = iTime(_Symbol, Period(), 0);
     if(currentBarTime == 0) {
-        Print("❌ Invalid current bar time - data not synchronized. Error: ", GetLastError());
+        int error = GetLastError();
+        Print("❌ Invalid current bar time - data not synchronized. Error: ", error);
+        ResetLastError();
         return;
     }
     
     if(!SeriesInfoInteger(_Symbol, Period(), SERIES_SYNCHRONIZED)) {
-        Print("⚠️ Chart data not synchronized. Error: ", GetLastError());
+        int error = GetLastError();
+        Print("⚠️ Chart data not synchronized. Error: ", error);
+        ResetLastError();
         return;
     }
     
@@ -196,27 +166,8 @@ void OnTick()
     
     // Handle initial calculation on first valid tick
     if(g_lastBarTime == 0) {
-        Print("🔍 Calculating initial key levels on first tick...");
         g_lastBarTime = currentBarTime;
-        g_strategy.OnNewBar();
-        
-        // Get and display initial report
-        SKeyLevelReport report;
-        g_strategy.GetReport(report);
-        if(report.isValid) {
-            PrintKeyLevelReport(report);
-            Print("✅ Initial key levels calculated and displayed");
-            
-            // Force chart update to ensure lines are drawn
-            Print("🔧 Forcing chart line update from OnTick...");
-            g_strategy.ForceChartUpdate();
-        } else {
-            Print("⚠️ No initial key levels found in OnTick");
-            Print("🔧 Skipping diagnostics - trying force update only...");
-            
-            // Try to force update anyway
-            g_strategy.ForceChartUpdate();
-        }
+        HandleInitialCalculation("OnTick");
         return;
     }
     
@@ -272,6 +223,39 @@ void PrintKeyLevelReport(const SKeyLevelReport &report)
         );
     }
     PrintFormat("===========================");
+}
+
+//+------------------------------------------------------------------+
+//| Handle initial calculation (used by both OnTick and OnTimer)      |
+//+------------------------------------------------------------------+
+void HandleInitialCalculation(const string context)
+{
+    if(ShowDebugPrints)
+        Print("🔍 Calculating initial key levels from ", context);
+        
+    g_strategy.OnNewBar();
+    
+    // Get and display initial report
+    SKeyLevelReport report;
+    g_strategy.GetReport(report);
+    if(report.isValid) {
+        PrintKeyLevelReport(report);
+        if(ShowDebugPrints)
+            Print("✅ Initial key levels calculated and displayed");
+        
+        // Force chart update to ensure lines are drawn
+        if(ShowDebugPrints)
+            Print("🔧 Forcing chart line update...");
+        g_strategy.ForceChartUpdate();
+    } else {
+        if(ShowDebugPrints) {
+            Print("⚠️ No initial key levels found");
+            Print("🔧 Trying force update anyway...");
+        }
+        
+        // Try to force update anyway
+        g_strategy.ForceChartUpdate();
+    }
 }
 
 // Add new function
