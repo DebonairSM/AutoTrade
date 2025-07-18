@@ -6,50 +6,7 @@
 #property link      "https://vsol-systems.com"
 #property version   "1.04"
 
-/*
-CRITICAL CHART LINE FIXES v1.04:
 
-ROOT CAUSE RESOLUTION:
-- Fixed missing proper MQL5 object creation patterns
-- Added proper chart ID usage (ChartID() instead of 0)
-- Implemented timing delays to prevent race conditions
-- Removed timeframe-specific naming that caused switching issues
-- Added comprehensive error validation for each property setting
-
-TECHNICAL IMPROVEMENTS:
-- ObjectCreate() with full error checking and specific error messages
-- Sleep() delays between deletion and creation to avoid timing conflicts
-- Property validation with individual error reporting
-- Object verification to confirm chart objects actually exist
-- Diagnostic tools for troubleshooting chart issues
-
-CHART VISUALIZATION ENHANCEMENTS:
-- Strong levels (≥0.85): Bright Red/Lime, width 3
-- Medium levels (≥0.70): Orange/Aqua, width 2  
-- Weak levels (<0.70): Pink/Yellow, width 1
-- Comprehensive logging with emojis for easy identification
-- Real-time verification of created objects
-
-DEBUGGING TOOLS:
-- DiagnoseChartIssues() method for comprehensive troubleshooting
-- VerifyChartObjects() to confirm object visibility
-- Enhanced error messages with specific MQL5 error codes
-- Step-by-step creation logging with success/failure tracking
-
-These fixes address the actual MQL5 API requirements and timing issues that were preventing chart line visibility.
-
-TESTING INSTRUCTIONS:
-1. Call DiagnoseChartIssues() to see current state
-2. Call ForceChartUpdate() to trigger immediate line creation
-3. Check Expert tab for detailed creation logs with ✅/❌ indicators
-4. Verify lines appear on chart with proper colors and widths
-5. If issues persist, the diagnostic logs will show exactly what's failing
-
-IMMEDIATE TEST CALLS:
-- breakouts.DiagnoseChartIssues();     // Shows complete system state
-- breakouts.ForceChartUpdate();        // Forces immediate chart update
-- breakouts.ClearAllChartObjects();    // Cleans up for fresh start
-*/
 
 //--- Volume Analysis Constants
 #define VOLUME_SPIKE_MULTIPLIER      2.0    // Minimum ratio for volume spike detection (current/average)
@@ -68,95 +25,7 @@ IMMEDIATE TEST CALLS:
 #define MIN_LEVEL_REPORT_SECONDS     300    // Minimum 5 minutes between level reports
 #define MIN_ALERT_INTERVAL_SECONDS   120    // Minimum 2 minutes between trade alerts
 
-/*
-REFACTORING TODO:
 
-1. Move to MarketData (only generic market analysis helpers):
-   MOVE:
-   - Basic volume analysis (IsVolumeSpike, GetAverageVolume)
-   - Basic price validation (IsTouchValid)
-   - Market instrument identification (IsUS500)
-   - Generic candle pattern detection
-   
-   KEEP IN BREAKOUTS:
-   - Key level specific calculations (CalculateLevelStrength)
-   - Breakout pattern detection
-   - Level touch counting logic
-   - Level validation specific to breakout strategy
-   - Swing point detection tuned for levels
-
-2. Move to Utils (purely technical helpers):
-   - SafeResizeArray template
-   - Debug printing functionality
-   - Generic error handling
-   - Common constants
-   - Time/date utilities
-   - Array manipulation helpers
-
-3. Create new components:
-   a. ChartVisualizer class (purely visual aspects):
-      - Generic line drawing methods
-      - SChartLine structure
-      - Basic chart object management
-      
-      KEEP IN BREAKOUTS:
-      - Level-specific visualization logic
-      - Level strength coloring rules
-      - Level label formatting
-   
-   b. SystemHealth class (generic monitoring):
-      - Basic health tracking structure
-      - Generic performance metrics
-      - Error rate tracking
-      
-      KEEP IN BREAKOUTS:
-      - Level-specific success metrics
-      - Breakout validation statistics
-      - Strategy-specific health checks
-   
-   c. ReportGenerator class (generic formatting):
-      - Basic message formatting
-      - Alert framework
-      - Time-based report scheduling
-      
-      KEEP IN BREAKOUTS:
-      - Level-specific report content
-      - Breakout alert conditions
-      - Strategy performance metrics
-
-4. Move to VTradeTypes:
-   MOVE:
-   - Generic market structures
-   - Basic level structure
-   - Common trading enums
-   
-   KEEP IN BREAKOUTS:
-   - Strategy-specific state
-   - Key level quality metrics
-   - Breakout-specific configurations
-
-5. Create Configuration class:
-   MOVE:
-   - Generic timeframe settings
-   - Basic buffer sizes
-   - Common market parameters
-   
-   KEEP IN BREAKOUTS:
-   - Level detection parameters
-   - Strength calculation settings
-   - Strategy-specific timeouts
-   - Breakout validation thresholds
-
-This refactoring maintains the core breakout detection intelligence in CV2EABreakouts while
-moving only truly reusable components to shared locations. The breakouts class will remain
-focused on:
-- Key level detection algorithms
-- Breakout pattern recognition
-- Level strength calculations
-- Strategy-specific validation
-- Trade setup identification
-- Breakout-specific visualization
-*/
 
 #include <Trade\Trade.mqh>
 #include <VErrorDesc.mqh>  // Add this include for error descriptions
@@ -165,23 +34,15 @@ focused on:
 #include "V-2-EA-US500Data.mqh"
 #include "V-2-EA-ForexData.mqh"
 
-//+------------------------------------------------------------------+
-//| Constants                                                          |
-//+------------------------------------------------------------------+
-#define DEFAULT_BUFFER_SIZE 100 // Default size for price buffers
-#define DEFAULT_DEBUG_INTERVAL 300 // Default debug interval (5 minutes)
-#define ERR_OBJECT_DOES_NOT_EXIST 4202 // MQL5 error code for non-existent object
-
-//+------------------------------------------------------------------+
-//| Structure Definitions                                              |
-//+------------------------------------------------------------------+
-// Note: SKeyLevel is defined in V-2-EA-MarketData.mqh
+#define DEFAULT_BUFFER_SIZE 100
+#define DEFAULT_DEBUG_INTERVAL 300
+#define ERR_OBJECT_DOES_NOT_EXIST 4202
 
 struct SStrategyState
 {
-    bool      keyLevelFound;    // Whether a valid key level was found
-    SKeyLevel activeKeyLevel;   // Currently active key level
-    datetime  lastUpdate;       // Last time the state was updated
+    bool      keyLevelFound;
+    SKeyLevel activeKeyLevel;
+    datetime  lastUpdate;
     
     void Reset()
     {
@@ -190,14 +51,13 @@ struct SStrategyState
     }
 };
 
-//--- Level Performance Tracking
 struct SLevelPerformance
 {
-    int successfulBounces;    // Number of times price respected the level
-    int falseBreaks;         // Number of times price broke but returned
-    int trueBreaks;          // Number of times price broke decisively
-    double avgBounceSize;    // Average size of bounces from this level
-    double successRate;      // Ratio of successful bounces to total tests
+    int successfulBounces;
+    int falseBreaks;
+    int trueBreaks;
+    double avgBounceSize;
+    double successRate;
     
     void Reset()
     {
@@ -209,14 +69,13 @@ struct SLevelPerformance
     }
 };
 
-//--- System Health Tracking
 struct SSystemHealth
 {
-    int missedOpportunities;  // Clear levels that weren't detected
-    int falseSignals;        // Invalid levels that were detected
-    double detectionRate;     // Ratio of correct detections to total
-    double noiseRatio;       // Ratio of false signals to valid signals
-    datetime lastUpdate;      // Last time health metrics were updated
+    int missedOpportunities;
+    int falseSignals;
+    double detectionRate;
+    double noiseRatio;
+    datetime lastUpdate;
     
     void Reset()
     {
@@ -228,18 +87,18 @@ struct SSystemHealth
     }
 };
 
-// Add after other struct definitions
 struct SChartLine
 {
-    string name;        // Unique line name
-    double price;      // Price level
-    datetime lastUpdate; // Last update time
-    color lineColor;   // Line color
-    bool isActive;     // Whether line is currently shown
-    string labelName;   // Name of associated text label
+    string name;
+    double price;
+    datetime lastUpdate;
+    color lineColor;
+    bool isActive;
+    string labelName;
 };
 
-struct STouchQuality {
+struct STouchQuality 
+{
     int touchCount;
     double avgBounceStrength;
     double avgBounceVolume;
@@ -248,7 +107,6 @@ struct STouchQuality {
     int slowestBounce;
 };
 
-//--- Logging Throttle Structure
 struct SLogThrottle
 {
     datetime lastDebugMessage;
@@ -256,8 +114,8 @@ struct SLogThrottle
     datetime lastHealthReport;
     datetime lastTradeAlert;
     datetime lastChartUpdate;
-    string lastMessage;         // Store last message to avoid identical spam
-    int duplicateCount;         // Count of duplicate messages
+    string lastMessage;
+    int duplicateCount;
     
     void Reset()
     {
@@ -271,43 +129,90 @@ struct SLogThrottle
     }
 };
 
-//+------------------------------------------------------------------+
-//| Key Level Detection Class                                          |
-//+------------------------------------------------------------------+
 class CV2EABreakouts : public CV2EAMarketDataBase
 {
 private:
-    //--- Volume Settings
-    bool            m_useVolumeFilter;  // Whether to use volume filtering
+    bool            m_useVolumeFilter;
+    bool            m_ignoreMarketHours;
+    ENUM_TIMEFRAMES m_currentTimeframe;
+    SLogThrottle    m_logThrottle;
     
-    //--- Market Hours Settings
-    bool            m_ignoreMarketHours; // Whether to completely ignore market hours
-    
-    //--- Timeframe Tracking
-    ENUM_TIMEFRAMES m_currentTimeframe;  // Track current timeframe for change detection
-    
-    //--- Logging Throttle
-    SLogThrottle    m_logThrottle;      // Throttle for logging to prevent spam
-    
-    //--- US500 Detection
     bool IsUS500()
     {
         return (StringFind(_Symbol, "US500") >= 0 || StringFind(_Symbol, "SPX") >= 0);
     }
+    
+    double GetOptimalTouchZone(double providedTouchZone)
+    {
+        double touchZone = providedTouchZone;
+        
+        if(IsUS500())
+        {
+            switch(_Period)
+            {
+                case PERIOD_MN1: touchZone = 50.0; break;
+                case PERIOD_W1:  touchZone = 30.0; break;
+                case PERIOD_D1:  touchZone = 20.0; break;
+                case PERIOD_H4:  touchZone = 15.0; break;
+                case PERIOD_H1:  touchZone = 10.0; break;
+                case PERIOD_M30: touchZone = 7.5;  break;
+                case PERIOD_M15: touchZone = 5.0;  break;
+                case PERIOD_M5:  touchZone = 3.0;  break;
+                case PERIOD_M1:  touchZone = 2.0;  break;
+                default:         touchZone = 5.0;  break;
+            }
+            DebugLog("US500 touch zone set: " + DoubleToString(touchZone, 1));
+        }
+        else
+        {
+            if(touchZone == 0 || touchZone > 1.0)
+            {
+                switch(_Period)
+                {
+                    case PERIOD_MN1: touchZone = 0.0200; break;
+                    case PERIOD_W1:  touchZone = 0.0100; break;
+                    case PERIOD_D1:  touchZone = 0.0060; break;
+                    case PERIOD_H4:  touchZone = 0.0040; break;
+                    case PERIOD_H2:  touchZone = 0.0032; break;
+                    case PERIOD_H1:  touchZone = 0.0025; break;
+                    case PERIOD_M30: touchZone = 0.0010; break;
+                    case PERIOD_M15: touchZone = 0.0007; break;
+                    case PERIOD_M5:  touchZone = 0.0005; break;
+                    case PERIOD_M1:  touchZone = 0.0003; break;
+                    default:         touchZone = 0.0005; break;
+                }
+                DebugLog(StringFormat("Default forex touch zone: %.5f (%.1f pips)", 
+                    touchZone, touchZone/_Point));
+            }
+            else
+            {
+                DebugLog(StringFormat("Using provided touch zone: %.5f (%.1f pips)", 
+                    touchZone, touchZone/_Point));
+            }
+        }
+        
+        return touchZone;
+    }
+    
+    bool InitializeArrays(string context)
+    {
+        if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, context + " - m_currentKeyLevels") ||
+           !CV2EAUtils::SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, context + " - m_chartLines") ||
+           !CV2EAUtils::SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, context + " - m_recentBreaks") ||
+           !CV2EAUtils::SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, context + " - m_recentBreakTimes") ||
+           !CV2EAUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, context + " - m_lastAlerts"))
+        {
+            return false;
+        }
+        return true;
+    }
 
-    //--- Key Level Parameters
-    int           m_maxBounceDelay;  // Maximum bars to wait for bounce
-    
-    //--- Key Level State
-    SKeyLevel     m_currentKeyLevels[]; // Array of current key levels
-    int           m_keyLevelCount;      // Number of valid key levels
-    datetime      m_lastKeyLevelUpdate; // Last time key levels were updated
-    
-    //--- Strategy State
-    SStrategyState m_state;            // Current strategy state
-    
-    //--- Debug settings
-    bool            m_initialized;      // Initialization state
+    int           m_maxBounceDelay;
+    SKeyLevel     m_currentKeyLevels[];
+    int           m_keyLevelCount;
+    datetime      m_lastKeyLevelUpdate;
+    SStrategyState m_state;
+    bool            m_initialized;
     
     //--- Hourly statistics
     struct SHourlyStats
@@ -338,28 +243,22 @@ private:
         }
     } m_hourlyStats;
 
-    //--- Performance tracking
-    SLevelPerformance m_levelPerformance;  // Track level performance
-    SSystemHealth m_systemHealth;          // Track system health
-    
-    //--- Key level history
-    double m_recentBreaks[];              // Store recent level breaks
-    datetime m_recentBreakTimes[];        // Times of recent breaks
-    int m_recentBreakCount;               // Count of recent breaks
+    SLevelPerformance m_levelPerformance;
+    SSystemHealth m_systemHealth;
+    double m_recentBreaks[];
+    datetime m_recentBreakTimes[];
+    int m_recentBreakCount;
 
     struct SAlertTime
     {
         double price;
         datetime lastAlert;
     };
-    SAlertTime m_lastAlerts[];  // Array to track last alert times for each level
-
-    //--- Add to class private members
-    SChartLine m_chartLines[];  // Array to track chart lines
-    datetime m_lastChartUpdate; // Last chart update time
+    SAlertTime m_lastAlerts[];
+    SChartLine m_chartLines[];
+    datetime m_lastChartUpdate;
 
 public:
-    //--- Constructor and destructor
     CV2EABreakouts(void) : m_initialized(false),
                            m_keyLevelCount(0),
                            m_lastKeyLevelUpdate(0),
@@ -368,32 +267,11 @@ public:
                            m_ignoreMarketHours(false),
                            m_currentTimeframe(PERIOD_CURRENT)  
     {
-        // Initialize logging throttle
         m_logThrottle.Reset();
         
-        // Initialize each array with robust error checking
-        if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_currentKeyLevels"))
+        if(!InitializeArrays("Constructor"))
         {
-            ThrottledLogError("Initializing m_currentKeyLevels failed");
-            return;
-        }
-        
-        if(!CV2EAUtils::SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_chartLines"))
-        {
-            ThrottledLogError("Initializing m_chartLines failed");
-            return;
-        }
-        
-        if(!CV2EAUtils::SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_recentBreaks") ||
-           !CV2EAUtils::SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_recentBreakTimes"))
-        {
-            ThrottledLogError("Initializing recent breaks arrays failed");
-            return;
-        }
-        
-        if(!CV2EAUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_lastAlerts"))
-        {
-            ThrottledLogError("Initializing m_lastAlerts failed");
+            ThrottledLogError("Array initialization failed in constructor");
             return;
         }
         
@@ -405,9 +283,10 @@ public:
         ClearAllChartObjects();  // Clean up chart objects before destruction
     }
     
-    //--- Throttled Logging Methods
-    void ThrottledLogError(string message)
+    void ThrottledLog(string message, bool isError = false, bool forceShow = false)
     {
+        if(!isError && !forceShow && !m_showDebugPrints) return;
+        
         datetime currentTime = TimeCurrent();
         if(m_logThrottle.lastMessage == message)
         {
@@ -419,85 +298,45 @@ public:
             m_logThrottle.duplicateCount = 0;
         }
         
-        CV2EAUtils::LogError(message);
+        if(isError)
+            CV2EAUtils::LogError(message);
+        else
+            CV2EAUtils::LogInfo(message);
+            
         m_logThrottle.lastDebugMessage = currentTime;
         m_logThrottle.lastMessage = message;
     }
     
-    void ThrottledLogInfo(string message)
-    {
-        if(!m_showDebugPrints) return;
-        
-        datetime currentTime = TimeCurrent();
-        if(m_logThrottle.lastMessage == message)
-        {
-            m_logThrottle.duplicateCount++;
-            if(currentTime - m_logThrottle.lastDebugMessage < MIN_LOG_INTERVAL_SECONDS)
-                return;
-            message = StringFormat("%s (x%d)", message, m_logThrottle.duplicateCount);
-            m_logThrottle.duplicateCount = 0;
-        }
-        
-        CV2EAUtils::LogInfo(message);
-        m_logThrottle.lastDebugMessage = currentTime;
-        m_logThrottle.lastMessage = message;
-    }
+    void ThrottledLogError(string message) { ThrottledLog(message, true, true); }
+    void ThrottledLogInfo(string message) { ThrottledLog(message, false, false); }
+    void ThrottledDebugPrint(string message) { ThrottledLog(message, false, false); }
     
-    void ThrottledDebugPrint(string message)
-    {
-        if(!m_showDebugPrints) return;
-        
-        datetime currentTime = TimeCurrent();
-        if(m_logThrottle.lastMessage == message)
-        {
-            m_logThrottle.duplicateCount++;
-            if(currentTime - m_logThrottle.lastDebugMessage < MIN_LOG_INTERVAL_SECONDS)
-                return;
-            message = StringFormat("%s (x%d)", message, m_logThrottle.duplicateCount);
-            m_logThrottle.duplicateCount = 0;
-        }
-        
-        CV2EAUtils::DebugPrint(message);
-        m_logThrottle.lastDebugMessage = currentTime;
-        m_logThrottle.lastMessage = message;
-    }
-    
-    //--- Reset static variables for deterministic behavior  
+    void DebugLog(string message) 
+    { 
+        if(m_showDebugPrints) CV2EAUtils::LogInfo(message); 
+    }  
     void ResetStaticVariables()
     {
         CV2EAUtils::LogInfo("🔄 CRITICAL FIX: Forcing static variable reset for deterministic behavior");
         
-        // Force complete state reset to ensure identical conditions produce identical results
-        m_lastKeyLevelUpdate = 0;  // Force immediate recalculation
-        m_keyLevelCount = 0;       // Clear existing levels
-        m_lastChartUpdate = 0;     // Reset chart update timing
-        
-        // Clear all cached state
+        m_lastKeyLevelUpdate = 0;
+        m_keyLevelCount = 0;
+        m_lastChartUpdate = 0;
         m_hourlyStats.Reset();
         
-        // CRITICAL FIX: Reset static variables in other data classes
         CV2EAUtils::LogInfo("🔄 Resetting static variables in data classes...");
         
-        // Reset US500Data static variables
         ResetUS500DataStatics();
-        
-        // Reset ForexData static variables  
         ResetForexDataStatics();
         
-        // ADDITIONAL FIX: Force immediate recalculation to bypass any static variable issues
-        // This ensures that any static variables in FindKeyLevelsOnData are effectively bypassed
-        datetime futureTime = TimeCurrent() + 3600; // Force stats reset
+        datetime futureTime = TimeCurrent() + 3600;
         MqlDateTime dt;
         TimeToStruct(futureTime, dt);
-        // This will force the hourly stats to reset on the next calculation
         
-        // Clear arrays and reinitialize with clean state
         ArrayFree(m_currentKeyLevels);
         ArrayFree(m_lastAlerts);
         
-        // Reinitialize arrays
-        if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "ResetStaticVariables - m_currentKeyLevels") ||
-           !CV2EAUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "ResetStaticVariables - m_lastAlerts"))
+        if(!InitializeArrays("ResetStaticVariables"))
         {
             CV2EAUtils::LogError("❌ Failed to reinitialize arrays during static reset");
         }
@@ -507,12 +346,10 @@ public:
         }
     }
     
-    //--- Initialization
     bool Init(int lookbackPeriod, double minStrength, double touchZone, int minTouches, bool showDebugPrints, bool useVolumeFilter = true, bool ignoreMarketHours = false)
     {
-        // Check for sufficient historical data first
         int bars = Bars(_Symbol, Period());
-        if(bars < lookbackPeriod + 10)  // Add buffer for swing detection
+        if(bars < lookbackPeriod + 10)
         {
             ThrottledLogError(StringFormat(
                 "Not enough historical data loaded. Need at least %d bars, got %d", 
@@ -520,7 +357,6 @@ public:
             return false;
         }
 
-        // Validate inputs
         if(minStrength <= 0.0 || minStrength > 1.0)
         {
             CV2EAUtils::LogError("Invalid minStrength", minStrength);
@@ -536,54 +372,8 @@ public:
         m_ignoreMarketHours = ignoreMarketHours;
         m_currentTimeframe = Period();  // Initialize current timeframe
         
-        // Adjust touch zone for US500
-        if(IsUS500())
-        {
-            // Adjust touch zone for US500 based on timeframe
-            switch(_Period)
-            {
-                case PERIOD_MN1: touchZone = 50.0; break;  // 50 points for monthly
-                case PERIOD_W1:  touchZone = 30.0; break;  // 30 points for weekly  
-                case PERIOD_D1:  touchZone = 20.0; break;  // 20 points
-                case PERIOD_H4:  touchZone = 15.0; break;  // 15 points
-                case PERIOD_H1:  touchZone = 10.0; break;  // 10 points
-                case PERIOD_M30: touchZone = 7.5;  break;  // 7.5 points
-                case PERIOD_M15: touchZone = 5.0;  break;  // 5 points
-                case PERIOD_M5:  touchZone = 3.0;  break;  // 3 points
-                case PERIOD_M1:  touchZone = 2.0;  break;  // 2 points
-                default:         touchZone = 5.0;  break;  // Default 5 points
-            }
-            CV2EAUtils::LogInfo("Adjusted touch zone for US500", DoubleToString(touchZone, 5));
-        }
-        else
-        {
-            // Use forex touch zones if not explicitly set
-            if(touchZone == 0 || touchZone > 1.0)  // Added check for unreasonably large values
-            {
-                // Default touch zones for forex (in pips)
-                switch(_Period)
-                {
-                    case PERIOD_MN1: touchZone = 0.0200; break; // 200 pips for monthly
-                    case PERIOD_W1:  touchZone = 0.0100; break; // 100 pips for weekly
-                    case PERIOD_D1:  touchZone = 0.0060; break; // 60 pips
-                    case PERIOD_H4:  touchZone = 0.0040; break; // 40 pips
-                    case PERIOD_H2:  touchZone = 0.0032; break; // 32 pips
-                    case PERIOD_H1:  touchZone = 0.0025; break; // 25 pips
-                    case PERIOD_M30: touchZone = 0.0010; break; // 10 pips
-                    case PERIOD_M15: touchZone = 0.0007; break; // 7 pips
-                    case PERIOD_M5:  touchZone = 0.0005; break; // 5 pips
-                    case PERIOD_M1:  touchZone = 0.0003; break; // 3 pips
-                    default:         touchZone = 0.0005;        // Default 5 pips
-                }
-                CV2EAUtils::LogInfo("Using default forex touch zone", DoubleToString(touchZone, 5), 
-                    StringFormat(" (%.1f pips)", touchZone/_Point));
-            }
-            else
-            {
-                CV2EAUtils::LogInfo("Using provided forex touch zone", DoubleToString(touchZone, 5), 
-                    StringFormat(" (%.1f pips)", touchZone/_Point));
-            }
-        }
+        // Set appropriate touch zone for market type
+        touchZone = GetOptimalTouchZone(touchZone);
         
         m_touchZone = touchZone;
         
@@ -617,52 +407,12 @@ public:
             m_lookbackPeriod = lookbackPeriod;
         }
         
-        // Adjust touch zone based on timeframe
-        if(touchZone == 0)
-        {
-            switch(tf)
-            {
-                case PERIOD_MN1: m_touchZone = 0.0200; break; // 200 pips for monthly
-                case PERIOD_W1:  m_touchZone = 0.0100; break; // 100 pips for weekly
-                case PERIOD_D1:  m_touchZone = 0.0060; break; // 60 pips
-                case PERIOD_H4:  m_touchZone = 0.0040; break; // 40 pips
-                case PERIOD_H2:  m_touchZone = 0.0032; break; // 32 pips (between H1 and H4)
-                case PERIOD_H1:  m_touchZone = 0.0025; break; // 25 pips
-                case PERIOD_M30: m_touchZone = 0.0010; break; // 10 pips
-                case PERIOD_M15: m_touchZone = 0.0007; break; // 7 pips
-                case PERIOD_M5:  m_touchZone = 0.0005; break; // 5 pips
-                case PERIOD_M1:  m_touchZone = 0.0003; break; // 3 pips
-                default:         m_touchZone = 0.0005;        // Default 5 pips
-            }
-        }
-        else
-        {
-            m_touchZone = touchZone;
-        }
+        // Already set above with GetOptimalTouchZone()
         
-        // Reinitialize arrays with robust error checks
-        if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_currentKeyLevels"))
+        // Reinitialize arrays
+        if(!InitializeArrays("Init"))
         {
-            ThrottledLogError("Failed to resize key levels array");
-            return false;
-        }
-        
-        if(!CV2EAUtils::SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_chartLines"))
-        {
-            ThrottledLogError("Failed to resize chart lines array");
-            return false;
-        }
-        
-        if(!CV2EAUtils::SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_recentBreaks") ||
-           !CV2EAUtils::SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_recentBreakTimes"))
-        {
-            ThrottledLogError("Failed to resize recent breaks arrays");
-            return false;
-        }
-        
-        if(!CV2EAUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_lastAlerts"))
-        {
-            ThrottledLogError("Failed to resize last alerts array");
+            ThrottledLogError("Failed to initialize arrays in Init");
             return false;
         }
         
@@ -2631,81 +2381,41 @@ private:
      }
      
 public:
-     //--- Comprehensive diagnostic method for troubleshooting
+     //--- Simplified diagnostic method
      void DiagnoseChartIssues()
      {
-         long chart_id = ChartID();
+         if(!m_showDebugPrints) return;
          
-         CV2EAUtils::LogInfo("🔧 CHART DIAGNOSTIC REPORT");
-         CV2EAUtils::LogInfo("========================");
-         
-         // 1. Basic state information
-         CV2EAUtils::LogInfo(StringFormat("Chart ID: %d", chart_id));
-         CV2EAUtils::LogInfo(StringFormat("Symbol: %s", _Symbol));
-         CV2EAUtils::LogInfo(StringFormat("Timeframe: %s", EnumToString(Period())));
-         CV2EAUtils::LogInfo(StringFormat("Initialized: %s", m_initialized ? "YES" : "NO"));
-         CV2EAUtils::LogInfo(StringFormat("Key Level Count: %d", m_keyLevelCount));
-         CV2EAUtils::LogInfo(StringFormat("Chart Lines Array Size: %d", ArraySize(m_chartLines)));
-         
-         // 2. Key levels information
+         CV2EAUtils::LogInfo("🔧 CHART DIAGNOSTIC");
+         CV2EAUtils::LogInfo(StringFormat("Symbol: %s | TF: %s | Levels: %d | Bars: %d", 
+             _Symbol, EnumToString(Period()), m_keyLevelCount, Bars(_Symbol, Period())));
+             
+         // Show key levels (max 3)
          if(m_keyLevelCount > 0)
          {
-             CV2EAUtils::LogInfo(StringFormat("📊 KEY LEVELS (%d found):", m_keyLevelCount));
-             for(int i = 0; i < MathMin(m_keyLevelCount, 5); i++)  // Show first 5
+             for(int i = 0; i < MathMin(m_keyLevelCount, 3); i++)
              {
-                 CV2EAUtils::LogInfo(StringFormat("  %d. %.5f (%s, strength %.2f, touches %d)", 
-                     i+1,
-                     m_currentKeyLevels[i].price,
+                 CV2EAUtils::LogInfo(StringFormat("  Level %d: %.5f (%s, %.2f strength)", 
+                     i+1, m_currentKeyLevels[i].price,
                      m_currentKeyLevels[i].isResistance ? "R" : "S",
-                     m_currentKeyLevels[i].strength,
-                     m_currentKeyLevels[i].touchCount));
+                     m_currentKeyLevels[i].strength));
              }
          }
          else
          {
-             CV2EAUtils::LogInfo("❌ NO KEY LEVELS FOUND");
+             CV2EAUtils::LogInfo("❌ No key levels found");
          }
          
-         // 3. Chart objects analysis
-         int totalObjects = ObjectsTotal(chart_id, 0, -1);  // All objects
-         int totalHLines = ObjectsTotal(chart_id, 0, OBJ_HLINE);
+         // Chart objects summary
          int ourObjects = 0;
-         
+         long chart_id = ChartID();
+         int totalHLines = ObjectsTotal(chart_id, 0, OBJ_HLINE);
          for(int i = 0; i < totalHLines; i++)
          {
              string objName = ObjectName(chart_id, i, 0, OBJ_HLINE);
-             if(StringFind(objName, "KL_") == 0)
-             {
-                 ourObjects++;
-             }
+             if(StringFind(objName, "KL_") == 0) ourObjects++;
          }
-         
-         CV2EAUtils::LogInfo("📈 CHART OBJECTS:");
-         CV2EAUtils::LogInfo(StringFormat("  Total Objects: %d", totalObjects));
-         CV2EAUtils::LogInfo(StringFormat("  Horizontal Lines: %d", totalHLines));
-         CV2EAUtils::LogInfo(StringFormat("  Our Key Level Lines: %d", ourObjects));
-         
-         // 4. Configuration check
-         CV2EAUtils::LogInfo("⚙️ CONFIGURATION:");
-         CV2EAUtils::LogInfo(StringFormat("  Min Strength: %.2f", m_minStrength));
-         CV2EAUtils::LogInfo(StringFormat("  Min Touches: %d", m_minTouches));
-         CV2EAUtils::LogInfo(StringFormat("  Touch Zone: %.5f", m_touchZone));
-         CV2EAUtils::LogInfo(StringFormat("  Lookback Period: %d", m_lookbackPeriod));
-         CV2EAUtils::LogInfo(StringFormat("  Market Hours: %s", m_ignoreMarketHours ? "IGNORED" : "RESPECTED"));
-         CV2EAUtils::LogInfo(StringFormat("  Volume Filter: %s", m_useVolumeFilter ? "ENABLED" : "DISABLED"));
-         CV2EAUtils::LogInfo(StringFormat("  Debug Prints: %s", m_showDebugPrints ? "ON" : "OFF"));
-         
-         // 5. Market data check
-         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-         int availableBars = Bars(_Symbol, Period());
-         
-         CV2EAUtils::LogInfo("📊 MARKET DATA:");
-         CV2EAUtils::LogInfo(StringFormat("  Current Price: %.5f", currentPrice));
-         CV2EAUtils::LogInfo(StringFormat("  Available Bars: %d", availableBars));
-         CV2EAUtils::LogInfo(StringFormat("  Point Value: %.5f", _Point));
-         
-         CV2EAUtils::LogInfo("========================");
-         CV2EAUtils::LogInfo("🔧 DIAGNOSTIC COMPLETE");
+         CV2EAUtils::LogInfo(StringFormat("Chart Lines: %d visible", ourObjects));
      }
     
     // Removed ClearInactiveChartLines - using simplified approach
