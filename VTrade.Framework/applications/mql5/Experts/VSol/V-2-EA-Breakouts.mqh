@@ -160,10 +160,10 @@ focused on:
 
 #include <Trade\Trade.mqh>
 #include <VErrorDesc.mqh>  // Add this include for error descriptions
-#include <V-2-EA-MarketData.mqh>  // Add this include for market data functions
-#include <V-2-EA-Utils.mqh>  // Add this include for utilities
-#include <V-2-EA-US500Data.mqh>
-#include <V-2-EA-ForexData.mqh>
+#include "V-2-EA-MarketData.mqh"  // Add this include for market data functions
+#include "V-2-EA-Utils.mqh"  // Add this include for utilities
+#include "V-2-EA-US500Data.mqh"
+#include "V-2-EA-ForexData.mqh"
 
 //+------------------------------------------------------------------+
 //| Constants                                                          |
@@ -503,35 +503,8 @@ public:
         }
         else
         {
-                    CV2EAUtils::LogInfo("✅ Static variables reset completed - algorithm should now be deterministic");
-    }
-    
-    //--- Reset static variables in US500Data class
-    void ResetUS500DataStatics()
-    {
-        CV2EAUtils::LogInfo("🔧 Resetting US500Data static variables");
-        
-        // Call the new Reset method to clear all static state
-        CV2EAUS500Data::Reset();
-        
-        // Then reinitialize with clean state
-        CV2EAUS500Data::Initialize();
-        
-        CV2EAUtils::LogInfo("✅ US500Data static variables reset");
-    }
-    
-    //--- Reset static variables in ForexData class  
-    void ResetForexDataStatics()
-    {
-        CV2EAUtils::LogInfo("🔧 Resetting ForexData static variables");
-        
-        // Call the new Reset method to clear all static state
-        CV2EAForexData::Reset();
-        
-        // Then reinitialize with clean state
-        CV2EAForexData::Initialize();
-        
-        CV2EAUtils::LogInfo("✅ ForexData static variables reset");
+            CV2EAUtils::LogInfo("✅ Static variables reset completed - algorithm should now be deterministic");
+        }
     }
     
     //--- Initialization
@@ -1285,9 +1258,8 @@ public:
         return IsUS500();
     }
 
-    //--- Add to public section of CV2EABreakouts class
-    public:
-        bool ProcessTimeframe(ENUM_TIMEFRAMES timeframe)
+    //--- Process timeframe method
+    bool ProcessTimeframe(ENUM_TIMEFRAMES timeframe)
         {
             if(!m_initialized) {
                 CV2EAUtils::LogError("Strategy not initialized");

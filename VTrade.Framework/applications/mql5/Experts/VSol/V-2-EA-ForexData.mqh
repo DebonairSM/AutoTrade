@@ -211,4 +211,12 @@ double CV2EAForexData::m_pipValue = 0.0;
 int    CV2EAForexData::m_pipDigits = 0;
 bool   CV2EAForexData::m_initialized = false;
 
+//+------------------------------------------------------------------+
+//| Global reset function for Forex data statics                     |
+//+------------------------------------------------------------------+
+void ResetForexDataStatics()
+{
+    CV2EAForexData::Reset();
+}
+
 #endif // __V2_EA_FOREXDATA_MQH__ 

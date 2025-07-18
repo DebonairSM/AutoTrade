@@ -199,4 +199,12 @@ int    CV2EAUS500Data::m_us500MinTouches[];
 double CV2EAUS500Data::m_us500MinStrengths[];
 int    CV2EAUS500Data::m_us500Lookbacks[];
 int    CV2EAUS500Data::m_us500MaxBounceDelays[];
-bool   CV2EAUS500Data::m_initialized = false; 
+bool   CV2EAUS500Data::m_initialized = false;
+
+//+------------------------------------------------------------------+
+//| Global reset function for US500 data statics                     |
+//+------------------------------------------------------------------+
+void ResetUS500DataStatics()
+{
+    CV2EAUS500Data::Reset();
+} 
