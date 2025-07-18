@@ -1,0 +1,64 @@
+# Cursor Rules for VTrade Framework
+
+## Documentation-First Development
+
+### MANDATORY: Consult Documentation Before Implementation
+Before implementing ANY new code involving:
+- MQL5/MT4 Expert Advisors, Indicators, or Scripts
+- MetaTrader platform-specific functionality
+- Trading-related algorithms or patterns
+- Event handlers (OnInit, OnTick, OnDeinit, etc.)
+- Any unfamiliar framework or library
+
+**YOU MUST:**
+1. First use `mcp_context7_resolve-library-id` to find relevant documentation
+2. Then use `mcp_context7_get-library-docs` to get the official patterns/best practices
+3. Only after consulting documentation, proceed with implementation
+4. Reference the documentation source in code comments
+
+### MQL5/MT5 Specific Rules
+
+1. **Event Handler Patterns**: Always consult MT5 documentation for proper OnInit/OnTick/OnDeinit patterns
+2. **Trading Logic**: Only implement trading logic in OnTick(), never in OnInit()
+3. **Initialization**: OnInit() should only handle setup, validation, and return proper codes
+4. **Best Practices**: Follow official MQL5 coding standards and event handling patterns
+
+### Documentation Sources to Consult
+
+- MetaTrader 5 official documentation
+- MQL5 language reference
+- MT5 Expert Advisor patterns
+- Trading platform best practices
+
+### Code Comments Requirement
+
+When implementing based on documentation, include:
+```mql5
+// Pattern from: [Documentation Source]
+// Reference: [Specific section/pattern]
+```
+
+### Violation Consequences
+
+- Incorrect patterns that don't follow official documentation
+- Code that breaks MT5 event flow
+- Trading logic in initialization functions
+- Missing documentation consultation
+
+## Example Workflow
+
+```
+User Request: "Implement new MT5 EA feature"
+↓
+Assistant: "Let me first consult MT5 documentation..."
+↓
+Call: mcp_context7_resolve-library-id("MetaTrader 5")
+↓
+Call: mcp_context7_get-library-docs(library_id, topic)
+↓
+Implement following documented patterns
+↓
+Add documentation references in comments
+```
+
+This rule ensures we always validate against official sources before implementation. 

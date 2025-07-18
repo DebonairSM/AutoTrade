@@ -54,6 +54,7 @@ private:
     
     // Monitored timeframes
     ENUM_TIMEFRAMES m_timeframes[];
+    bool m_currentTimeframeOnly;        // Only process current timeframe
     
     string m_version;
     
@@ -112,7 +113,7 @@ public:
                                   m_version("1.0.4")
     {
         m_report.Reset();
-        InitializeTimeframes();
+        // NOTE: InitializeTimeframes() moved to Init() method after m_currentTimeframeOnly is set
     }
     
     //--- Destructor
@@ -126,7 +127,7 @@ public:
     
     //--- Initialization
     bool Init(int lookbackPeriod, double minStrength, double touchZone, 
-              int minTouches, bool showDebugPrints)
+              int minTouches, bool showDebugPrints, bool useVolumeFilter = true, bool ignoreMarketHours = false, bool currentTimeframeOnly = false)
     {
         // Add parameter validation
         if(lookbackPeriod < 50 || lookbackPeriod > 50000) {
@@ -145,6 +146,19 @@ public:
         m_touchZone = touchZone;
         m_minTouches = minTouches;
         m_showDebugPrints = showDebugPrints;
+        m_currentTimeframeOnly = currentTimeframeOnly;
+        
+        // Initialize timeframes AFTER m_currentTimeframeOnly is set
+        InitializeTimeframes();
+        
+        // Print configuration info
+        Print(StringFormat("🔧 DEBUG: m_currentTimeframeOnly = %s", m_currentTimeframeOnly ? "TRUE" : "FALSE"));
+        Print(StringFormat("🔧 DEBUG: Period() = %s", EnumToString(Period())));
+        if(m_currentTimeframeOnly) {
+            Print("📊 Strategy: SIMPLIFIED MODE - Processing current timeframe only: ", EnumToString(Period()));
+        } else {
+            Print("📊 Strategy: MULTI-TIMEFRAME MODE - Processing ", ArraySize(m_timeframes), " timeframes");
+        }
         
         // Create breakouts analyzer
         if(m_breakouts == NULL)
@@ -156,7 +170,7 @@ public:
         }
         
         // Initialize breakouts analyzer
-        if(!m_breakouts.Init(lookbackPeriod, minStrength, touchZone, minTouches, showDebugPrints)) {
+        if(!m_breakouts.Init(lookbackPeriod, minStrength, touchZone, minTouches, showDebugPrints, useVolumeFilter, ignoreMarketHours)) {
             Print("❌ Error: Failed to initialize breakouts analyzer");
             return false;
         }
@@ -244,18 +258,50 @@ public:
     
     string GetVersion() const { return m_version; }
     
+    //--- Chart visualization methods
+    void ForceChartUpdate() 
+    { 
+        if(m_breakouts != NULL) {
+            Print("🔧 Strategy: Forcing chart line update...");
+            m_breakouts.ForceChartUpdate();
+        } else {
+            Print("❌ Strategy: Cannot update chart - breakouts analyzer not initialized");
+        }
+    }
+    
+    void RunDiagnostics() 
+    { 
+        if(m_breakouts != NULL) {
+            Print("🔧 Strategy: Running diagnostic check...");
+            m_breakouts.DiagnoseChartIssues();
+        } else {
+            Print("❌ Strategy: Cannot run diagnostics - breakouts analyzer not initialized");
+        }
+    }
+    
 private:
     //--- Internal methods
     void InitializeTimeframes(void)
     {
-        static ENUM_TIMEFRAMES tf[] = {
-            PERIOD_MN1, PERIOD_W1, PERIOD_D1,
-            PERIOD_H4, PERIOD_H1,
-            PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
-        };
+        Print(StringFormat("🔧 DEBUG: InitializeTimeframes called, m_currentTimeframeOnly = %s", m_currentTimeframeOnly ? "TRUE" : "FALSE"));
         
-        ArrayResize(m_timeframes, ArraySize(tf));
-        ArrayCopy(m_timeframes, tf);
+        if(m_currentTimeframeOnly) {
+            // SIMPLIFIED MODE: Only process current chart timeframe
+            ArrayResize(m_timeframes, 1);
+            m_timeframes[0] = Period();
+            Print(StringFormat("🔧 DEBUG: SIMPLIFIED MODE - Array size set to %d, timeframe = %s", ArraySize(m_timeframes), EnumToString(m_timeframes[0])));
+        } else {
+            // MULTI-TIMEFRAME MODE: Process all timeframes
+            static ENUM_TIMEFRAMES tf[] = {
+                PERIOD_MN1, PERIOD_W1, PERIOD_D1,
+                PERIOD_H4, PERIOD_H1,
+                PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
+            };
+            
+            ArrayResize(m_timeframes, ArraySize(tf));
+            ArrayCopy(m_timeframes, tf);
+            Print(StringFormat("🔧 DEBUG: MULTI-TIMEFRAME MODE - Array size set to %d timeframes", ArraySize(m_timeframes)));
+        }
     }
     
     void UpdateReport(void)
@@ -271,7 +317,9 @@ private:
         m_report.reportTime = currentTime;
         
         // Process each timeframe
+        Print(StringFormat("🔧 DEBUG: UpdateReport processing %d timeframes", ArraySize(m_timeframes)));
         for(int i = 0; i < ArraySize(m_timeframes); i++) {
+            Print(StringFormat("🔧 DEBUG: Processing timeframe %d: %s", i, EnumToString(m_timeframes[i])));
             ProcessTimeframe(m_timeframes[i]);
         }
         

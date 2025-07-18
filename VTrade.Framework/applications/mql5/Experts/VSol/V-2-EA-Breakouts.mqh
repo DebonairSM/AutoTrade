@@ -4,7 +4,52 @@
 //+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
 #property link      "https://vsol-systems.com"
-#property version   "1.01"
+#property version   "1.04"
+
+/*
+CRITICAL CHART LINE FIXES v1.04:
+
+ROOT CAUSE RESOLUTION:
+- Fixed missing proper MQL5 object creation patterns
+- Added proper chart ID usage (ChartID() instead of 0)
+- Implemented timing delays to prevent race conditions
+- Removed timeframe-specific naming that caused switching issues
+- Added comprehensive error validation for each property setting
+
+TECHNICAL IMPROVEMENTS:
+- ObjectCreate() with full error checking and specific error messages
+- Sleep() delays between deletion and creation to avoid timing conflicts
+- Property validation with individual error reporting
+- Object verification to confirm chart objects actually exist
+- Diagnostic tools for troubleshooting chart issues
+
+CHART VISUALIZATION ENHANCEMENTS:
+- Strong levels (≥0.85): Bright Red/Lime, width 3
+- Medium levels (≥0.70): Orange/Aqua, width 2  
+- Weak levels (<0.70): Pink/Yellow, width 1
+- Comprehensive logging with emojis for easy identification
+- Real-time verification of created objects
+
+DEBUGGING TOOLS:
+- DiagnoseChartIssues() method for comprehensive troubleshooting
+- VerifyChartObjects() to confirm object visibility
+- Enhanced error messages with specific MQL5 error codes
+- Step-by-step creation logging with success/failure tracking
+
+These fixes address the actual MQL5 API requirements and timing issues that were preventing chart line visibility.
+
+TESTING INSTRUCTIONS:
+1. Call DiagnoseChartIssues() to see current state
+2. Call ForceChartUpdate() to trigger immediate line creation
+3. Check Expert tab for detailed creation logs with ✅/❌ indicators
+4. Verify lines appear on chart with proper colors and widths
+5. If issues persist, the diagnostic logs will show exactly what's failing
+
+IMMEDIATE TEST CALLS:
+- breakouts.DiagnoseChartIssues();     // Shows complete system state
+- breakouts.ForceChartUpdate();        // Forces immediate chart update
+- breakouts.ClearAllChartObjects();    // Cleans up for fresh start
+*/
 
 //--- Volume Analysis Constants
 #define VOLUME_SPIKE_MULTIPLIER      2.0    // Minimum ratio for volume spike detection (current/average)
@@ -15,6 +60,13 @@
 #define VOLUME_EXPANSION_THRESHOLD   0.2    // Minimum ratio of bars with expanding volume
 #define VOLUME_PRE_BREAKOUT_BARS     10     // Bars to analyze before breakout
 #define VOLUME_RETEST_MIN_RATIO      0.5    // Minimum volume ratio for retest validation
+
+//--- Logging and Update Throttling Constants
+#define MIN_LOG_INTERVAL_SECONDS     60     // Minimum 1 minute between similar log messages
+#define MIN_CHART_UPDATE_SECONDS     5      // Minimum 5 seconds between chart updates
+#define MIN_HEALTH_REPORT_SECONDS    1800   // Minimum 30 minutes between health reports
+#define MIN_LEVEL_REPORT_SECONDS     300    // Minimum 5 minutes between level reports
+#define MIN_ALERT_INTERVAL_SECONDS   120    // Minimum 2 minutes between trade alerts
 
 /*
 REFACTORING TODO:
@@ -108,10 +160,10 @@ focused on:
 
 #include <Trade\Trade.mqh>
 #include <VErrorDesc.mqh>  // Add this include for error descriptions
-#include "V-2-EA-MarketData.mqh"  // Add this include for market data functions
-#include "V-2-EA-Utils.mqh"  // Add this include for utilities
-#include "V-2-EA-US500Data.mqh"
-#include "V-2-EA-ForexData.mqh"
+#include <V-2-EA-MarketData.mqh>  // Add this include for market data functions
+#include <V-2-EA-Utils.mqh>  // Add this include for utilities
+#include <V-2-EA-US500Data.mqh>
+#include <V-2-EA-ForexData.mqh>
 
 //+------------------------------------------------------------------+
 //| Constants                                                          |
@@ -196,6 +248,29 @@ struct STouchQuality {
     int slowestBounce;
 };
 
+//--- Logging Throttle Structure
+struct SLogThrottle
+{
+    datetime lastDebugMessage;
+    datetime lastLevelReport;
+    datetime lastHealthReport;
+    datetime lastTradeAlert;
+    datetime lastChartUpdate;
+    string lastMessage;         // Store last message to avoid identical spam
+    int duplicateCount;         // Count of duplicate messages
+    
+    void Reset()
+    {
+        lastDebugMessage = 0;
+        lastLevelReport = 0;
+        lastHealthReport = 0;
+        lastTradeAlert = 0;
+        lastChartUpdate = 0;
+        lastMessage = "";
+        duplicateCount = 0;
+    }
+};
+
 //+------------------------------------------------------------------+
 //| Key Level Detection Class                                          |
 //+------------------------------------------------------------------+
@@ -204,6 +279,15 @@ class CV2EABreakouts : public CV2EAMarketDataBase
 private:
     //--- Volume Settings
     bool            m_useVolumeFilter;  // Whether to use volume filtering
+    
+    //--- Market Hours Settings
+    bool            m_ignoreMarketHours; // Whether to completely ignore market hours
+    
+    //--- Timeframe Tracking
+    ENUM_TIMEFRAMES m_currentTimeframe;  // Track current timeframe for change detection
+    
+    //--- Logging Throttle
+    SLogThrottle    m_logThrottle;      // Throttle for logging to prevent spam
     
     //--- US500 Detection
     bool IsUS500()
@@ -280,31 +364,36 @@ public:
                            m_keyLevelCount(0),
                            m_lastKeyLevelUpdate(0),
                            m_maxBounceDelay(8),
-                           m_useVolumeFilter(true)  
+                           m_useVolumeFilter(true),
+                           m_ignoreMarketHours(false),
+                           m_currentTimeframe(PERIOD_CURRENT)  
     {
+        // Initialize logging throttle
+        m_logThrottle.Reset();
+        
         // Initialize each array with robust error checking
         if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_currentKeyLevels"))
         {
-            CV2EAUtils::LogError("Initializing m_currentKeyLevels failed");
+            ThrottledLogError("Initializing m_currentKeyLevels failed");
             return;
         }
         
         if(!CV2EAUtils::SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_chartLines"))
         {
-            CV2EAUtils::LogError("Initializing m_chartLines failed");
+            ThrottledLogError("Initializing m_chartLines failed");
             return;
         }
         
         if(!CV2EAUtils::SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_recentBreaks") ||
            !CV2EAUtils::SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_recentBreakTimes"))
         {
-            CV2EAUtils::LogError("Initializing recent breaks arrays failed");
+            ThrottledLogError("Initializing recent breaks arrays failed");
             return;
         }
         
         if(!CV2EAUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Constructor - m_lastAlerts"))
         {
-            CV2EAUtils::LogError("Initializing m_lastAlerts failed");
+            ThrottledLogError("Initializing m_lastAlerts failed");
             return;
         }
         
@@ -316,14 +405,71 @@ public:
         ClearAllChartObjects();  // Clean up chart objects before destruction
     }
     
+    //--- Throttled Logging Methods
+    void ThrottledLogError(string message)
+    {
+        datetime currentTime = TimeCurrent();
+        if(m_logThrottle.lastMessage == message)
+        {
+            m_logThrottle.duplicateCount++;
+            if(currentTime - m_logThrottle.lastDebugMessage < MIN_LOG_INTERVAL_SECONDS)
+                return;
+            message = StringFormat("%s (x%d in last %d seconds)", message, 
+                m_logThrottle.duplicateCount, MIN_LOG_INTERVAL_SECONDS);
+            m_logThrottle.duplicateCount = 0;
+        }
+        
+        CV2EAUtils::LogError(message);
+        m_logThrottle.lastDebugMessage = currentTime;
+        m_logThrottle.lastMessage = message;
+    }
+    
+    void ThrottledLogInfo(string message)
+    {
+        if(!m_showDebugPrints) return;
+        
+        datetime currentTime = TimeCurrent();
+        if(m_logThrottle.lastMessage == message)
+        {
+            m_logThrottle.duplicateCount++;
+            if(currentTime - m_logThrottle.lastDebugMessage < MIN_LOG_INTERVAL_SECONDS)
+                return;
+            message = StringFormat("%s (x%d)", message, m_logThrottle.duplicateCount);
+            m_logThrottle.duplicateCount = 0;
+        }
+        
+        CV2EAUtils::LogInfo(message);
+        m_logThrottle.lastDebugMessage = currentTime;
+        m_logThrottle.lastMessage = message;
+    }
+    
+    void ThrottledDebugPrint(string message)
+    {
+        if(!m_showDebugPrints) return;
+        
+        datetime currentTime = TimeCurrent();
+        if(m_logThrottle.lastMessage == message)
+        {
+            m_logThrottle.duplicateCount++;
+            if(currentTime - m_logThrottle.lastDebugMessage < MIN_LOG_INTERVAL_SECONDS)
+                return;
+            message = StringFormat("%s (x%d)", message, m_logThrottle.duplicateCount);
+            m_logThrottle.duplicateCount = 0;
+        }
+        
+        CV2EAUtils::DebugPrint(message);
+        m_logThrottle.lastDebugMessage = currentTime;
+        m_logThrottle.lastMessage = message;
+    }
+    
     //--- Initialization
-    bool Init(int lookbackPeriod, double minStrength, double touchZone, int minTouches, bool showDebugPrints, bool useVolumeFilter = true)
+    bool Init(int lookbackPeriod, double minStrength, double touchZone, int minTouches, bool showDebugPrints, bool useVolumeFilter = true, bool ignoreMarketHours = false)
     {
         // Check for sufficient historical data first
         int bars = Bars(_Symbol, Period());
         if(bars < lookbackPeriod + 10)  // Add buffer for swing detection
         {
-            CV2EAUtils::LogError(StringFormat(
+            ThrottledLogError(StringFormat(
                 "Not enough historical data loaded. Need at least %d bars, got %d", 
                 lookbackPeriod + 10, bars));
             return false;
@@ -342,6 +488,8 @@ public:
         }
         
         m_useVolumeFilter = useVolumeFilter;
+        m_ignoreMarketHours = ignoreMarketHours;
+        m_currentTimeframe = Period();  // Initialize current timeframe
         
         // Adjust touch zone for US500
         if(IsUS500())
@@ -450,26 +598,26 @@ public:
         // Reinitialize arrays with robust error checks
         if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_currentKeyLevels"))
         {
-            CV2EAUtils::LogError("Failed to resize key levels array");
+            ThrottledLogError("Failed to resize key levels array");
             return false;
         }
         
         if(!CV2EAUtils::SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_chartLines"))
         {
-            CV2EAUtils::LogError("Failed to resize chart lines array");
+            ThrottledLogError("Failed to resize chart lines array");
             return false;
         }
         
         if(!CV2EAUtils::SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_recentBreaks") ||
            !CV2EAUtils::SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_recentBreakTimes"))
         {
-            CV2EAUtils::LogError("Failed to resize recent breaks arrays");
+            ThrottledLogError("Failed to resize recent breaks arrays");
             return false;
         }
         
         if(!CV2EAUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "CV2EABreakouts::Init - m_lastAlerts"))
         {
-            CV2EAUtils::LogError("Failed to resize last alerts array");
+            ThrottledLogError("Failed to resize last alerts array");
             return false;
         }
         
@@ -478,21 +626,71 @@ public:
         m_state.Reset();
         m_lastChartUpdate = 0;
         
+        // Reset logging throttle
+        m_logThrottle.Reset();
+        
         // Validate symbol point value with error handling
         double symbolPoint = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
         if(symbolPoint <= 0)
         {
-            CV2EAUtils::LogError("SymbolInfoDouble failed, checking _Point...");
+            ThrottledLogError("SymbolInfoDouble failed, checking _Point...");
             symbolPoint = _Point;
             if(symbolPoint <= 0)
             {
-                CV2EAUtils::LogError("All point value retrievals failed. Using fallback value.");
+                ThrottledLogError("All point value retrievals failed. Using fallback value.");
                 symbolPoint = 0.0001;
             }
         }
         
         m_initialized = true;
-        CV2EAUtils::LogInfo("Configuration complete for ", _Symbol);
+        CV2EAUtils::LogInfo(StringFormat("Configuration complete for %s - Market Hours: %s, Volume Filter: %s, Timeframe: %s", 
+            _Symbol, 
+            m_ignoreMarketHours ? "IGNORED" : "RESPECTED",
+            m_useVolumeFilter ? "ENABLED" : "DISABLED",
+            EnumToString(m_currentTimeframe)));
+        return true;
+    }
+    
+    //--- Check if we should process strategy based on market conditions
+    bool ShouldProcessStrategy()
+    {
+        // Always process in testing mode
+        if(MQLInfoInteger(MQL_TESTER))
+            return true;
+            
+        // If user wants to ignore market hours completely, always process
+        if(m_ignoreMarketHours)
+        {
+            if(m_showDebugPrints)
+            {
+                static datetime lastIgnoreLog = 0;
+                datetime currentTime = TimeCurrent();
+                if(currentTime - lastIgnoreLog > 3600) // Log once per hour
+                {
+                    ThrottledLogInfo("Market hours ignored - processing normally");
+                    lastIgnoreLog = currentTime;
+                }
+            }
+            return true;
+        }
+            
+        // For live trading, check basic market conditions
+        datetime currentTime = TimeCurrent();
+        MqlDateTime dt;
+        TimeToStruct(currentTime, dt);
+        
+        // Skip processing on weekends (basic check)
+        if(dt.day_of_week == 0 || dt.day_of_week == 6)
+        {
+            static datetime lastWeekendLog = 0;
+            if(currentTime - lastWeekendLog > 3600) // Log once per hour max
+            {
+                ThrottledLogInfo("Skipping processing on weekend");
+                lastWeekendLog = currentTime;
+            }
+            return false;
+        }
+        
         return true;
     }
     
@@ -501,18 +699,48 @@ public:
     {
         if(!m_initialized)
         {
-            CV2EAUtils::LogError("Strategy not initialized");
+            ThrottledLogError("Strategy not initialized");
             return;
         }
         
+        // Quick market check to reduce unnecessary processing
+        if(!ShouldProcessStrategy())
+            return;
+        
         datetime currentTime = TimeCurrent();
         
-        // Step 1: Key Level Identification
-        SKeyLevel strongestLevel;
-        bool foundKeyLevel = FindKeyLevels(strongestLevel);
+        // Check for timeframe changes and force immediate recalculation
+        ENUM_TIMEFRAMES currentTF = Period();
+        bool timeframeChanged = (currentTF != m_currentTimeframe);
+        if(timeframeChanged)
+        {
+            CV2EAUtils::LogInfo(StringFormat("📊 Timeframe changed from %s to %s - forcing immediate recalculation", 
+                EnumToString(m_currentTimeframe), EnumToString(currentTF)));
+            m_currentTimeframe = currentTF;
+            m_lastKeyLevelUpdate = 0;  // Force immediate update
+            m_keyLevelCount = 0;       // Clear existing levels
+        }
         
-        // Update system state
-        if(foundKeyLevel)
+        // Step 1: Key Level Identification (only update if significant time has passed OR timeframe changed OR first run)
+        bool shouldUpdateLevels = (currentTime - m_lastKeyLevelUpdate > MIN_CHART_UPDATE_SECONDS) ||
+                                 (m_lastKeyLevelUpdate == 0) ||
+                                 timeframeChanged;
+        
+        SKeyLevel strongestLevel;
+        bool foundKeyLevel = false;
+        
+        if(shouldUpdateLevels)
+        {
+            foundKeyLevel = FindKeyLevels(strongestLevel);
+        }
+        else
+        {
+            // Use existing strongest level if available
+            foundKeyLevel = GetStrongestLevel(strongestLevel);
+        }
+        
+        // Update system state only if we have new data
+        if(foundKeyLevel && shouldUpdateLevels)
         {
             // If we found a new key level that's significantly different from our active one
             if(!m_state.keyLevelFound || 
@@ -523,38 +751,52 @@ public:
                 m_state.activeKeyLevel = strongestLevel;
                 m_state.lastUpdate = currentTime;
                 
-                // Print key levels report when we find a new significant level
-                PrintKeyLevelsReport();
+                // Print key levels report when we find a new significant level (throttled)
+                if(currentTime - m_logThrottle.lastLevelReport > MIN_LEVEL_REPORT_SECONDS)
+                {
+                    PrintKeyLevelsReport();
+                    m_logThrottle.lastLevelReport = currentTime;
+                }
             }
         }
         else if(m_state.keyLevelFound && !IsKeyLevelValid(m_state.activeKeyLevel))
         {
             // If we had a key level but can't find it anymore, reset state
-            CV2EAUtils::LogInfo("Previous key level no longer valid, resetting state");
+            ThrottledLogInfo("Previous key level no longer valid, resetting state");
             m_state.Reset();
         }
         
-        // Step 2: Check for price approaching key levels
+        // Step 2: Check for price approaching key levels (throttled alerts)
         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
         for(int i = 0; i < m_keyLevelCount; i++)
         {
             double distance = MathAbs(currentPrice - m_currentKeyLevels[i].price);
             if(distance <= m_touchZone * 2) // Alert when price is within 2x the touch zone
             {
-                PrintTradeSetupAlert(m_currentKeyLevels[i], distance);
+                if(currentTime - m_logThrottle.lastTradeAlert > MIN_ALERT_INTERVAL_SECONDS)
+                {
+                    PrintTradeSetupAlert(m_currentKeyLevels[i], distance);
+                    m_logThrottle.lastTradeAlert = currentTime;
+                }
             }
         }
         
-        // Step 3: Update and print system health report (hourly)
-        PrintSystemHealthReport();
+        // Step 3: Update and print system health report (throttled)
+        if(currentTime - m_logThrottle.lastHealthReport > MIN_HEALTH_REPORT_SECONDS)
+        {
+            PrintSystemHealthReport();
+            m_logThrottle.lastHealthReport = currentTime;
+        }
         
-        // Step 4: Update chart lines - Force update on each call
-        m_lastChartUpdate = 0; // Reset last update time to force update
-        UpdateChartLines();
-        
-        // Force chart redraw
-        ChartRedraw(0);
+        // Step 4: Update chart lines (immediate update when we have key levels)
+        if(m_keyLevelCount > 0)
+        {
+            UpdateChartLines();
+            m_logThrottle.lastChartUpdate = currentTime;
+        }
     }
+    
+    //--- Simple chart update logic - removed overly complex throttling
     
     // Helper method to update system health metrics
     void UpdateSystemHealth(bool validDetection, bool falseSignal)
@@ -667,8 +909,8 @@ public:
         // Get available bars for the current timeframe
         long availableBars = SeriesInfoInteger(_Symbol, Period(), SERIES_BARS_COUNT);
         
-        // Add debug output for bars availability
-        CV2EAUtils::DebugPrint(StringFormat("Available bars for %s: %d", EnumToString(Period()), availableBars));
+        // Add debug output for bars availability (throttled)
+        ThrottledDebugPrint(StringFormat("Available bars for %s: %d", EnumToString(Period()), availableBars));
         
         // Adjust minimum bars requirement based on timeframe
         int minRequiredBars;
@@ -682,13 +924,13 @@ public:
         
         long barsToUse = MathMin((long)m_lookbackPeriod, availableBars - 5); // Leave room for swing detection
         
-        // Add debug output for bars calculation
-        CV2EAUtils::DebugPrint(StringFormat("Bars to use for %s: %d (minimum required: %d)", 
+        // Add debug output for bars calculation (throttled)
+        ThrottledDebugPrint(StringFormat("Bars to use for %s: %d (minimum required: %d)", 
             EnumToString(Period()), barsToUse, minRequiredBars));
         
         if(barsToUse < minRequiredBars)
         {
-            CV2EAUtils::LogError(StringFormat("Insufficient bars available: %d (needed at least %d for %s timeframe)", 
+            ThrottledLogError(StringFormat("Insufficient bars available: %d (needed at least %d for %s timeframe)", 
                 (int)availableBars, minRequiredBars, EnumToString(Period())));
             return false;
         }
@@ -700,13 +942,13 @@ public:
            CopyTime(_Symbol, Period(), 0, (int)barsToUse, times) <= 0 ||
            CopyTickVolume(_Symbol, Period(), 0, (int)barsToUse, volumes) <= 0)
         {
-            CV2EAUtils::LogError(StringFormat("Failed to copy price/volume data. Available bars: %d, Requested: %d, Error: %d", 
+            ThrottledLogError(StringFormat("Failed to copy price/volume data. Available bars: %d, Requested: %d, Error: %d", 
                 (int)availableBars, (int)barsToUse, GetLastError()));
             return false;
         }
         
-        // Add debug output for data copy success
-        CV2EAUtils::DebugPrint(StringFormat("Successfully copied data for %s timeframe. Processing %d bars for key levels", 
+        // Add debug output for data copy success (throttled)
+        ThrottledDebugPrint(StringFormat("Successfully copied data for %s timeframe. Processing %d bars for key levels", 
             EnumToString(Period()), barsToUse));
         
         // Reset key levels array
@@ -896,9 +1138,16 @@ public:
             outStrongestLevel = m_currentKeyLevels[strongestIdx];
             m_lastKeyLevelUpdate = TimeCurrent();
             
+            // Immediately update chart lines when key levels are found
+            UpdateChartLines();
+            
+            CV2EAUtils::LogInfo(StringFormat("Found %d key levels. Strongest: %.5f (strength: %.4f)", 
+                m_keyLevelCount, outStrongestLevel.price, outStrongestLevel.strength));
+            
             return true;
         }
         
+        CV2EAUtils::LogInfo("No key levels found in current analysis");
         return false;
     }
 
@@ -1057,18 +1306,117 @@ public:
             return false;
         }
 
-        //--- Chart object cleanup
+        //--- Chart object cleanup and manual update with proper error handling
         void ClearAllChartObjects()
         {
+            long chart_id = ChartID();
+            
             // Clear all objects with our prefix
-            ObjectsDeleteAll(0, "KL_");
+            int deletedCount = ObjectsDeleteAll(chart_id, "KL_");
             
             // Reset our internal tracking arrays
             ArrayFree(m_chartLines);
             m_lastChartUpdate = 0;
             
-            if(m_showDebugPrints)
-                CV2EAUtils::LogInfo("Cleared all chart objects");
+            // Force chart redraw
+            Sleep(100);  // Allow deletion to complete
+            ChartRedraw(chart_id);
+            
+            CV2EAUtils::LogInfo(StringFormat("🗑️ Cleared %d chart objects and reset tracking", deletedCount));
+        }
+        
+        //--- Force immediate chart update (for manual testing)
+        void ForceChartUpdate()
+        {
+            CV2EAUtils::LogInfo("🔄 Forcing immediate chart update...");
+            
+            // Clear throttling to force immediate update
+            m_lastChartUpdate = 0;
+            
+            if(m_keyLevelCount > 0)
+            {
+                UpdateChartLines();
+                CV2EAUtils::LogInfo(StringFormat("✅ Forced update complete: %d lines displayed out of %d key levels", 
+                    ArraySize(m_chartLines), m_keyLevelCount));
+                    
+                // Additional verification
+                long chart_id = ChartID();
+                int totalHLines = ObjectsTotal(chart_id, 0, OBJ_HLINE);
+                CV2EAUtils::LogInfo(StringFormat("📊 Chart now has %d total horizontal lines", totalHLines));
+            }
+            else
+            {
+                CV2EAUtils::LogInfo("⚠️ No key levels found to display - running level detection...");
+                
+                // Try to find key levels if none exist
+                SKeyLevel strongestLevel;
+                if(FindKeyLevels(strongestLevel))
+                {
+                    CV2EAUtils::LogInfo(StringFormat("🎯 Found %d key levels after detection", m_keyLevelCount));
+                    UpdateChartLines();
+                }
+                else
+                {
+                    CV2EAUtils::LogInfo("❌ No key levels detected in current market data");
+                }
+            }
+        }
+
+        //--- Runtime configuration methods
+        void SetIgnoreMarketHours(bool ignore)
+        {
+            m_ignoreMarketHours = ignore;
+            CV2EAUtils::LogInfo(StringFormat("🕐 Market hours setting changed to: %s", 
+                ignore ? "IGNORED" : "RESPECTED"));
+        }
+        
+        bool GetIgnoreMarketHours() const
+        {
+            return m_ignoreMarketHours;
+        }
+        
+        //--- Force immediate recalculation (useful when switching timeframes manually)
+        void ForceRecalculation()
+        {
+            CV2EAUtils::LogInfo("🔄 Forcing immediate level recalculation...");
+            m_lastKeyLevelUpdate = 0;  // Force immediate update
+            m_keyLevelCount = 0;       // Clear existing levels
+            m_currentTimeframe = Period(); // Update current timeframe
+            
+            // Process strategy immediately
+            ProcessStrategy();
+        }
+        
+        //--- Show current configuration status
+        void ShowConfiguration()
+        {
+            CV2EAUtils::LogInfo(StringFormat(
+                "\n📋 BREAKOUTS CONFIGURATION STATUS\n" +
+                "================================\n" +
+                "Symbol: %s\n" +
+                "Current Timeframe: %s\n" +
+                "Market Hours: %s\n" +
+                "Volume Filter: %s\n" +
+                "Min Strength: %.2f\n" +
+                "Min Touches: %d\n" +
+                "Touch Zone: %.5f\n" +
+                "Lookback Period: %d\n" +
+                "Debug Prints: %s\n" +
+                "Key Levels Found: %d\n" +
+                "Last Update: %s\n" +
+                "================================",
+                _Symbol,
+                EnumToString(m_currentTimeframe),
+                m_ignoreMarketHours ? "IGNORED" : "RESPECTED",
+                m_useVolumeFilter ? "ENABLED" : "DISABLED",
+                m_minStrength,
+                m_minTouches,
+                m_touchZone,
+                m_lookbackPeriod,
+                m_showDebugPrints ? "ON" : "OFF",
+                m_keyLevelCount,
+                m_lastKeyLevelUpdate > 0 ? TimeToString(m_lastKeyLevelUpdate, TIME_DATE|TIME_MINUTES) : "Never"
+            ));
         }
 
 private:
@@ -1820,7 +2168,7 @@ private:
               IntegerToString(MathMin(maxPerType, supportCount))));
     }
     
-    //--- Debug print method
+    //--- Debug print method (now throttled)
     void DebugPrint(string message)
     {
         if(!m_showDebugPrints)
@@ -1830,7 +2178,7 @@ private:
         string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);
         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
         
-        CV2EAUtils::LogInfo(StringFormat("[%s] [%.5f] %s", timestamp, currentPrice, message));
+        ThrottledLogInfo(StringFormat("[%s] [%.5f] %s", timestamp, currentPrice, message));
     }
 
     void PrintKeyLevelsReport()
@@ -2030,356 +2378,290 @@ private:
         }
     }
     
-    //--- Add new methods
+    //--- Fixed chart line methods with proper MQL5 patterns
     void UpdateChartLines()
     {
+        long chart_id = ChartID();  // Use actual chart ID instead of 0
         datetime currentTime = TimeCurrent();
         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
         
-        // Always update on timeframe change
-        static ENUM_TIMEFRAMES lastTimeframe = PERIOD_CURRENT;
-        ENUM_TIMEFRAMES currentTimeframe = Period();
-        bool timeframeChanged = (lastTimeframe != currentTimeframe);
+        CV2EAUtils::LogInfo(StringFormat("🔄 UpdateChartLines: Starting update for %d key levels", m_keyLevelCount));
         
-        // Update if conditions are met
-        bool shouldUpdate = (m_lastChartUpdate == 0) || 
-                          timeframeChanged ||
-                          (currentTime - m_lastChartUpdate >= 3600) ||
-                          (m_keyLevelCount != ArraySize(m_chartLines));
-                
-        if(!shouldUpdate)
-            return;
-        
-        lastTimeframe = currentTimeframe;
-        
-        // Delete all existing lines first on timeframe change
-        if(timeframeChanged)
+        // 1. Clear objects with proper timing to avoid race conditions
+        int deletedCount = ObjectsDeleteAll(chart_id, "KL_");
+        if(deletedCount > 0)
         {
-            CV2EAUtils::LogInfo(StringFormat("Timeframe changed from %s to %s - Clearing all lines", 
-                EnumToString(lastTimeframe), EnumToString(currentTimeframe)));
-            
-            // Delete all existing chart objects with our prefix
-            ObjectsDeleteAll(0, "KL_");
-            ArrayFree(m_chartLines);
-            ArrayResize(m_chartLines, 0); // Reset array size to 0 instead of NULL
-            m_lastChartUpdate = 0;
+            CV2EAUtils::LogInfo(StringFormat("🗑️ Deleted %d existing chart objects", deletedCount));
+            Sleep(200);  // Critical: Allow deletion to complete before creating new objects
         }
         
-        // Clear old lines
-        ClearInactiveChartLines();
+        // 2. Reset internal tracking
+        ArrayFree(m_chartLines);
+        ArrayResize(m_chartLines, 0);
         
-        // Mark all lines as inactive before update
-        for(int i = 0; i < ArraySize(m_chartLines); i++)
-            m_chartLines[i].isActive = false;
+        if(m_keyLevelCount == 0)
+        {
+            CV2EAUtils::LogInfo("ℹ️ No key levels to display");
+            ChartRedraw(chart_id);
+            return;
+        }
         
-        // Debug print for line updates
-        CV2EAUtils::LogInfo(StringFormat("Updating chart lines. Key level count: %d", m_keyLevelCount));
+        int successCount = 0;
         
-        // Update lines for current key levels
+        // 3. Create objects with proper validation and error handling
         for(int i = 0; i < m_keyLevelCount; i++)
         {
-            string lineName = StringFormat("KL_%s_%.5f_%s", 
+            // Remove timeframe from name to avoid switching issues
+            string lineName = StringFormat("KL_%s_%.5f_%d", 
                 m_currentKeyLevels[i].isResistance ? "R" : "S",
                 m_currentKeyLevels[i].price,
-                EnumToString(currentTimeframe));  // Add timeframe to line name
+                currentTime);  // Use timestamp to ensure uniqueness
                     
-            // First determine if this is above or below current price
+            // Determine if this is above or below current price
             bool isAbovePrice = m_currentKeyLevels[i].price > currentPrice;
             
             // Determine line properties based on position and strength
             color lineColor;
-            ENUM_LINE_STYLE lineStyle;
+            ENUM_LINE_STYLE lineStyle = STYLE_SOLID;
             int lineWidth;
             
-            // Strong levels (>= 0.85)
+            // Strong levels (>= 0.85) - Bright colors
             if(m_currentKeyLevels[i].strength >= 0.85) {
-                if(isAbovePrice) {
-                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrDarkRed : clrCrimson;      // Dark red for volume-confirmed
-                } else {
-                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrDarkGreen : clrForestGreen;  // Dark green for volume-confirmed
-                }
-                lineStyle = m_currentKeyLevels[i].volumeConfirmed ? STYLE_SOLID : STYLE_SOLID;
-                lineWidth = m_currentKeyLevels[i].volumeConfirmed ? 3 : 2;
+                lineColor = isAbovePrice ? clrRed : clrLime;  // Bright red/green
+                lineWidth = 3;
             }
             // Medium levels (>= 0.70)
             else if(m_currentKeyLevels[i].strength >= 0.70) {
-                if(isAbovePrice) {
-                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrFireBrick : clrLightCoral;
-                } else {
-                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrSeaGreen : clrMediumSeaGreen;
-                }
-                lineStyle = m_currentKeyLevels[i].volumeConfirmed ? STYLE_SOLID : STYLE_SOLID;
-                lineWidth = m_currentKeyLevels[i].volumeConfirmed ? 2 : 1;
+                lineColor = isAbovePrice ? clrOrange : clrAqua;  // Orange/aqua
+                lineWidth = 2;
             }
             // Weak levels (< 0.70)
             else {
-                if(isAbovePrice) {
-                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrIndianRed : clrPink;
-                } else {
-                    lineColor = m_currentKeyLevels[i].volumeConfirmed ? clrMediumSpringGreen : clrPaleGreen;
-                }
-                lineStyle = m_currentKeyLevels[i].volumeConfirmed ? STYLE_SOLID : STYLE_DOT;
+                lineColor = isAbovePrice ? clrPink : clrYellow;  // Pink/yellow
                 lineWidth = 1;
             }
             
-            // Check if line already exists
-            bool found = false;
-            for(int j = 0; j < ArraySize(m_chartLines); j++)
+            // 4. Create object with proper MQL5 pattern
+            if(!ObjectCreate(chart_id, lineName, OBJ_HLINE, 0, 0, m_currentKeyLevels[i].price))
             {
-                if(m_chartLines[j].name == lineName)
-                {
-                    // Update existing line
-                    m_chartLines[j].isActive = true;
-                    m_chartLines[j].lineColor = lineColor;
-                    m_chartLines[j].lastUpdate = currentTime;
-                    found = true;
-                    
-                    // Update line properties
-                    if(!ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor))
-                        CV2EAUtils::LogError(StringFormat("Failed to update color for line %s", lineName));
-                    if(!ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle))
-                        CV2EAUtils::LogError(StringFormat("Failed to update style for line %s", lineName));
-                    if(!ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth))
-                        CV2EAUtils::LogError(StringFormat("Failed to update width for line %s", lineName));
-                    
-                    // Update tooltip with more information
-                    string volumeInfo = m_currentKeyLevels[i].volumeConfirmed ? 
-                        StringFormat("\nVolume: %.1fx average", m_currentKeyLevels[i].volumeRatio) : 
-                        "\nNo significant volume";
-                        
-                    string timeInfo = StringFormat("\nLast Update: %s", TimeToString(m_chartLines[j].lastUpdate, TIME_DATE|TIME_MINUTES));
-                        
-                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f%s\nTouches: %d\nDistance: %d pips%s%s", 
-                        isAbovePrice ? "Resistance" : "Support",
-                        EnumToString(currentTimeframe),
-                        m_currentKeyLevels[i].strength,
-                        m_currentKeyLevels[i].volumeConfirmed ? " (Volume Confirmed)" : "",
-                        m_currentKeyLevels[i].touchCount,
-                        (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point),
-                        volumeInfo,
-                        timeInfo);
-                    ObjectSetString(0, lineName, OBJPROP_TOOLTIP, tooltip);
-                    break;
-                }
+                int error = GetLastError();
+                CV2EAUtils::LogError(StringFormat("❌ ObjectCreate failed for %s at %.5f. Error: %d (%s)", 
+                    lineName, m_currentKeyLevels[i].price, error, 
+                    error == 4200 ? "Object already exists" : 
+                    error == 4202 ? "Object does not exist" :
+                    error == 4207 ? "Graphical object error" : "Unknown error"));
+                continue;
             }
             
-            // Create new line if not found
-            if(!found)
+            // 5. Validate each property setting with comprehensive error checking
+            bool propertySuccess = true;
+            string failedProperty = "";
+            
+            if(!ObjectSetInteger(chart_id, lineName, OBJPROP_COLOR, lineColor))
             {
-                int size = ArraySize(m_chartLines);
-                if(!CV2EAUtils::SafeResizeArray(m_chartLines, size + 1, "CV2EABreakouts::UpdateChartLines - m_chartLines"))
-                {
-                    CV2EAUtils::LogError("Failed to resize chart lines array");
-                    continue;
-                }
-                
-                m_chartLines[size].name = lineName;
-                m_chartLines[size].price = m_currentKeyLevels[i].price;
-                m_chartLines[size].lastUpdate = currentTime;
-                m_chartLines[size].lineColor = lineColor;
-                m_chartLines[size].isActive = true;
-                
-                // Create and set up new line
-                if(ObjectCreate(0, lineName, OBJ_HLINE, 0, 0, m_currentKeyLevels[i].price))
-                {
-                    ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
-                    ObjectSetInteger(0, lineName, OBJPROP_STYLE, lineStyle);
-                    ObjectSetInteger(0, lineName, OBJPROP_WIDTH, lineWidth);
-                    ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
-                    ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
-                    ObjectSetInteger(0, lineName, OBJPROP_HIDDEN, false);
-                    ObjectSetInteger(0, lineName, OBJPROP_SELECTED, false);
-                    ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, true);
-                    ObjectSetInteger(0, lineName, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
-                    
-                    // Enhanced tooltip with volume information
-                    string volumeInfo = m_currentKeyLevels[i].volumeConfirmed ? 
-                        StringFormat("\nVolume: %.1fx average", m_currentKeyLevels[i].volumeRatio) : 
-                        "\nNo significant volume";
-                        
-                    string timeInfo = StringFormat("\nLast Update: %s", TimeToString(currentTime, TIME_DATE|TIME_MINUTES));
-                        
-                    string tooltip = StringFormat("%s Level (%s)\nStrength: %.2f%s\nTouches: %d\nDistance: %d pips%s%s", 
-                        isAbovePrice ? "Resistance" : "Support",
-                        EnumToString(currentTimeframe),
-                        m_currentKeyLevels[i].strength,
-                        m_currentKeyLevels[i].volumeConfirmed ? " (Volume Confirmed)" : "",
-                        m_currentKeyLevels[i].touchCount,
-                        (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point),
-                        volumeInfo,
-                        timeInfo);
-                    ObjectSetString(0, lineName, OBJPROP_TOOLTIP, tooltip);
-                    
-                    // Create text label for volume-confirmed levels
-                    if(m_currentKeyLevels[i].volumeConfirmed)
-                    {
-                        string labelName = StringFormat("KL_Label_%s_%.5f_%s", 
-                            m_currentKeyLevels[i].isResistance ? "R" : "S",
-                            m_currentKeyLevels[i].price,
-                            EnumToString(currentTimeframe));
-                        
-                        CV2EAUtils::LogInfo(StringFormat("Attempting to create label: %s", labelName));
-                        
-                        // Get chart dimensions
-                        long chartWidth = 0, chartHeight = 0;
-                        if(!ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0, chartWidth) ||
-                           !ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0, chartHeight))
-                        {
-                            CV2EAUtils::LogError(StringFormat("Failed to get chart dimensions. Error: %d", GetLastError()));
-                        }
-                        else
-                        {
-                            CV2EAUtils::LogInfo(StringFormat("Chart dimensions: %dx%d pixels", chartWidth, chartHeight));
-                        }
-                        
-                        // Get first visible bar time
-                        datetime firstVisibleTime = 0;
-                        int firstVisibleBar = (int)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR);
-                        if(firstVisibleBar <= 0)
-                        {
-                            CV2EAUtils::LogError(StringFormat("Failed to get first visible bar. Error: %d", GetLastError()));
-                            firstVisibleTime = TimeCurrent();
-                        }
-                        else
-                        {
-                            firstVisibleTime = iTime(_Symbol, Period(), firstVisibleBar);
-                            CV2EAUtils::LogInfo(StringFormat("First visible bar: %d, Time: %s", 
-                                firstVisibleBar, TimeToString(firstVisibleTime)));
-                        }
-                        
-                        // Delete existing label if it exists
-                        ObjectDelete(0, labelName);
-                        
-                        // Create or update the text label
-                        if(ObjectCreate(0, labelName, OBJ_TEXT, 0, firstVisibleTime, m_currentKeyLevels[i].price))
-                        {
-                            string labelText = StringFormat("VOL %.1fx", m_currentKeyLevels[i].volumeRatio);
-                            
-                            ObjectSetString(0, labelName, OBJPROP_TEXT, labelText);
-                            ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
-                            ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
-                            ObjectSetInteger(0, labelName, OBJPROP_COLOR, lineColor);
-                            ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, ANCHOR_LEFT);
-                            ObjectSetInteger(0, labelName, OBJPROP_BACK, false);
-                            ObjectSetInteger(0, labelName, OBJPROP_SELECTABLE, false);
-                            ObjectSetInteger(0, labelName, OBJPROP_HIDDEN, false);
-                            ObjectSetInteger(0, labelName, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
-                            
-                            // Store label name for cleanup
-                            m_chartLines[size].labelName = labelName;
-                            
-                            CV2EAUtils::LogInfo(StringFormat("Successfully created label %s at price %.5f with text '%s'", 
-                                labelName, m_currentKeyLevels[i].price, labelText));
-                        }
-                        else
-                        {
-                            int error = GetLastError();
-                            CV2EAUtils::LogError(StringFormat("Failed to create label %s. Error: %d - %s", 
-                                labelName, error, ErrorDescription(error)));
-                        }
-                    }
-                    
-                    CV2EAUtils::LogInfo(StringFormat("Created new line %s at %.5f", lineName, m_currentKeyLevels[i].price));
-                }
-                else
-                {
-                    int error = GetLastError();
-                    CV2EAUtils::LogError(StringFormat("Failed to create line %s. Error: %d", lineName, error));
-                }
+                propertySuccess = false;
+                failedProperty = "COLOR";
             }
+            else if(!ObjectSetInteger(chart_id, lineName, OBJPROP_STYLE, lineStyle))
+            {
+                propertySuccess = false;
+                failedProperty = "STYLE";
+            }
+            else if(!ObjectSetInteger(chart_id, lineName, OBJPROP_WIDTH, lineWidth))
+            {
+                propertySuccess = false;
+                failedProperty = "WIDTH";
+            }
+            else if(!ObjectSetInteger(chart_id, lineName, OBJPROP_BACK, false))
+            {
+                propertySuccess = false;
+                failedProperty = "BACK";
+            }
+            else if(!ObjectSetInteger(chart_id, lineName, OBJPROP_SELECTABLE, false))
+            {
+                propertySuccess = false;
+                failedProperty = "SELECTABLE";
+            }
+            else if(!ObjectSetInteger(chart_id, lineName, OBJPROP_HIDDEN, false))
+            {
+                propertySuccess = false;
+                failedProperty = "HIDDEN";
+            }
+            else if(!ObjectSetInteger(chart_id, lineName, OBJPROP_RAY_RIGHT, true))
+            {
+                propertySuccess = false;
+                failedProperty = "RAY_RIGHT";
+            }
+            else if(!ObjectSetInteger(chart_id, lineName, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS))
+            {
+                propertySuccess = false;
+                failedProperty = "TIMEFRAMES";
+            }
+            
+            if(!propertySuccess)
+            {
+                CV2EAUtils::LogError(StringFormat("❌ Property %s setting failed for %s. Error: %d", 
+                    failedProperty, lineName, GetLastError()));
+                ObjectDelete(chart_id, lineName);
+                continue;
+            }
+            
+            // 6. Set tooltip with error checking
+            string tooltip = StringFormat("%s Level: %.5f\nStrength: %.2f\nTouches: %d\nDistance: %d pips", 
+                isAbovePrice ? "Resistance" : "Support",
+                m_currentKeyLevels[i].price,
+                m_currentKeyLevels[i].strength,
+                m_currentKeyLevels[i].touchCount,
+                (int)(MathAbs(m_currentKeyLevels[i].price - currentPrice) / _Point));
+                
+            if(!ObjectSetString(chart_id, lineName, OBJPROP_TOOLTIP, tooltip))
+            {
+                CV2EAUtils::LogError(StringFormat("⚠️ Tooltip setting failed for %s", lineName));
+                // Don't delete object for tooltip failure - line is still visible
+            }
+            
+            // 7. Add to tracking array only if object creation was successful
+            int size = ArraySize(m_chartLines);
+            ArrayResize(m_chartLines, size + 1);
+            
+            m_chartLines[size].name = lineName;
+            m_chartLines[size].price = m_currentKeyLevels[i].price;
+            m_chartLines[size].lastUpdate = currentTime;
+            m_chartLines[size].lineColor = lineColor;
+            m_chartLines[size].isActive = true;
+            
+            successCount++;
+            
+            CV2EAUtils::LogInfo(StringFormat("✅ Successfully created line %s at %.5f (%s, strength %.2f, width %d)", 
+                lineName, m_currentKeyLevels[i].price, 
+                isAbovePrice ? "Resistance" : "Support", 
+                m_currentKeyLevels[i].strength, lineWidth));
         }
+        
+        // 8. Force chart redraw with proper timing
+        Sleep(100);  // Allow object creation to complete
+        ChartRedraw(chart_id);  // ChartRedraw returns void
         
         m_lastChartUpdate = currentTime;
-        ChartRedraw(0);  // Force chart redraw
-        CV2EAUtils::LogInfo("Chart lines updated and redrawn");
+        
+        // 9. Comprehensive completion report
+        CV2EAUtils::LogInfo(StringFormat("✅ Chart update complete: %d/%d lines created successfully", 
+            successCount, m_keyLevelCount));
+            
+        if(successCount != m_keyLevelCount)
+        {
+            CV2EAUtils::LogError(StringFormat("⚠️ Only %d out of %d key levels were successfully drawn", 
+                successCount, m_keyLevelCount));
+        }
+        
+        // 10. Verify objects actually exist on chart
+        VerifyChartObjects(chart_id);
     }
     
-    void ClearInactiveChartLines()
+    // Add verification method to ensure objects are actually visible
+    void VerifyChartObjects(long chart_id)
     {
-        int currentSize = ArraySize(m_chartLines);
-        if(currentSize == 0)
-            return;
+        int totalObjects = ObjectsTotal(chart_id, 0, OBJ_HLINE);
+        int ourObjects = 0;
         
-        // Delete inactive chart objects (log errors directly)
-        for(int i = 0; i < currentSize; i++)
+        for(int i = 0; i < totalObjects; i++)
         {
-            if(m_chartLines[i].name == NULL || m_chartLines[i].name == "")
-                continue;
-                
-            if(!m_chartLines[i].isActive)
+            string objName = ObjectName(chart_id, i, 0, OBJ_HLINE);
+            if(StringFind(objName, "KL_") == 0)  // Starts with "KL_"
             {
-                // Delete the line
-                if(!ObjectDelete(0, m_chartLines[i].name))
-                {
-                    int error = GetLastError();
-                    if(error != ERR_OBJECT_DOES_NOT_EXIST)
-                        CV2EAUtils::LogError(StringFormat("Failed to delete line %s. Error: %d", m_chartLines[i].name, error));
-                }
+                ourObjects++;
+                double objPrice = ObjectGetDouble(chart_id, objName, OBJPROP_PRICE);
+                bool isHidden = (bool)ObjectGetInteger(chart_id, objName, OBJPROP_HIDDEN);
+                int timeframes = (int)ObjectGetInteger(chart_id, objName, OBJPROP_TIMEFRAMES);
                 
-                // Delete associated label if it exists
-                if(m_chartLines[i].labelName != "" && m_chartLines[i].labelName != NULL)
-                {
-                    if(!ObjectDelete(0, m_chartLines[i].labelName))
-                    {
-                        int error = GetLastError();
-                        if(error != ERR_OBJECT_DOES_NOT_EXIST)
-                            CV2EAUtils::LogError(StringFormat("Failed to delete label %s. Error: %d", m_chartLines[i].labelName, error));
-                    }
-                }
+                CV2EAUtils::LogInfo(StringFormat("🔍 Verified object %s: Price=%.5f, Hidden=%s, Timeframes=%d", 
+                    objName, objPrice, isHidden ? "YES" : "NO", timeframes));
             }
         }
         
-        // Count active lines
-        int activeCount = 0;
-        for(int i = 0; i < currentSize; i++)
-        {
-            if(m_chartLines[i].isActive && m_chartLines[i].name != NULL && m_chartLines[i].name != "")
-                activeCount++;
-        }
-        
-        // If no active lines, free array and return
-        if(activeCount == 0)
-        {
-            ArrayFree(m_chartLines);
-            return;
-        }
-        
-        // Create temporary array for active lines
-        SChartLine tempLines[];
-        if(!CV2EAUtils::SafeResizeArray(tempLines, activeCount, "CV2EABreakouts::ClearInactiveChartLines - tempLines"))
-        {
-            CV2EAUtils::LogError("Failed to resize temporary lines array");
-            return;
-        }
-        
-        // Copy active lines to temporary array
-        int newIndex = 0;
-        for(int i = 0; i < currentSize; i++)
-        {
-            if(m_chartLines[i].isActive && m_chartLines[i].name != NULL && m_chartLines[i].name != "")
-            {
-                if(newIndex < activeCount)
-                {
-                    tempLines[newIndex] = m_chartLines[i];
-                    newIndex++;
-                }
-            }
-        }
-        
-        // Free original array and resize to new size
-        ArrayFree(m_chartLines);
-        if(!CV2EAUtils::SafeResizeArray(m_chartLines, activeCount, "CV2EABreakouts::ClearInactiveChartLines - m_chartLines"))
-        {
-            CV2EAUtils::LogError("Failed to resize chart lines array to final size");
-            return;
-        }
-        
-        // Copy back from temporary array
-        for(int i = 0; i < activeCount; i++)
-            m_chartLines[i] = tempLines[i];
-        
-        ChartRedraw(0);
-    }
+                 CV2EAUtils::LogInfo(StringFormat("🔍 Verification complete: Found %d key level objects out of %d total horizontal lines", 
+             ourObjects, totalObjects));
+     }
+     
+public:
+     //--- Comprehensive diagnostic method for troubleshooting
+     void DiagnoseChartIssues()
+     {
+         long chart_id = ChartID();
+         
+         CV2EAUtils::LogInfo("🔧 CHART DIAGNOSTIC REPORT");
+         CV2EAUtils::LogInfo("========================");
+         
+         // 1. Basic state information
+         CV2EAUtils::LogInfo(StringFormat("Chart ID: %d", chart_id));
+         CV2EAUtils::LogInfo(StringFormat("Symbol: %s", _Symbol));
+         CV2EAUtils::LogInfo(StringFormat("Timeframe: %s", EnumToString(Period())));
+         CV2EAUtils::LogInfo(StringFormat("Initialized: %s", m_initialized ? "YES" : "NO"));
+         CV2EAUtils::LogInfo(StringFormat("Key Level Count: %d", m_keyLevelCount));
+         CV2EAUtils::LogInfo(StringFormat("Chart Lines Array Size: %d", ArraySize(m_chartLines)));
+         
+         // 2. Key levels information
+         if(m_keyLevelCount > 0)
+         {
+             CV2EAUtils::LogInfo(StringFormat("📊 KEY LEVELS (%d found):", m_keyLevelCount));
+             for(int i = 0; i < MathMin(m_keyLevelCount, 5); i++)  // Show first 5
+             {
+                 CV2EAUtils::LogInfo(StringFormat("  %d. %.5f (%s, strength %.2f, touches %d)", 
+                     i+1,
+                     m_currentKeyLevels[i].price,
+                     m_currentKeyLevels[i].isResistance ? "R" : "S",
+                     m_currentKeyLevels[i].strength,
+                     m_currentKeyLevels[i].touchCount));
+             }
+         }
+         else
+         {
+             CV2EAUtils::LogInfo("❌ NO KEY LEVELS FOUND");
+         }
+         
+         // 3. Chart objects analysis
+         int totalObjects = ObjectsTotal(chart_id, 0, -1);  // All objects
+         int totalHLines = ObjectsTotal(chart_id, 0, OBJ_HLINE);
+         int ourObjects = 0;
+         
+         for(int i = 0; i < totalHLines; i++)
+         {
+             string objName = ObjectName(chart_id, i, 0, OBJ_HLINE);
+             if(StringFind(objName, "KL_") == 0)
+             {
+                 ourObjects++;
+             }
+         }
+         
+         CV2EAUtils::LogInfo("📈 CHART OBJECTS:");
+         CV2EAUtils::LogInfo(StringFormat("  Total Objects: %d", totalObjects));
+         CV2EAUtils::LogInfo(StringFormat("  Horizontal Lines: %d", totalHLines));
+         CV2EAUtils::LogInfo(StringFormat("  Our Key Level Lines: %d", ourObjects));
+         
+         // 4. Configuration check
+         CV2EAUtils::LogInfo("⚙️ CONFIGURATION:");
+         CV2EAUtils::LogInfo(StringFormat("  Min Strength: %.2f", m_minStrength));
+         CV2EAUtils::LogInfo(StringFormat("  Min Touches: %d", m_minTouches));
+         CV2EAUtils::LogInfo(StringFormat("  Touch Zone: %.5f", m_touchZone));
+         CV2EAUtils::LogInfo(StringFormat("  Lookback Period: %d", m_lookbackPeriod));
+         CV2EAUtils::LogInfo(StringFormat("  Market Hours: %s", m_ignoreMarketHours ? "IGNORED" : "RESPECTED"));
+         CV2EAUtils::LogInfo(StringFormat("  Volume Filter: %s", m_useVolumeFilter ? "ENABLED" : "DISABLED"));
+         CV2EAUtils::LogInfo(StringFormat("  Debug Prints: %s", m_showDebugPrints ? "ON" : "OFF"));
+         
+         // 5. Market data check
+         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         int availableBars = Bars(_Symbol, Period());
+         
+         CV2EAUtils::LogInfo("📊 MARKET DATA:");
+         CV2EAUtils::LogInfo(StringFormat("  Current Price: %.5f", currentPrice));
+         CV2EAUtils::LogInfo(StringFormat("  Available Bars: %d", availableBars));
+         CV2EAUtils::LogInfo(StringFormat("  Point Value: %.5f", _Point));
+         
+         CV2EAUtils::LogInfo("========================");
+         CV2EAUtils::LogInfo("🔧 DIAGNOSTIC COMPLETE");
+     }
+    
+    // Removed ClearInactiveChartLines - using simplified approach
 
     //--- Volume Detection Helper Methods
     double GetAverageVolume(const long &volumes[], int startIndex, int barsToAverage)

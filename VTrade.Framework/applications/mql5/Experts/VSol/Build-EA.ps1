@@ -37,15 +37,13 @@ function Build-EA {
     )
     
     # Script version tracking
-    $scriptVersion = "1.0.3"
-    $scriptDate = "2024-03-19"
+    $scriptVersion = "1.0.5"
+    $scriptDate = "2024-12-19"
     Write-Host "`n=== Build-EA Script v$scriptVersion ($scriptDate) ===" -ForegroundColor Cyan
-    Write-Host "Changes: Fixed regex pattern for compilation success detection" -ForegroundColor DarkCyan
+    Write-Host "Changes: Fixed function call and MetaEditor path for romme environment" -ForegroundColor DarkCyan
     
-    $eaDir = "C:\repos\debonairsm\AutoTrade\VTrade.Framework\applications\mql5\Experts\VSol"
-    $mt5Dir = "C:\Users\Usuario\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075\MQL5\Experts\VSol"
-    $mt5Dir2 = "C:\Users\Usuario\AppData\Roaming\MetaQuotes\Terminal\010E047102812FC0C18890992854220E\MQL5\Experts\VSol"
-    $mt5Dir3 = "C:\Users\Usuario\AppData\Roaming\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Experts\VSol"
+    $eaDir = "C:\Users\romme\source\repos\AutoTrade\VTrade.Framework\applications\mql5\Experts\VSol"
+    $mt5Dir = "C:\Users\romme\AppData\Roaming\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Experts\VSol"
     
     Write-Host "`nChanging to EA directory..." -ForegroundColor Yellow
     Set-Location $eaDir
@@ -63,7 +61,7 @@ function Build-EA {
     
     try {
         # Run MetaEditor with log file
-        $process = Start-Process "C:\Program Files\MetaTrader 5\metaeditor64.exe" `
+        $process = Start-Process "C:\Program Files\FOREX.com US\MetaEditor64.exe" `
             -ArgumentList "/compile:`"$EaName.mq5`"", "/log:`"$logFile`"" `
             -NoNewWindow -PassThru -Wait
         
@@ -85,17 +83,15 @@ function Build-EA {
                     Write-Host "`nCompilation successful!" -ForegroundColor Green
                     Write-Host "Copying to MT5 directories..." -ForegroundColor Yellow
                     
-                    # Create directories if they don't exist
-                    @($mt5Dir, $mt5Dir2, $mt5Dir3) | ForEach-Object {
-                        if (-not (Test-Path $_)) {
-                            New-Item -ItemType Directory -Path $_ -Force | Out-Null
-                            Write-Host "Created directory: $_" -ForegroundColor DarkYellow
-                        }
+                    # Create directory if it doesn't exist
+                    if (-not (Test-Path $mt5Dir)) {
+                        New-Item -ItemType Directory -Path $mt5Dir -Force | Out-Null
+                        Write-Host "Created directory: $mt5Dir" -ForegroundColor DarkYellow
                     }
                     
-                    # Copy files and verify each copy
+                    # Copy files and verify copy
                     $copySuccess = $true
-                    @($mt5Dir, $mt5Dir2, $mt5Dir3) | ForEach-Object {
+                    @($mt5Dir) | ForEach-Object {
                         $targetPath = Join-Path $_ "$EaName.ex5"
                         try {
                             Copy-Item "$EaName.ex5" -Destination $targetPath -Force
@@ -131,3 +127,6 @@ function Build-EA {
         }
     }
 }
+
+# Call the function with default parameters
+Build-EA
