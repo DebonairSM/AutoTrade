@@ -32,6 +32,26 @@ private:
     static int    m_pipDigits;
     static bool   m_initialized;
 
+public:
+    //--- Reset static variables for deterministic behavior
+    static void Reset()
+    {
+        m_initialized = false;  // Force reinitialization
+        m_lastSpread = 0;
+        m_lastSpreadUpdate = 0;
+        m_pipValue = 0;
+        m_pipDigits = 0;
+        m_maxAllowedSpread = 0;
+        
+        // Clear all arrays to force reinitialization
+        ArrayFree(m_forexTouchZones);
+        ArrayFree(m_forexBounceMinSizes);
+        ArrayFree(m_forexMinTouches);
+        ArrayFree(m_forexMinStrengths);
+        ArrayFree(m_forexLookbacks);
+        ArrayFree(m_forexMaxBounceDelays);
+    }
+
     static int GetTimeframeIndex(ENUM_TIMEFRAMES tf)
     {
         switch(tf) {

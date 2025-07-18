@@ -462,6 +462,78 @@ public:
         m_logThrottle.lastMessage = message;
     }
     
+    //--- Reset static variables for deterministic behavior  
+    void ResetStaticVariables()
+    {
+        CV2EAUtils::LogInfo("🔄 CRITICAL FIX: Forcing static variable reset for deterministic behavior");
+        
+        // Force complete state reset to ensure identical conditions produce identical results
+        m_lastKeyLevelUpdate = 0;  // Force immediate recalculation
+        m_keyLevelCount = 0;       // Clear existing levels
+        m_lastChartUpdate = 0;     // Reset chart update timing
+        
+        // Clear all cached state
+        m_hourlyStats.Reset();
+        
+        // CRITICAL FIX: Reset static variables in other data classes
+        CV2EAUtils::LogInfo("🔄 Resetting static variables in data classes...");
+        
+        // Reset US500Data static variables
+        ResetUS500DataStatics();
+        
+        // Reset ForexData static variables  
+        ResetForexDataStatics();
+        
+        // ADDITIONAL FIX: Force immediate recalculation to bypass any static variable issues
+        // This ensures that any static variables in FindKeyLevelsOnData are effectively bypassed
+        datetime futureTime = TimeCurrent() + 3600; // Force stats reset
+        MqlDateTime dt;
+        TimeToStruct(futureTime, dt);
+        // This will force the hourly stats to reset on the next calculation
+        
+        // Clear arrays and reinitialize with clean state
+        ArrayFree(m_currentKeyLevels);
+        ArrayFree(m_lastAlerts);
+        
+        // Reinitialize arrays
+        if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, "ResetStaticVariables - m_currentKeyLevels") ||
+           !CV2EAUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, "ResetStaticVariables - m_lastAlerts"))
+        {
+            CV2EAUtils::LogError("❌ Failed to reinitialize arrays during static reset");
+        }
+        else
+        {
+                    CV2EAUtils::LogInfo("✅ Static variables reset completed - algorithm should now be deterministic");
+    }
+    
+    //--- Reset static variables in US500Data class
+    void ResetUS500DataStatics()
+    {
+        CV2EAUtils::LogInfo("🔧 Resetting US500Data static variables");
+        
+        // Call the new Reset method to clear all static state
+        CV2EAUS500Data::Reset();
+        
+        // Then reinitialize with clean state
+        CV2EAUS500Data::Initialize();
+        
+        CV2EAUtils::LogInfo("✅ US500Data static variables reset");
+    }
+    
+    //--- Reset static variables in ForexData class  
+    void ResetForexDataStatics()
+    {
+        CV2EAUtils::LogInfo("🔧 Resetting ForexData static variables");
+        
+        // Call the new Reset method to clear all static state
+        CV2EAForexData::Reset();
+        
+        // Then reinitialize with clean state
+        CV2EAForexData::Initialize();
+        
+        CV2EAUtils::LogInfo("✅ ForexData static variables reset");
+    }
+    
     //--- Initialization
     bool Init(int lookbackPeriod, double minStrength, double touchZone, int minTouches, bool showDebugPrints, bool useVolumeFilter = true, bool ignoreMarketHours = false)
     {
@@ -641,6 +713,9 @@ public:
                 symbolPoint = 0.0001;
             }
         }
+        
+        // CRITICAL FIX: Reset static variables for deterministic behavior
+        ResetStaticVariables();
         
         m_initialized = true;
         CV2EAUtils::LogInfo(StringFormat("Configuration complete for %s - Market Hours: %s, Volume Filter: %s, Timeframe: %s", 

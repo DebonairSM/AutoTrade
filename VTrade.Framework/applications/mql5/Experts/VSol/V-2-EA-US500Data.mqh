@@ -22,6 +22,20 @@ private:
     static bool   m_initialized;            // Initialization state
     
 public:
+    //--- Reset static variables for deterministic behavior
+    static void Reset()
+    {
+        m_initialized = false;  // Force reinitialization
+        
+        // Clear all arrays to force reinitialization
+        ArrayFree(m_us500TouchZones);
+        ArrayFree(m_us500BounceMinSizes);
+        ArrayFree(m_us500MinTouches);
+        ArrayFree(m_us500MinStrengths);
+        ArrayFree(m_us500Lookbacks);
+        ArrayFree(m_us500MaxBounceDelays);
+    }
+    
     static void Initialize()
     {
         if(m_initialized) return;
