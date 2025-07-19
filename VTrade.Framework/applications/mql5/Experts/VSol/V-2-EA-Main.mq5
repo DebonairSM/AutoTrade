@@ -23,9 +23,9 @@ CTrade trade;
 
 //--- Input Parameters
 input int     LookbackPeriod = 100;    // Lookback period for analysis
-input double  MinStrength = 0.30;      // Minimum strength for key levels (LOWERED from 0.55)
+input double  MinStrength = 0.45;      // Minimum strength for key levels (OPTIMIZED for quality)
 input double  TouchZone = 0.0025;      // Touch zone size (in pips for Forex, points for US500)
-input int     MinTouches = 2;          // Minimum touches required
+input int     MinTouches = 3;          // Minimum touches required (INCREASED for reliability)
 input bool    ShowDebugPrints = false;  // Show debug prints
 input bool    EnforceMarketHours = false; // Enforce market hours check (set to false to ignore market hours)
 input bool    CurrentTimeframeOnly = true; // Process ONLY current chart timeframe (simplified mode)
@@ -33,19 +33,33 @@ input bool    CurrentTimeframeOnly = true; // Process ONLY current chart timefra
 // Trading Parameters
 input group "=== TRADING PARAMETERS ==="
 input bool   EnableTrading = true;     // Enable actual trading
-input double RiskPercentage = 1.0;     // Risk percentage per trade
-input double ATRMultiplierSL = 1.5;    // ATR multiplier for stop loss
-input double ATRMultiplierTP = 3.0;    // ATR multiplier for take profit
+input double RiskPercentage = 1.5;     // Risk percentage per trade (INCREASED for aggressive profits)
+input double ATRMultiplierSL = 1.2;    // ATR multiplier for stop loss (TIGHTER for better R:R)
+input double ATRMultiplierTP = 4.0;    // ATR multiplier for take profit (BIGGER for higher profits)
 input int    MagicNumber = 12345;      // Magic number for trade identification
 input bool   UseVolumeFilter = true;   // Use volume confirmation for breakouts
 input bool   UseRetest = true;         // Wait for retest before entry
 
+// Profit Management Parameters (IMMEDIATE PROFIT BOOSTER!)
+input group "=== PROFIT MANAGEMENT ==="
+input bool   UseTrailingStop = true;   // Enable trailing stop for bigger profits
+input double TrailingStartPips = 20;   // Start trailing after this profit (pips)
+input double TrailingStepPips = 10;    // Trailing step size (pips)
+input bool   UseBreakeven = true;      // Move SL to breakeven when profitable
+
 // Breakout Detection Parameters
 input group "=== BREAKOUT DETECTION ==="
-input int    BreakoutLookback = 24;    // Bars to look back for breakout detection
-input double MinStrengthThreshold = 0.65; // Minimum strength for breakout
-input double RetestATRMultiplier = 0.5;   // ATR multiplier for retest zone
-input double RetestPipsThreshold = 15;     // Pips threshold for retest zone
+input int    BreakoutLookback = 20;    // Bars to look back for breakout detection (OPTIMIZED)
+input double MinStrengthThreshold = 0.70; // Minimum strength for breakout (HIGHER for quality)
+input double RetestATRMultiplier = 0.4;   // ATR multiplier for retest zone (TIGHTER)
+input double RetestPipsThreshold = 12;     // Pips threshold for retest zone (TIGHTER)
+
+// Trend Filter Parameters (IMMEDIATE PROFIT BOOSTER!)
+input group "=== TREND FILTER ==="
+input bool   UseTrendFilter = true;    // Enable trend filter for higher win rate
+input int    FastMA_Period = 21;       // Fast MA period for trend detection
+input int    SlowMA_Period = 50;       // Slow MA period for trend detection
+input ENUM_MA_METHOD MA_Method = MODE_EMA; // Moving average method
 
 //--- Global Variables
 CV2EABreakoutsStrategy g_strategy;
@@ -68,6 +82,10 @@ bool g_processingRequired = false;
 
 // ATR handle for trading calculations
 int g_handleATR = INVALID_HANDLE;
+
+// Trend filter handles
+int g_handleMA_Fast = INVALID_HANDLE;
+int g_handleMA_Slow = INVALID_HANDLE;
 
 // Breakout state tracking
 struct SBreakoutState
@@ -113,6 +131,21 @@ int OnInit()
     {
         Print("❌ Failed to create ATR indicator handle. Error: ", GetLastError());
         return INIT_FAILED;
+    }
+    
+    // Initialize trend filter MA handles
+    if(UseTrendFilter)
+    {
+        g_handleMA_Fast = iMA(_Symbol, Period(), FastMA_Period, 0, MA_Method, PRICE_CLOSE);
+        g_handleMA_Slow = iMA(_Symbol, Period(), SlowMA_Period, 0, MA_Method, PRICE_CLOSE);
+        
+        if(g_handleMA_Fast == INVALID_HANDLE || g_handleMA_Slow == INVALID_HANDLE)
+        {
+            Print("❌ Failed to create MA indicator handles for trend filter. Error: ", GetLastError());
+            return INIT_FAILED;
+        }
+        
+        Print("✅ Trend filter enabled: Fast MA(", FastMA_Period, ") vs Slow MA(", SlowMA_Period, ")");
     }
     
     // Initialize trading components
@@ -173,6 +206,12 @@ int OnInit()
     Print(StringFormat("⚙️ CRITICAL: CurrentTimeframeOnly = %s", CurrentTimeframeOnly ? "TRUE" : "FALSE"));
     Print(StringFormat("⚙️ TRADING: Enabled = %s, Risk = %.1f%%, Magic = %d", EnableTrading ? "YES" : "NO", RiskPercentage, MagicNumber));
     Print("📊 PERFORMANCE LOGGING: Enabled with comprehensive tracking");
+    Print("🚀 PROFIT ENHANCEMENTS:");
+    Print(StringFormat("   📈 Multi-Timeframe: %s", CurrentTimeframeOnly ? "DISABLED" : "ENABLED"));
+    Print(StringFormat("   🎯 Trend Filter: %s (%d/%d MA)", UseTrendFilter ? "ENABLED" : "DISABLED", FastMA_Period, SlowMA_Period));
+    Print(StringFormat("   💰 Trailing Stops: %s (Start: %.0f pips, Step: %.0f pips)", UseTrailingStop ? "ENABLED" : "DISABLED", TrailingStartPips, TrailingStepPips));
+    Print(StringFormat("   🛡️ Breakeven: %s", UseBreakeven ? "ENABLED" : "DISABLED"));
+    Print(StringFormat("   ⭐ Quality Filters: MinStrength=%.2f, MinTouches=%d, BreakoutThreshold=%.2f", MinStrength, MinTouches, MinStrengthThreshold));
     
     // Print timeframe info
     Print(StringFormat("Initializing EA on %s timeframe", EnumToString(Period())));
@@ -236,6 +275,12 @@ void OnDeinit(const int reason)
     // Clean up ATR indicator handle
     if(g_handleATR != INVALID_HANDLE)
         IndicatorRelease(g_handleATR);
+        
+    // Clean up trend filter MA handles
+    if(g_handleMA_Fast != INVALID_HANDLE)
+        IndicatorRelease(g_handleMA_Fast);
+    if(g_handleMA_Slow != INVALID_HANDLE)
+        IndicatorRelease(g_handleMA_Slow);
     
     // Clean up performance logger and generate final reports
     // Pattern from: MQL5 Expert Advisor cleanup patterns
@@ -661,6 +706,40 @@ bool IsDuringMarketHours()
 //| TRADING FUNCTIONS                                                  |
 //+------------------------------------------------------------------+
 
+// Get current trend direction using MA filter
+int GetTrendDirection()
+{
+    if(!UseTrendFilter) return 0; // Neutral if trend filter disabled
+    
+    double fastMA[], slowMA[];
+    ArraySetAsSeries(fastMA, true);
+    ArraySetAsSeries(slowMA, true);
+    
+    if(CopyBuffer(g_handleMA_Fast, 0, 0, 3, fastMA) <= 0 ||
+       CopyBuffer(g_handleMA_Slow, 0, 0, 3, slowMA) <= 0)
+    {
+        if(ShowDebugPrints)
+            Print("❌ Failed to get MA values for trend filter");
+        return 0; // Neutral on error
+    }
+    
+    // Check trend direction
+    bool fastAboveSlow = fastMA[0] > slowMA[0];
+    bool fastRising = fastMA[0] > fastMA[1];
+    bool slowRising = slowMA[0] > slowMA[1];
+    
+    // Strong bullish trend: Fast above slow AND both rising
+    if(fastAboveSlow && fastRising && slowRising)
+        return 1;
+    
+    // Strong bearish trend: Fast below slow AND both falling  
+    if(!fastAboveSlow && !fastRising && !slowRising)
+        return -1;
+        
+    // Weak trend or consolidation
+    return 0;
+}
+
 // Update position state
 void UpdatePositionState()
 {
@@ -716,36 +795,67 @@ void ManageOpenPositions()
                 g_performanceLogger.LogTradeUpdate(currentPrice, mfe, mae);
             }
             
-            // Check for breakeven (move SL to entry after price moves favorably)
-            if(stopLoss != 0 && takeProfit != 0) {
-                double risk = MathAbs(openPrice - stopLoss);
-                double currentMovement = 0;
+            // Enhanced profit management: Breakeven + Trailing stops
+            if(stopLoss != 0) {
+                double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+                double profitPips = 0;
+                double newSL = stopLoss;
+                bool shouldModify = false;
                 
                 if(posType == POSITION_TYPE_BUY) {
-                    currentMovement = currentPrice - openPrice;
+                    profitPips = (currentPrice - openPrice) / point;
                 } else {
-                    currentMovement = openPrice - currentPrice;
+                    profitPips = (openPrice - currentPrice) / point;
                 }
                 
-                // Move to breakeven when price has moved at least 1.5x the risk
-                if(currentMovement >= risk * 1.5 && stopLoss != openPrice) {
-                    double newSL = openPrice;
+                // 1. Breakeven logic
+                if(UseBreakeven && profitPips >= TrailingStartPips && stopLoss != openPrice) {
+                    newSL = openPrice;
+                    shouldModify = true;
+                    if(ShowDebugPrints)
+                        Print(StringFormat("✅ Moving to breakeven: Profit %.1f pips", profitPips));
+                }
+                
+                // 2. Trailing stop logic  
+                if(UseTrailingStop && profitPips >= TrailingStartPips) {
+                    double trailDistance = TrailingStepPips * point;
+                    double idealSL = 0;
                     
-                    // Use proper position modification with error checking
+                    if(posType == POSITION_TYPE_BUY) {
+                        idealSL = currentPrice - trailDistance;
+                        // Only move SL up
+                        if(idealSL > stopLoss + (TrailingStepPips * point * 0.5)) {
+                            newSL = idealSL;
+                            shouldModify = true;
+                        }
+                    } else {
+                        idealSL = currentPrice + trailDistance;
+                        // Only move SL down  
+                        if(idealSL < stopLoss - (TrailingStepPips * point * 0.5)) {
+                            newSL = idealSL;
+                            shouldModify = true;
+                        }
+                    }
+                    
+                    if(shouldModify && ShowDebugPrints)
+                        Print(StringFormat("📈 Trailing stop: Profit %.1f pips, SL %.5f → %.5f", 
+                              profitPips, stopLoss, newSL));
+                }
+                
+                // Apply the modification
+                if(shouldModify) {
                     if(trade.PositionModify(positionTicket, newSL, takeProfit)) {
-                        // Check if modification was successful
                         uint resultCode = trade.ResultRetcode();
                         if(resultCode == TRADE_RETCODE_DONE) {
                             if(ShowDebugPrints)
-                                Print(StringFormat("✅ Moved stop loss to breakeven for ticket %I64u", positionTicket));
+                                Print(StringFormat("✅ Position modified successfully: SL=%.5f", newSL));
                         } else {
                             if(ShowDebugPrints)
-                                Print(StringFormat("❌ Failed to modify position: %s", trade.ResultRetcodeDescription()));
+                                Print(StringFormat("⚠️ Modification result: %s", trade.ResultRetcodeDescription()));
                         }
                     } else {
                         if(ShowDebugPrints) {
                             Print(StringFormat("❌ Position modification failed: %s", trade.ResultRetcodeDescription()));
-                            trade.PrintResult();
                         }
                     }
                 }
@@ -839,8 +949,18 @@ bool DetectBreakoutAndInitRetest()
         }
     }
     
+    // Check trend direction for filtering
+    int trendDirection = GetTrendDirection();
+    
     // Bullish breakout
     if(bullishBreak && volumeOK && atrOK) {
+        // Apply trend filter
+        if(UseTrendFilter && trendDirection == -1) {
+            if(ShowDebugPrints)
+                Print("❌ Bullish breakout rejected - bearish trend detected");
+            return false;
+        }
+        
         g_breakoutState.breakoutTime = TimeCurrent();
         g_breakoutState.breakoutLevel = levelPrice;
         g_breakoutState.isBullish = true;
@@ -849,9 +969,12 @@ bool DetectBreakoutAndInitRetest()
         g_breakoutState.retestStartTime = TimeCurrent();
         g_breakoutState.retestStartBar = iBarShift(_Symbol, Period(), TimeCurrent(), false);
         
+        string trendMsg = UseTrendFilter ? StringFormat(" (Trend: %s)", 
+            trendDirection == 1 ? "BULLISH" : trendDirection == -1 ? "BEARISH" : "NEUTRAL") : "";
+        
         if(ShowDebugPrints)
-            Print(StringFormat("🚀 Bullish breakout detected at %.5f, awaiting retest: %s", 
-                  levelPrice, UseRetest ? "YES" : "NO"));
+            Print(StringFormat("🚀 Bullish breakout detected at %.5f%s, awaiting retest: %s", 
+                  levelPrice, trendMsg, UseRetest ? "YES" : "NO"));
         
         if(!UseRetest) {
             ExecuteBreakoutTrade(true, levelPrice);
@@ -861,6 +984,13 @@ bool DetectBreakoutAndInitRetest()
     
     // Bearish breakout
     if(bearishBreak && volumeOK && atrOK) {
+        // Apply trend filter
+        if(UseTrendFilter && trendDirection == 1) {
+            if(ShowDebugPrints)
+                Print("❌ Bearish breakout rejected - bullish trend detected");
+            return false;
+        }
+        
         g_breakoutState.breakoutTime = TimeCurrent();
         g_breakoutState.breakoutLevel = levelPrice;
         g_breakoutState.isBullish = false;
@@ -869,9 +999,12 @@ bool DetectBreakoutAndInitRetest()
         g_breakoutState.retestStartTime = TimeCurrent();
         g_breakoutState.retestStartBar = iBarShift(_Symbol, Period(), TimeCurrent(), false);
         
+        string trendMsg = UseTrendFilter ? StringFormat(" (Trend: %s)", 
+            trendDirection == 1 ? "BULLISH" : trendDirection == -1 ? "BEARISH" : "NEUTRAL") : "";
+        
         if(ShowDebugPrints)
-            Print(StringFormat("🚀 Bearish breakout detected at %.5f, awaiting retest: %s", 
-                  levelPrice, UseRetest ? "YES" : "NO"));
+            Print(StringFormat("🚀 Bearish breakout detected at %.5f%s, awaiting retest: %s", 
+                  levelPrice, trendMsg, UseRetest ? "YES" : "NO"));
         
         if(!UseRetest) {
             ExecuteBreakoutTrade(false, levelPrice);
