@@ -33,6 +33,12 @@ enum ENUM_STRATEGY_TYPE
 // Core strategy inputs
 input ENUM_STRATEGY_TYPE StrategyType = STRAT_BREAKOUT_RETEST;
 
+// Enhanced Position Management
+input group "=== POSITION MANAGEMENT ==="
+input bool   UseMultiTimeframeConfirmation = true;   // Enable multi-timeframe confirmation
+input bool   UseStrengthBasedSizing = true;          // Adjust position size based on level strength
+input double MaxStrengthMultiplier = 1.5;            // Maximum multiplier for strong levels
+
 // [P1 OPTIMIZATION] - Core Breakout Detection for H1
 // Goal: Find optimal parameters for identifying valid H1 breakouts
 // Success Metrics: 
@@ -1531,6 +1537,444 @@ void SetPivotSLTP(bool isBuy, double currentPrice, double &slPrice, double &tpPr
             NormalizeDouble(MathAbs(currentPrice - tpPrice)/MathAbs(currentPrice - slPrice), 2)));
 }
 
+//==================================================================
+// MODULE 9.1: ENHANCED POSITION MANAGEMENT
+// Purpose: Comprehensive position management with advanced features
+// Components:
+// - Trailing stops with key level awareness
+// - Breakeven moves based on key levels
+// - Partial profit taking at key levels
+// - Dynamic stop loss adjustment
+//==================================================================
+
+// Global position management state
+struct SPositionState
+{
+    bool hasPosition;
+    bool isBuy;
+    double entryPrice;
+    double currentSL;
+    double currentTP;
+    double lotSize;
+    datetime entryTime;
+    double highestPrice;    // For buy positions
+    double lowestPrice;     // For sell positions
+    bool breakevenActivated;
+    bool partialTaken;
+    double keyLevelEntryPrice; // The key level that triggered entry
+    ulong positionTicket;
+    
+    void Reset()
+    {
+        hasPosition = false;
+        isBuy = false;
+        entryPrice = 0;
+        currentSL = 0;
+        currentTP = 0;
+        lotSize = 0;
+        entryTime = 0;
+        highestPrice = 0;
+        lowestPrice = DBL_MAX;
+        breakevenActivated = false;
+        partialTaken = false;
+        keyLevelEntryPrice = 0;
+        positionTicket = 0;
+    }
+} g_positionState;
+
+// Position management parameters
+input double TrailingStopPips = 30.0;      // Trailing stop distance in pips
+input double BreakevenTriggerPips = 20.0;  // Profit threshold to move to breakeven
+input double PartialTakeProfitRatio = 0.5; // Take 50% profit at first key level
+input bool UseKeyLevelTrailing = true;     // Use key levels for trailing stops
+input bool UseBreakevenMove = true;        // Enable breakeven functionality
+input bool UsePartialTakeProfit = true;    // Enable partial profit taking
+
+// MODULE 9.1.1: Update Position State
+void UpdatePositionState()
+{
+    g_positionState.hasPosition = false;
+    
+    if(PositionsTotal() > 0)
+    {
+        for(int i = 0; i < PositionsTotal(); i++)
+        {
+            if(PositionGetSymbol(i) == _Symbol && 
+               PositionGetInteger(POSITION_MAGIC) == g_magicNumber)
+            {
+                g_positionState.hasPosition = true;
+                g_positionState.isBuy = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+                g_positionState.entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+                g_positionState.currentSL = PositionGetDouble(POSITION_SL);
+                g_positionState.currentTP = PositionGetDouble(POSITION_TP);
+                g_positionState.lotSize = PositionGetDouble(POSITION_VOLUME);
+                g_positionState.entryTime = (datetime)PositionGetInteger(POSITION_TIME);
+                g_positionState.positionTicket = PositionGetInteger(POSITION_TICKET);
+                
+                // Update price extremes for trailing
+                double currentPrice = g_positionState.isBuy ? 
+                    SymbolInfoDouble(_Symbol, SYMBOL_BID) : 
+                    SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                
+                if(g_positionState.isBuy)
+                {
+                    g_positionState.highestPrice = MathMax(g_positionState.highestPrice, currentPrice);
+                }
+                else
+                {
+                    g_positionState.lowestPrice = MathMin(g_positionState.lowestPrice, currentPrice);
+                }
+                
+                g_hasPositionOpen = true;
+                return;
+            }
+        }
+    }
+    
+    // No position found - reset state
+    if(g_positionState.hasPosition)
+    {
+        CV2EAUtils::LogSuccess("Position closed - resetting state");
+        g_positionState.Reset();
+    }
+    g_hasPositionOpen = false;
+}
+
+// MODULE 9.1.2: Key Level Based Trailing
+double CalculateKeyLevelTrailingStop(bool isBuy, double currentPrice)
+{
+    if(!UseKeyLevelTrailing) return 0;
+    
+    // Get current key levels from breakout strategy
+    SKeyLevel supportLevel, resistanceLevel;
+    bool foundSupport = false, foundResistance = false;
+    
+    // Find nearest key levels
+    double nearestSupport = 0, nearestResistance = DBL_MAX;
+    
+    for(int i = 0; i < breakoutStrategy.TEST_GetKeyLevelCount(); i++)
+    {
+        SKeyLevel level;
+        if(breakoutStrategy.TEST_GetKeyLevel(i, level))
+        {
+            if(level.isResistance && level.price > currentPrice)
+            {
+                if(level.price < nearestResistance)
+                {
+                    nearestResistance = level.price;
+                    resistanceLevel = level;
+                    foundResistance = true;
+                }
+            }
+            else if(!level.isResistance && level.price < currentPrice)
+            {
+                if(level.price > nearestSupport)
+                {
+                    nearestSupport = level.price;
+                    supportLevel = level;
+                    foundSupport = true;
+                }
+            }
+        }
+    }
+    
+    double keyLevelSL = 0;
+    double pipSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    if(SymbolInfoInteger(_Symbol, SYMBOL_DIGITS) == 3 || SymbolInfoInteger(_Symbol, SYMBOL_DIGITS) == 5)
+        pipSize *= 10;
+    
+    if(isBuy && foundSupport)
+    {
+        // For buy positions, use support level minus buffer as trailing stop
+        keyLevelSL = supportLevel.price - (10 * pipSize); // 10 pip buffer below support
+        
+        if(ShowDebugPrints)
+        {
+            CV2EAUtils::LogInfo(StringFormat("Key level trailing - Buy position: Support %.5f, SL %.5f", 
+                supportLevel.price, keyLevelSL));
+        }
+    }
+    else if(!isBuy && foundResistance)
+    {
+        // For sell positions, use resistance level plus buffer as trailing stop
+        keyLevelSL = resistanceLevel.price + (10 * pipSize); // 10 pip buffer above resistance
+        
+        if(ShowDebugPrints)
+        {
+            CV2EAUtils::LogInfo(StringFormat("Key level trailing - Sell position: Resistance %.5f, SL %.5f", 
+                resistanceLevel.price, keyLevelSL));
+        }
+    }
+    
+         return keyLevelSL;
+}
+
+// MODULE 9.1.2b: Key Level Based Profit Targets
+double CalculateKeyLevelProfitTarget(bool isBuy, double currentPrice, double entryPrice)
+{
+    if(!UseKeyLevelTrailing) return 0;
+    
+    double bestTarget = 0;
+    double pipSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    if(SymbolInfoInteger(_Symbol, SYMBOL_DIGITS) == 3 || SymbolInfoInteger(_Symbol, SYMBOL_DIGITS) == 5)
+        pipSize *= 10;
+    
+    // Find the next key level in profit direction
+    for(int i = 0; i < breakoutStrategy.TEST_GetKeyLevelCount(); i++)
+    {
+        SKeyLevel level;
+        if(breakoutStrategy.TEST_GetKeyLevel(i, level))
+        {
+            if(isBuy && level.isResistance && level.price > currentPrice)
+            {
+                // For buy positions, look for resistance levels above current price
+                double distance = level.price - entryPrice;
+                if(distance > 20 * pipSize) // At least 20 pips profit potential
+                {
+                    if(bestTarget == 0 || level.price < bestTarget)
+                    {
+                        bestTarget = level.price - (5 * pipSize); // Target 5 pips before resistance
+                    }
+                }
+            }
+            else if(!isBuy && !level.isResistance && level.price < currentPrice)
+            {
+                // For sell positions, look for support levels below current price
+                double distance = entryPrice - level.price;
+                if(distance > 20 * pipSize) // At least 20 pips profit potential
+                {
+                    if(bestTarget == 0 || level.price > bestTarget)
+                    {
+                        bestTarget = level.price + (5 * pipSize); // Target 5 pips above support
+                    }
+                }
+            }
+        }
+    }
+    
+    if(bestTarget > 0 && ShowDebugPrints)
+    {
+        CV2EAUtils::LogInfo(StringFormat("Key level profit target: %.5f (%.1f pips from entry)",
+            bestTarget, MathAbs(bestTarget - entryPrice) / pipSize));
+    }
+    
+    return bestTarget;
+}
+
+// MODULE 9.1.3: Comprehensive Position Management
+void ManageOpenPositions()
+{
+    UpdatePositionState();
+    
+    if(!g_positionState.hasPosition)
+        return;
+    
+    double currentPrice = g_positionState.isBuy ? 
+        SymbolInfoDouble(_Symbol, SYMBOL_BID) : 
+        SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    
+    double pipSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    if(SymbolInfoInteger(_Symbol, SYMBOL_DIGITS) == 3 || SymbolInfoInteger(_Symbol, SYMBOL_DIGITS) == 5)
+        pipSize *= 10;
+    
+    bool needsUpdate = false;
+    double newSL = g_positionState.currentSL;
+    double newTP = g_positionState.currentTP;
+    
+    // Calculate current profit in pips
+    double profitPips = 0;
+    if(g_positionState.isBuy)
+    {
+        profitPips = (currentPrice - g_positionState.entryPrice) / pipSize;
+    }
+    else
+    {
+        profitPips = (g_positionState.entryPrice - currentPrice) / pipSize;
+    }
+    
+    // 1. BREAKEVEN MOVE
+    if(UseBreakevenMove && !g_positionState.breakevenActivated && profitPips >= BreakevenTriggerPips)
+    {
+        double breakevenPrice = g_positionState.entryPrice + (g_positionState.isBuy ? 5 : -5) * pipSize; // 5 pip profit lock
+        
+        if(g_positionState.isBuy && breakevenPrice > g_positionState.currentSL)
+        {
+            newSL = breakevenPrice;
+            needsUpdate = true;
+            g_positionState.breakevenActivated = true;
+            CV2EAUtils::LogSuccess(StringFormat("Moving to breakeven + 5 pips at %.5f (profit: %.1f pips)", 
+                breakevenPrice, profitPips));
+        }
+        else if(!g_positionState.isBuy && breakevenPrice < g_positionState.currentSL)
+        {
+            newSL = breakevenPrice;
+            needsUpdate = true;
+            g_positionState.breakevenActivated = true;
+            CV2EAUtils::LogSuccess(StringFormat("Moving to breakeven + 5 pips at %.5f (profit: %.1f pips)", 
+                breakevenPrice, profitPips));
+        }
+    }
+    
+    // 2. PARTIAL PROFIT TAKING
+    if(UsePartialTakeProfit && !g_positionState.partialTaken && profitPips >= TrailingStopPips)
+    {
+        double partialLots = NormalizeDouble(g_positionState.lotSize * PartialTakeProfitRatio, 2);
+        
+        if(partialLots >= SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN))
+        {
+            if(PositionClosePartial(g_positionState.positionTicket, partialLots))
+            {
+                g_positionState.partialTaken = true;
+                CV2EAUtils::LogSuccess(StringFormat("Partial profit taken: %.2f lots at %.1f pips profit", 
+                    partialLots, profitPips));
+            }
+        }
+    }
+    
+    // 3. KEY LEVEL TRAILING STOP
+    double keyLevelSL = CalculateKeyLevelTrailingStop(g_positionState.isBuy, currentPrice);
+    
+    // 4. TRADITIONAL TRAILING STOP
+    double traditionalTrailingSL = 0;
+    if(g_positionState.isBuy)
+    {
+        traditionalTrailingSL = g_positionState.highestPrice - (TrailingStopPips * pipSize);
+        if(traditionalTrailingSL > g_positionState.currentSL)
+        {
+            newSL = MathMax(newSL, traditionalTrailingSL);
+            needsUpdate = true;
+        }
+    }
+    else
+    {
+        traditionalTrailingSL = g_positionState.lowestPrice + (TrailingStopPips * pipSize);
+        if(traditionalTrailingSL < g_positionState.currentSL || g_positionState.currentSL == 0)
+        {
+            newSL = traditionalTrailingSL;
+            if(g_positionState.currentSL == 0 || newSL < g_positionState.currentSL)
+                needsUpdate = true;
+        }
+    }
+    
+    // 5. APPLY KEY LEVEL TRAILING IF BETTER
+    if(keyLevelSL > 0)
+    {
+        if(g_positionState.isBuy && keyLevelSL > newSL)
+        {
+            newSL = keyLevelSL;
+            needsUpdate = true;
+            CV2EAUtils::LogInfo("Using key level trailing stop");
+        }
+        else if(!g_positionState.isBuy && (keyLevelSL < newSL || newSL == 0))
+        {
+            newSL = keyLevelSL;
+            needsUpdate = true;
+            CV2EAUtils::LogInfo("Using key level trailing stop");
+        }
+    }
+    
+         // 6. DYNAMIC TAKE PROFIT ADJUSTMENT
+     double keyLevelTP = CalculateKeyLevelProfitTarget(g_positionState.isBuy, currentPrice, g_positionState.entryPrice);
+     if(keyLevelTP > 0)
+     {
+         // Only update TP if the key level target is better than current TP
+         bool shouldUpdateTP = false;
+         if(g_positionState.isBuy && (g_positionState.currentTP == 0 || keyLevelTP < g_positionState.currentTP))
+         {
+             newTP = keyLevelTP;
+             shouldUpdateTP = true;
+         }
+         else if(!g_positionState.isBuy && (g_positionState.currentTP == 0 || keyLevelTP > g_positionState.currentTP))
+         {
+             newTP = keyLevelTP;
+             shouldUpdateTP = true;
+         }
+         
+         if(shouldUpdateTP)
+         {
+             needsUpdate = true;
+             CV2EAUtils::LogInfo("Adjusting TP to key level target");
+         }
+     }
+     
+     // 7. UPDATE POSITION IF NEEDED
+     if(needsUpdate && (newSL != g_positionState.currentSL || newTP != g_positionState.currentTP))
+     {
+         if(trade.PositionModify(g_positionState.positionTicket, newSL, newTP))
+         {
+             string updateMsg = "";
+             if(newSL != g_positionState.currentSL)
+                 updateMsg += StringFormat("SL: %.5f → %.5f ", g_positionState.currentSL, newSL);
+             if(newTP != g_positionState.currentTP)
+                 updateMsg += StringFormat("TP: %.5f → %.5f ", g_positionState.currentTP, newTP);
+             
+             CV2EAUtils::LogSuccess(StringFormat("Position updated - %s(Profit: %.1f pips)", 
+                 updateMsg, profitPips));
+         }
+         else
+         {
+             CV2EAUtils::LogError(StringFormat("Failed to update position. Error: %d", GetLastError()));
+         }
+     }
+}
+
+// MODULE 9.2: Enhanced Entry Logic with Multi-Timeframe Confirmation
+bool ValidateMultiTimeframeEntry(bool isBullish, double breakoutLevel)
+{
+    // Get confirmation from higher timeframe
+    ENUM_TIMEFRAMES higherTF = PERIOD_CURRENT;
+    
+    // Determine higher timeframe
+    switch(Period())
+    {
+        case PERIOD_M5:  higherTF = PERIOD_M15; break;
+        case PERIOD_M15: higherTF = PERIOD_M30; break;
+        case PERIOD_M30: higherTF = PERIOD_H1;  break;
+        case PERIOD_H1:  higherTF = PERIOD_H4;  break;
+        case PERIOD_H4:  higherTF = PERIOD_D1;  break;
+        case PERIOD_D1:  higherTF = PERIOD_W1;  break;
+        default: return true; // Skip multi-timeframe for higher TFs
+    }
+    
+    // Process higher timeframe to get key levels
+    if(!breakoutStrategy.ProcessTimeframe(higherTF))
+    {
+        CV2EAUtils::LogWarning("Failed to process higher timeframe for confirmation");
+        return true; // Don't block trade if we can't get higher TF data
+    }
+    
+    // Check if higher timeframe supports the breakout direction
+    SKeyLevel higherTFLevel;
+    if(breakoutStrategy.GetStrongestLevel(higherTFLevel))
+    {
+        double distance = MathAbs(higherTFLevel.price - breakoutLevel);
+        double touchZone = breakoutStrategy.TEST_GetTouchZone();
+        
+        // Check alignment
+        bool aligned = false;
+        if(isBullish && !higherTFLevel.isResistance && distance <= touchZone * 2)
+        {
+            aligned = true; // Bullish breakout with higher TF support nearby
+        }
+        else if(!isBullish && higherTFLevel.isResistance && distance <= touchZone * 2)
+        {
+            aligned = true; // Bearish breakout with higher TF resistance nearby
+        }
+        
+        if(ShowDebugPrints)
+        {
+            CV2EAUtils::LogInfo(StringFormat("Multi-TF check: %s breakout %s with %s TF",
+                isBullish ? "Bullish" : "Bearish",
+                aligned ? "ALIGNED" : "NOT ALIGNED",
+                EnumToString(higherTF)));
+        }
+        
+        return aligned;
+    }
+    
+    return true; // Default to allowing trade if no higher TF levels found
+}
+
 // MODULE 9.3: Strategy Core Execution
 // Purpose: Main strategy implementation and trade execution
 // Components:
@@ -1548,17 +1992,11 @@ void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
    }
 
    // Check for existing positions and enforce cooldown
-   if(PositionsTotal() > 0)
+   UpdatePositionState(); // Update our position tracking
+   if(g_positionState.hasPosition)
    {
-      for(int i = 0; i < PositionsTotal(); i++)
-      {
-         if(PositionGetSymbol(i) == _Symbol && 
-            PositionGetInteger(POSITION_MAGIC) == g_magicNumber)
-         {
-            CV2EAUtils::LogError("Position already exists for this symbol and magic number");
-            return;
-         }
-      }
+      CV2EAUtils::LogError("Position already exists for this symbol and magic number");
+      return;
    }
 
    // Enforce minimum time between trades (5 minutes cooldown)
@@ -1569,12 +2007,35 @@ void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
       return;
    }
 
-   // 1) Current price
+   // 1) Multi-timeframe confirmation
+   if(UseMultiTimeframeConfirmation && !ValidateMultiTimeframeEntry(isBullish, breakoutLevel))
+   {
+      CV2EAUtils::LogWarning("Multi-timeframe confirmation failed - skipping entry");
+      return;
+   }
+
+   // 2) Current price
    double currentPrice = isBullish 
                        ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
                        : SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-   // 2) Calculate SL/TP using pivot points
+   // 3) Enhanced risk-based position sizing
+   SKeyLevel entryLevel;
+   double originalRisk = RiskPercentage;
+   if(UseStrengthBasedSizing && breakoutStrategy.GetStrongestLevel(entryLevel))
+   {
+      // Adjust position size based on key level strength
+      double strengthMultiplier = MathMin(entryLevel.strength * MaxStrengthMultiplier, MaxStrengthMultiplier);
+      RiskPercentage = RiskPercentage * strengthMultiplier;
+      
+      if(ShowDebugPrints)
+      {
+         CV2EAUtils::LogInfo(StringFormat("Risk adjusted for level strength: %.2f%% → %.2f%% (strength: %.3f)",
+            originalRisk, RiskPercentage, entryLevel.strength));
+      }
+   }
+
+   // 4) Calculate SL/TP using pivot points
    double slPrice = 0, tpPrice = 0;
    if(!ApplyDailyPivotSLTP(isBullish, currentPrice, slPrice, tpPrice))
    {
@@ -1582,7 +2043,7 @@ void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
       return;
    }
 
-   // 3) Calculate position size based on risk
+   // 5) Calculate position size based on adjusted risk
    double lotSize = CalculateLotSize(slPrice, currentPrice, RiskPercentage);
    if(lotSize <= 0)
    {
@@ -1590,11 +2051,22 @@ void ExecuteBreakoutRetestStrategy(bool isBullish, double breakoutLevel)
       return;
    }
 
-   // 4) Place the trade with pivot-based SL/TP
+   // 6) Place the trade with enhanced tracking
    if(PlaceTrade(isBullish, currentPrice, slPrice, tpPrice, lotSize))
    {
-      CV2EAUtils::LogSuccess(StringFormat("Trade placed - %s at %.5f SL=%.5f TP=%.5f",
-               (isBullish ? "Buy" : "Sell"), currentPrice, slPrice, tpPrice));
+      // Initialize position state tracking
+      g_positionState.keyLevelEntryPrice = breakoutLevel;
+      g_positionState.highestPrice = currentPrice;
+      g_positionState.lowestPrice = currentPrice;
+      
+      CV2EAUtils::LogSuccess(StringFormat("ENHANCED TRADE PLACED:\n" +
+               "Direction: %s at %.5f\n" +
+               "SL: %.5f TP: %.5f\n" +
+               "Lot Size: %.2f (Risk: %.2f%%)\n" +
+               "Key Level: %.5f (Strength: %.3f)",
+               (isBullish ? "Buy" : "Sell"), currentPrice, slPrice, tpPrice,
+               lotSize, RiskPercentage, breakoutLevel, 
+               entryLevel.strength > 0 ? entryLevel.strength : 0.0));
 
       // Set breakout zone lockout after successful trade
       g_activeBreakoutZonePrice = breakoutLevel;  
@@ -1644,6 +2116,9 @@ int OnInit()
       return INIT_FAILED;
    }
 
+   // Initialize position state
+   g_positionState.Reset();
+   
    CV2EAUtils::LogSuccess(StringFormat("EA started. Session trading restrictions are %s. Timer interval: %d seconds", 
             (RestrictTradingHours ? "enabled" : "disabled"), TIMER_INTERVAL));
    return(INIT_SUCCEEDED);
@@ -1683,10 +2158,9 @@ void OnTick()
    IsTradeAllowedInSession();  // This updates g_allowNewTrades and g_allowTradeManagement
    
    // Always check and manage open positions regardless of session
-   if(g_allowTradeManagement && g_hasPositionOpen)
+   if(g_allowTradeManagement)
    {
-      // Future enhancement: Add position management logic here
-      // (e.g., trailing stops, breakeven, partial closes)
+      ManageOpenPositions();
    }
    
    // Only look for new trade opportunities if allowed
@@ -1919,18 +2393,52 @@ void OnTimer()
    ulong timerEndTime = GetMicrosecondCount();
    double timerProcessingTime = (timerEndTime - timerStartTime) / 1000.0;
    
+   // Enhanced position status reporting every 30 minutes for active positions
+   static datetime lastPositionStatusTime = 0;
+   if(g_positionState.hasPosition && now - lastPositionStatusTime >= 1800) // 30 minutes
+   {
+      UpdatePositionState(); // Refresh position data
+      double currentPrice = g_positionState.isBuy ? 
+          SymbolInfoDouble(_Symbol, SYMBOL_BID) : 
+          SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double pipSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      if(SymbolInfoInteger(_Symbol, SYMBOL_DIGITS) == 3 || SymbolInfoInteger(_Symbol, SYMBOL_DIGITS) == 5)
+          pipSize *= 10;
+          
+      double profitPips = g_positionState.isBuy ? 
+          (currentPrice - g_positionState.entryPrice) / pipSize :
+          (g_positionState.entryPrice - currentPrice) / pipSize;
+          
+      CV2EAUtils::LogInfo(StringFormat("📊 POSITION STATUS [%s]\n" +
+          "Direction: %s | Entry: %.5f | Current: %.5f\n" +
+          "Profit: %.1f pips | SL: %.5f | TP: %.5f\n" +
+          "Breakeven: %s | Partial Taken: %s\n" +
+          "Key Level Entry: %.5f | Duration: %s",
+          TimeToString(now, TIME_DATE|TIME_MINUTES),
+          g_positionState.isBuy ? "BUY" : "SELL",
+          g_positionState.entryPrice, currentPrice,
+          profitPips, g_positionState.currentSL, g_positionState.currentTP,
+          g_positionState.breakevenActivated ? "YES" : "NO",
+          g_positionState.partialTaken ? "YES" : "NO",
+          g_positionState.keyLevelEntryPrice,
+          TimeToString(now - g_positionState.entryTime, TIME_MINUTES)));
+      lastPositionStatusTime = now;
+   }
+   
    // Log consolidated stats every 6 hours and only if there's been activity
    static datetime lastStatsTime = 0;
    if(ShowDebugPrints && now - lastStatsTime >= 21600 && // 6 hours
       (g_calculationCount > 0 || g_tickCount > 1000)) // Only if there's been activity
    {
-      CV2EAUtils::LogInfo(StringFormat("EA Status Report [%s]", TimeToString(now, TIME_DATE|TIME_MINUTES)));
-      CV2EAUtils::LogInfo(StringFormat("  Performance:\n    Ticks/Calculations: %d / %d\n    Calc/Tick Ratio: %f%%\n    Avg/Max Tick Time: %f / %f ms\n    Timer Events: %d\n    Last Process Time: %f ms\n  Trading:\n    Session Active: %s\n    Awaiting Retest: %s\n    Open Positions: %d",
+      UpdatePositionState(); // Make sure we have current position data
+      CV2EAUtils::LogInfo(StringFormat("📈 EA STATUS REPORT [%s]", TimeToString(now, TIME_DATE|TIME_MINUTES)));
+      CV2EAUtils::LogInfo(StringFormat("  Performance:\n    Ticks/Calculations: %d / %d\n    Calc/Tick Ratio: %f%%\n    Avg/Max Tick Time: %f / %f ms\n    Timer Events: %d\n    Last Process Time: %f ms\n  Trading:\n    Session Active: %s\n    Awaiting Retest: %s\n    Open Positions: %d\n    Position Management: %s",
             g_tickCount, g_calculationCount, g_calculationCount * 100.0 / (double)g_tickCount,
             g_avgTickTime, g_maxTickTime, g_timerCount, timerProcessingTime,
             (IsTradeAllowedInSession() ? "Yes" : "No"),
             (g_breakoutState.awaitingRetest ? "Yes" : "No"),
-            PositionsTotal()));
+            PositionsTotal(),
+            g_positionState.hasPosition ? "ACTIVE" : "IDLE"));
       lastStatsTime = now;
    }
 }

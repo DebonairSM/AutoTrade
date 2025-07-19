@@ -1,3 +1,7 @@
+param(
+    [string]$EaName = "V-2-EA-Main"
+)
+
 function Wait-ForBuildComplete {
     param(
         [string]$FilePath,
@@ -128,5 +132,5 @@ function Build-EA {
     }
 }
 
-# Call the function with default parameters
-Build-EA
+# Call the function with the provided parameter
+Build-EA -EaName $EaName

@@ -5,11 +5,7 @@
 #define VOLUME_SPIKE_MULTIPLIER      2.0
 #define VOLUME_LOOKBACK_BARS         20
 #define VOLUME_STRENGTH_MAX_BONUS    0.15
-#define VOLUME_MIN_RATIO_BREAKOUT    1.5
-#define VOLUME_CONSISTENCY_THRESHOLD 0.3
-#define VOLUME_EXPANSION_THRESHOLD   0.2
-#define VOLUME_PRE_BREAKOUT_BARS     10
-#define VOLUME_RETEST_MIN_RATIO      0.5
+
 
 #define MIN_LOG_INTERVAL_SECONDS     60
 #define MIN_CHART_UPDATE_SECONDS     5
@@ -18,15 +14,12 @@
 #define MIN_ALERT_INTERVAL_SECONDS   120
 
 #include <Trade\Trade.mqh>
-#include <VErrorDesc.mqh>
 #include "V-2-EA-MarketData.mqh"
 #include "V-2-EA-Utils.mqh"
 #include "V-2-EA-US500Data.mqh"
 #include "V-2-EA-ForexData.mqh"
 
 #define DEFAULT_BUFFER_SIZE 100
-#define DEFAULT_DEBUG_INTERVAL 300
-#define ERR_OBJECT_DOES_NOT_EXIST 4202
 
 struct SStrategyState
 {
@@ -41,41 +34,7 @@ struct SStrategyState
     }
 };
 
-struct SLevelPerformance
-{
-    int successfulBounces;
-    int falseBreaks;
-    int trueBreaks;
-    double avgBounceSize;
-    double successRate;
-    
-    void Reset()
-    {
-        successfulBounces = 0;
-        falseBreaks = 0;
-        trueBreaks = 0;
-        avgBounceSize = 0;
-        successRate = 0;
-    }
-};
 
-struct SSystemHealth
-{
-    int missedOpportunities;
-    int falseSignals;
-    double detectionRate;
-    double noiseRatio;
-    datetime lastUpdate;
-    
-    void Reset()
-    {
-        missedOpportunities = 0;
-        falseSignals = 0;
-        detectionRate = 0;
-        noiseRatio = 0;
-        lastUpdate = 0;
-    }
-};
 
 struct SChartLine
 {
@@ -84,7 +43,6 @@ struct SChartLine
     datetime lastUpdate;
     color lineColor;
     bool isActive;
-    string labelName;
 };
 
 struct STouchQuality 
@@ -188,8 +146,6 @@ private:
     {
         if(!CV2EAUtils::SafeResizeArray(m_currentKeyLevels, DEFAULT_BUFFER_SIZE, context + " - m_currentKeyLevels") ||
            !CV2EAUtils::SafeResizeArray(m_chartLines, DEFAULT_BUFFER_SIZE, context + " - m_chartLines") ||
-           !CV2EAUtils::SafeResizeArray(m_recentBreaks, DEFAULT_BUFFER_SIZE, context + " - m_recentBreaks") ||
-           !CV2EAUtils::SafeResizeArray(m_recentBreakTimes, DEFAULT_BUFFER_SIZE, context + " - m_recentBreakTimes") ||
            !CV2EAUtils::SafeResizeArray(m_lastAlerts, DEFAULT_BUFFER_SIZE, context + " - m_lastAlerts"))
         {
             return false;
@@ -206,37 +162,17 @@ private:
     
     struct SHourlyStats
     {
-        int totalSwingHighs;
-        int totalSwingLows;
-        int nearExistingLevels;
-        int lowTouchCount;
-        int lowStrength;
         int validLevels;
-        double strongestLevel;
-        double strongestStrength;
-        int strongestTouches;
-        bool isStrongestResistance;
+        int rejectedLevels;
         
         void Reset()
         {
-            totalSwingHighs = 0;
-            totalSwingLows = 0;
-            nearExistingLevels = 0;
-            lowTouchCount = 0;
-            lowStrength = 0;
             validLevels = 0;
-            strongestLevel = 0;
-            strongestStrength = 0;
-            strongestTouches = 0;
-            isStrongestResistance = false;
+            rejectedLevels = 0;
         }
     } m_hourlyStats;
 
-    SLevelPerformance m_levelPerformance;
-    SSystemHealth m_systemHealth;
-    double m_recentBreaks[];
-    datetime m_recentBreakTimes[];
-    int m_recentBreakCount;
+
 
     struct SAlertTime
     {
@@ -317,10 +253,6 @@ public:
         
         ResetUS500DataStatics();
         ResetForexDataStatics();
-        
-        datetime futureTime = TimeCurrent() + 3600;
-        MqlDateTime dt;
-        TimeToStruct(futureTime, dt);
         
         ArrayFree(m_currentKeyLevels);
         ArrayFree(m_lastAlerts);
@@ -403,7 +335,7 @@ public:
         }
         
         m_keyLevelCount = 0;
-        m_recentBreakCount = 0;
+
         m_state.Reset();
         m_lastChartUpdate = 0;
         
@@ -581,91 +513,9 @@ public:
     
     //--- Simple chart update logic - removed overly complex throttling
     
-    // Helper method to update system health metrics
-    void UpdateSystemHealth(bool validDetection, bool falseSignal)
-    {
-        static int totalDetections = 0;
-        totalDetections++;
-        
-        if(validDetection)
-            m_systemHealth.detectionRate = (m_systemHealth.detectionRate * (totalDetections - 1) + 1.0) / totalDetections;
-        
-        if(falseSignal)
-        {
-            m_systemHealth.falseSignals++;
-            m_systemHealth.noiseRatio = (double)m_systemHealth.falseSignals / totalDetections;
-        }
-    }
+
     
-    // Helper method to track level breaks
-    void AddLevelBreak(double price, bool isFalseBreak = false)
-    {
-        if(isFalseBreak)
-        {
-            m_levelPerformance.falseBreaks++;
-        }
-        else
-        {
-            m_levelPerformance.trueBreaks++;
-            
-            // Add to recent breaks array
-            if(m_recentBreakCount >= ArraySize(m_recentBreaks))
-            {
-                ArrayResize(m_recentBreaks, m_recentBreakCount + 10);
-                ArrayResize(m_recentBreakTimes, m_recentBreakCount + 10);
-            }
-            
-            m_recentBreaks[m_recentBreakCount] = price;
-            m_recentBreakTimes[m_recentBreakCount] = TimeCurrent();
-            m_recentBreakCount++;
-        }
-        
-        // Update success rate
-        int totalTests = m_levelPerformance.successfulBounces + 
-                        m_levelPerformance.falseBreaks + 
-                        m_levelPerformance.trueBreaks;
-        
-        if(totalTests > 0)
-            m_levelPerformance.successRate = (double)m_levelPerformance.successfulBounces / totalTests;
-    }
-    
-    void PrintHourlySummary()
-    {
-        string timeStr = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES);
-        
-        CV2EAUtils::DebugPrint(StringFormat(
-            "\n📊 HOURLY LEVEL DETECTION REPORT - %s 📊\n" +
-            "================================================\n" +
-            "SUMMARY STATISTICS:\n" +
-            "🔍 Total Analysis:\n" +
-            "   ↗️ Swing Highs: %d\n" +
-            "   ↘️ Swing Lows: %d\n" +
-            "   🎯 Near Existing: %d\n" +
-            "\n" +
-            "LEVEL QUALITY:\n" +
-            "   ❌ Low Touch Count: %d\n" +
-            "   ❌ Low Strength: %d\n" +
-            "   ✅ Valid Levels: %d\n" +
-            "\n" +
-            "STRONGEST LEVEL:\n" +
-            "   📍 Price: %.5f\n" +
-            "   💪 Strength: %.4f\n" +
-            "   👆 Touches: %d\n" +
-            "   📈 Type: %s\n" +
-            "================================================\n",
-            timeStr,
-            m_hourlyStats.totalSwingHighs,
-            m_hourlyStats.totalSwingLows,
-            m_hourlyStats.nearExistingLevels,
-            m_hourlyStats.lowTouchCount,
-            m_hourlyStats.lowStrength,
-            m_hourlyStats.validLevels,
-            m_hourlyStats.strongestLevel,
-            m_hourlyStats.strongestStrength,
-            m_hourlyStats.strongestTouches,
-            m_hourlyStats.isStrongestResistance ? "RESISTANCE 🔴" : "SUPPORT 🟢"
-        ));
-    }
+
     
     //--- Key Level Methods
     bool FindKeyLevels(SKeyLevel &outStrongestLevel)
@@ -692,9 +542,6 @@ public:
         // Get available bars for the current timeframe
         long availableBars = SeriesInfoInteger(_Symbol, Period(), SERIES_BARS_COUNT);
         
-        // Add debug output for bars availability (throttled)
-        ThrottledDebugPrint(StringFormat("Available bars for %s: %d", EnumToString(Period()), availableBars));
-        
         // Adjust minimum bars requirement based on timeframe
         int minRequiredBars;
         switch(Period())
@@ -706,10 +553,6 @@ public:
         }
         
         long barsToUse = MathMin((long)m_lookbackPeriod, availableBars - 5); // Leave room for swing detection
-        
-        // Add debug output for bars calculation (throttled)
-        ThrottledDebugPrint(StringFormat("Bars to use for %s: %d (minimum required: %d)", 
-            EnumToString(Period()), barsToUse, minRequiredBars));
         
         if(barsToUse < minRequiredBars)
         {
@@ -730,9 +573,7 @@ public:
             return false;
         }
         
-        // Add debug output for data copy success (throttled)
-        ThrottledDebugPrint(StringFormat("Successfully copied data for %s timeframe. Processing %d bars for key levels", 
-            EnumToString(Period()), barsToUse));
+
         
         // Reset key levels array
         m_keyLevelCount = 0;
@@ -760,7 +601,6 @@ public:
         {
             if(IsSwingHigh(highPrices, i))
             {
-                m_hourlyStats.totalSwingHighs++;
                 double level = highPrices[i];
                 
                 if(!IsNearExistingLevel(level))
@@ -775,7 +615,7 @@ public:
                     
                     if(newLevel.touchCount < m_minTouches)
                     {
-                        m_hourlyStats.lowTouchCount++;
+                        m_hourlyStats.rejectedLevels++;
                         continue;
                     }
                     
@@ -788,23 +628,6 @@ public:
                         newLevel.strength = MathMin(newLevel.strength * (1.0 + volumeBonus), 0.98);
                         newLevel.volumeConfirmed = true;
                         newLevel.volumeRatio = (double)volumes[i] / GetAverageVolume(volumes, i, 20);
-                        
-                        if(m_showDebugPrints)
-                        {
-                            CV2EAUtils::LogInfo(StringFormat(
-                                "Volume bonus applied to %s level %.5f:\n" +
-                                "Original strength: %.4f\n" +
-                                "Volume bonus: +%.1f%%\n" +
-                                "Volume ratio: %.2fx\n" +
-                                "Final strength: %.4f",
-                                newLevel.isResistance ? "resistance" : "support",
-                                level,
-                                newLevel.strength / (1.0 + volumeBonus),
-                                volumeBonus * 100,
-                                newLevel.volumeRatio,
-                                newLevel.strength
-                            ));
-                        }
                     }
                     else
                     {
@@ -819,12 +642,12 @@ public:
                     }
                     else
                     {
-                        m_hourlyStats.lowStrength++;
+                        m_hourlyStats.rejectedLevels++;
                     }
                 }
                 else
                 {
-                    m_hourlyStats.nearExistingLevels++;
+                    m_hourlyStats.rejectedLevels++;
                 }
             }
         }
@@ -834,7 +657,6 @@ public:
         {
             if(IsSwingLow(lowPrices, i))
             {
-                m_hourlyStats.totalSwingLows++;
                 double level = lowPrices[i];
                 
                 if(!IsNearExistingLevel(level))
@@ -849,7 +671,7 @@ public:
                     
                     if(newLevel.touchCount < m_minTouches)
                     {
-                        m_hourlyStats.lowTouchCount++;
+                        m_hourlyStats.rejectedLevels++;
                         continue;
                     }
                     
@@ -862,23 +684,6 @@ public:
                         newLevel.strength = MathMin(newLevel.strength * (1.0 + volumeBonus), 0.98);
                         newLevel.volumeConfirmed = true;
                         newLevel.volumeRatio = (double)volumes[i] / GetAverageVolume(volumes, i, 20);
-                        
-                        if(m_showDebugPrints)
-                        {
-                            CV2EAUtils::LogInfo(StringFormat(
-                                "Volume bonus applied to %s level %.5f:\n" +
-                                "Original strength: %.4f\n" +
-                                "Volume bonus: +%.1f%%\n" +
-                                "Volume ratio: %.2fx\n" +
-                                "Final strength: %.4f",
-                                newLevel.isResistance ? "resistance" : "support",
-                                level,
-                                newLevel.strength / (1.0 + volumeBonus),
-                                volumeBonus * 100,
-                                newLevel.volumeRatio,
-                                newLevel.strength
-                            ));
-                        }
                     }
                     else
                     {
@@ -893,12 +698,12 @@ public:
                     }
                     else
                     {
-                        m_hourlyStats.lowStrength++;
+                        m_hourlyStats.rejectedLevels++;
                     }
                 }
                 else
                 {
-                    m_hourlyStats.nearExistingLevels++;
+                    m_hourlyStats.rejectedLevels++;
                 }
             }
         }
@@ -934,28 +739,7 @@ public:
         return false;
     }
 
-    //--- Add to public methods section
-    void ClearChartObjects()
-    {
-        // Clear all existing chart lines
-        for(int i = 0; i < ArraySize(m_chartLines); i++)
-        {
-            if(!ObjectDelete(0, m_chartLines[i].name))
-            {
-                CV2EAUtils::LogError(StringFormat("Failed to delete line %s", m_chartLines[i].name));
-            }
-        }
-        
-        // Reset chart lines array
-        ArrayResize(m_chartLines, 0);
-        m_lastChartUpdate = 0;
-        
-        // Force chart redraw
-        ChartRedraw(0);
-        
-        if(m_showDebugPrints)
-            CV2EAUtils::LogInfo("Cleared all chart objects");
-    }
+
 
     // Test-specific methods
     bool TEST_GetKeyLevel(int index, SKeyLevel &level) const
@@ -1036,7 +820,7 @@ public:
                 
                 // Process strategy using the copied data
                 SKeyLevel strongestLevel;
-                ProcessStrategyOnData(high, low, close, volume, time, strongestLevel);
+                FindKeyLevels(strongestLevel);
                 
                 // Update chart lines after processing each timeframe
                 m_lastChartUpdate = 0; // Force update
@@ -2062,39 +1846,22 @@ private:
             }
         }
         
-        // Print Recent Breaks if any (limit to last 3)
-        if(m_recentBreakCount > 0)
-        {
-            CV2EAUtils::DebugPrint("\nRECENT BREAKS:");
-            for(int i = MathMax(0, m_recentBreakCount - 3); i < m_recentBreakCount; i++)
-            {
-                CV2EAUtils::DebugPrint(StringFormat("%.5f @ %s",
-                    m_recentBreaks[i],
-                    TimeToString(m_recentBreakTimes[i], TIME_MINUTES)));
-            }
-        }
+
     }
     
     void PrintSystemHealthReport()
     {
         if(!m_showDebugPrints) return;
-        if(m_systemHealth.lastUpdate == 0) return;
         
-        datetime currentTime = TimeCurrent();
-        if(currentTime - m_systemHealth.lastUpdate < 3600) return; // Only update hourly
-        
+        // Basic system health info
         CV2EAUtils::LogInfo(StringFormat(
             "\n=== SYSTEM HEALTH REPORT ===\n" +
-            "Detection Rate: %.1f%%\n" +
-            "Noise Ratio: %.1f%%\n" +
-            "Missed Opportunities: %d\n" +
-            "False Signals: %d",
-            m_systemHealth.detectionRate * 100,
-            m_systemHealth.noiseRatio * 100,
-            m_systemHealth.missedOpportunities,
-            m_systemHealth.falseSignals));
-            
-        m_systemHealth.lastUpdate = currentTime;
+            "Key Levels Found: %d\n" +
+            "Last Update: %s\n" +
+            "Chart Objects: %d",
+            m_keyLevelCount,
+            m_lastKeyLevelUpdate > 0 ? TimeToString(m_lastKeyLevelUpdate, TIME_DATE|TIME_MINUTES) : "Never",
+            ArraySize(m_chartLines)));
     }
     
     void PrintTradeSetupAlert(const SKeyLevel &level, double distance)
@@ -2122,22 +1889,19 @@ private:
         datetime currentTime = TimeCurrent();
         if(found && currentTime - lastAlertTime < 300) return;
         
-        // Only alert if level has some proven success
-        if(m_levelPerformance.successRate < 0.30) return;
+        // Alert for any valid level
         
         CV2EAUtils::LogInfo(StringFormat(
             "\n🔔 TRADE SETUP ALERT\n" +
             "Price approaching %s @ %.5f\n" +
             "Distance: %.1f pips\n" +
             "Level Strength: %.2f\n" +
-            "Previous Touches: %d\n" +
-            "Success Rate: %.1f%%",
+            "Previous Touches: %d",
             level.isResistance ? "resistance" : "support",
             level.price,
             distance / _Point,
             level.strength,
-            level.touchCount,
-            m_levelPerformance.successRate * 100));
+            level.touchCount));
         
         // Update last alert time
         if(!found)
@@ -2169,15 +1933,15 @@ private:
         
         CV2EAUtils::LogInfo(StringFormat("🔄 UpdateChartLines: Starting update for %d key levels", m_keyLevelCount));
         
-        // 1. Clear objects with proper timing to avoid race conditions
+        // Clear existing objects
         int deletedCount = ObjectsDeleteAll(chart_id, "KL_");
         if(deletedCount > 0)
         {
             CV2EAUtils::LogInfo(StringFormat("🗑️ Deleted %d existing chart objects", deletedCount));
-            Sleep(200);  // Critical: Allow deletion to complete before creating new objects
+            Sleep(200);
         }
         
-        // 2. Reset internal tracking
+        // Reset internal tracking
         ArrayFree(m_chartLines);
         ArrayResize(m_chartLines, 0);
         
@@ -2189,15 +1953,12 @@ private:
         }
         
         int successCount = 0;
-        
-        // 3. Create objects with proper validation and error handling
         for(int i = 0; i < m_keyLevelCount; i++)
         {
-            // Remove timeframe from name to avoid switching issues
             string lineName = StringFormat("KL_%s_%.5f_%d", 
                 m_currentKeyLevels[i].isResistance ? "R" : "S",
                 m_currentKeyLevels[i].price,
-                currentTime);  // Use timestamp to ensure uniqueness
+                currentTime);
                     
             // Determine if this is above or below current price
             bool isAbovePrice = m_currentKeyLevels[i].price > currentPrice;
@@ -2207,23 +1968,21 @@ private:
             ENUM_LINE_STYLE lineStyle = STYLE_SOLID;
             int lineWidth;
             
-            // Strong levels (>= 0.85) - Bright colors
+            // Set line properties based on strength
             if(m_currentKeyLevels[i].strength >= 0.85) {
-                lineColor = isAbovePrice ? clrRed : clrLime;  // Bright red/green
+                lineColor = isAbovePrice ? clrRed : clrLime;
                 lineWidth = 3;
             }
-            // Medium levels (>= 0.70)
             else if(m_currentKeyLevels[i].strength >= 0.70) {
-                lineColor = isAbovePrice ? clrOrange : clrAqua;  // Orange/aqua
+                lineColor = isAbovePrice ? clrOrange : clrAqua;
                 lineWidth = 2;
             }
-            // Weak levels (< 0.70)
             else {
-                lineColor = isAbovePrice ? clrPink : clrYellow;  // Pink/yellow
+                lineColor = isAbovePrice ? clrPink : clrYellow;
                 lineWidth = 1;
             }
             
-            // 4. Create object with proper MQL5 pattern
+            // Create chart object
             if(!ObjectCreate(chart_id, lineName, OBJ_HLINE, 0, 0, m_currentKeyLevels[i].price))
             {
                 int error = GetLastError();
@@ -2235,7 +1994,7 @@ private:
                 continue;
             }
             
-            // 5. Validate each property setting with comprehensive error checking
+            // Set object properties
             bool propertySuccess = true;
             string failedProperty = "";
             
@@ -2288,7 +2047,7 @@ private:
                 continue;
             }
             
-            // 6. Set tooltip with error checking
+            // Set tooltip
             string tooltip = StringFormat("%s Level: %.5f\nStrength: %.2f\nTouches: %d\nDistance: %d pips", 
                 isAbovePrice ? "Resistance" : "Support",
                 m_currentKeyLevels[i].price,
@@ -2299,10 +2058,9 @@ private:
             if(!ObjectSetString(chart_id, lineName, OBJPROP_TOOLTIP, tooltip))
             {
                 CV2EAUtils::LogError(StringFormat("⚠️ Tooltip setting failed for %s", lineName));
-                // Don't delete object for tooltip failure - line is still visible
             }
             
-            // 7. Add to tracking array only if object creation was successful
+            // Add to tracking array
             int size = ArraySize(m_chartLines);
             ArrayResize(m_chartLines, size + 1);
             
@@ -2320,13 +2078,11 @@ private:
                 m_currentKeyLevels[i].strength, lineWidth));
         }
         
-        // 8. Force chart redraw with proper timing
-        Sleep(100);  // Allow object creation to complete
-        ChartRedraw(chart_id);  // ChartRedraw returns void
+        // Force chart redraw
+        Sleep(100);
+        ChartRedraw(chart_id);
         
         m_lastChartUpdate = currentTime;
-        
-        // 9. Comprehensive completion report
         CV2EAUtils::LogInfo(StringFormat("✅ Chart update complete: %d/%d lines created successfully", 
             successCount, m_keyLevelCount));
             
@@ -2336,7 +2092,6 @@ private:
                 successCount, m_keyLevelCount));
         }
         
-        // 10. Verify objects actually exist on chart
         VerifyChartObjects(chart_id);
     }
     
@@ -2480,565 +2235,5 @@ public:
         return true;
     }
 
-    bool DoesVolumeMeetRequirement(const long &volumes[], const int lookback)
-    {
-        if(!m_useVolumeFilter || lookback <= 0) 
-            return true;
-            
-        // Calculate pre-breakout volume metrics
-        double preBreakoutAvg = 0;
-        int preBreakoutBars = MathMin(VOLUME_PRE_BREAKOUT_BARS, ArraySize(volumes) - lookback);
-        
-        for(int i = lookback; i < lookback + preBreakoutBars; i++)
-            preBreakoutAvg += (double)volumes[i];  // Explicit cast
-        preBreakoutAvg /= preBreakoutBars;
-        
-        // Calculate breakout volume metrics
-        double avgVolume = 0;
-        double maxVolume = (double)volumes[0];  // Explicit cast
-        double minVolume = (double)volumes[0];  // Explicit cast
-        double volumeSum = 0;
-        
-        for(int i = 0; i < lookback; i++)
-        {
-            double currentVolume = (double)volumes[i];  // Explicit cast
-            avgVolume += currentVolume;
-            maxVolume = MathMax(maxVolume, currentVolume);
-            minVolume = MathMin(minVolume, currentVolume);
-            volumeSum += currentVolume;
-        }
-        avgVolume /= lookback;
-        
-        // Calculate volume increase ratio compared to pre-breakout
-        double volumeRatio = avgVolume / preBreakoutAvg;
-        
-        // Volume validation checks
-        bool hasVolumeSpike = preBreakoutAvg > 0 && 
-                              volumes[0] > preBreakoutAvg * VOLUME_MIN_RATIO_BREAKOUT;
-        bool hasConsistentVolume = minVolume > preBreakoutAvg * VOLUME_CONSISTENCY_THRESHOLD;
-        
-        // Check if volume is expanding
-        double volumeMA = volumeSum / lookback;
-        int volumeExpansionCount = 0;
-        
-        for(int i = 0; i < lookback-1; i++)
-        {
-            if(volumes[i] > volumeMA)
-                volumeExpansionCount++;
-        }
-        
-        bool hasExpandingVolume = (double)volumeExpansionCount / lookback >= VOLUME_EXPANSION_THRESHOLD;
-        
-        if(m_showDebugPrints)
-        {
-            CV2EAUtils::LogInfo(StringFormat(
-                "Volume Analysis:\n" +
-                "Pre-breakout Avg: %.2f\n" +
-                "Breakout Avg: %.2f\n" +
-                "Volume Ratio: %.2fx\n" +
-                "Volume Spike: %s\n" +
-                "Volume Consistent: %s\n" +
-                "Volume Expanding: %s",
-                preBreakoutAvg,
-                avgVolume,
-                volumeRatio,
-                hasVolumeSpike ? "Yes" : "No",
-                hasConsistentVolume ? "Yes" : "No",
-                hasExpandingVolume ? "Yes" : "No"
-            ));
-        }
-        
-        return (hasVolumeSpike && hasExpandingVolume) && hasConsistentVolume;
-    }
 
-    bool ValidateRetest(const double &prices[], const long &volumes[], const datetime &times[], int bars)
-    {
-        if(bars < 2) return false;
-        
-        // Calculate average volume during retest
-        double avgVolume = 0;
-        for(int i = 0; i < bars; i++)
-            avgVolume += (double)volumes[i];
-        avgVolume /= bars;
-        
-        // Get pre-retest volume average
-        double preRetestAvg = 0;
-        int preRetestBars = MathMin(VOLUME_PRE_BREAKOUT_BARS, ArraySize(volumes) - bars);
-        
-        for(int i = bars; i < bars + preRetestBars; i++)
-            preRetestAvg += (double)volumes[i];
-        preRetestAvg /= preRetestBars;
-        
-        // Volume should be at least VOLUME_RETEST_MIN_RATIO of pre-retest average
-        bool hasValidVolume = avgVolume >= preRetestAvg * VOLUME_RETEST_MIN_RATIO;
-        
-        if(m_showDebugPrints)
-        {
-            CV2EAUtils::LogInfo(StringFormat(
-                "Retest Volume Analysis:\n" +
-                "Retest Avg Volume: %.2f\n" +
-                "Pre-retest Avg: %.2f\n" +
-                "Volume Ratio: %.2fx\n" +
-                "Volume Valid: %s",
-                avgVolume,
-                preRetestAvg,
-                avgVolume / preRetestAvg,
-                hasValidVolume ? "Yes" : "No"
-            ));
-        }
-        
-        return hasValidVolume;
-    }
-
-    bool FindKeyLevelsOnData(const double &highs[], const double &lows[], const double &closes[],
-                            const long &volumes[], const datetime &times[], SKeyLevel &outStrongestLevel)
-    {
-        if(!m_initialized)
-        {
-            CV2EAUtils::LogError("Strategy not initialized");
-            return false;
-        }
-        
-        // Validate array sizes
-        int highSize = ArraySize(highs);
-        int lowSize = ArraySize(lows);
-        int closeSize = ArraySize(closes);
-        int volumeSize = ArraySize(volumes);
-        int timeSize = ArraySize(times);
-        
-        // Get required lookback based on timeframe
-        int requiredBars = m_lookbackPeriod;  // Default to configured value
-        ENUM_TIMEFRAMES tf = Period();
-        
-        // Adjust lookback based on instrument type and timeframe
-        if(CV2EAUtils::IsUS500()) {
-            switch(tf) {
-                case PERIOD_MN1: requiredBars = 12; break;  // 1 year
-                case PERIOD_W1:  requiredBars = 52; break;  // 1 year
-                case PERIOD_D1:  requiredBars = 90; break;  // ~3 months
-                case PERIOD_H4:  requiredBars = 180; break; // ~30 days
-                case PERIOD_H1:  requiredBars = 168; break; // 1 week
-                default:         requiredBars = m_lookbackPeriod;
-            }
-        }
-        else if(CV2EAUtils::IsForexPair()) {
-            switch(tf) {
-                case PERIOD_MN1: requiredBars = 12; break;  // 1 year
-                case PERIOD_W1:  requiredBars = 52; break;  // 1 year
-                case PERIOD_D1:  requiredBars = 90; break;  // ~3 months
-                case PERIOD_H4:  requiredBars = 180; break; // ~30 days
-                case PERIOD_H1:  requiredBars = 168; break; // 1 week
-                default:         requiredBars = m_lookbackPeriod;
-            }
-        }
-        
-        // All arrays should have the same size and be large enough
-        if(highSize < requiredBars || lowSize < requiredBars || 
-           closeSize < requiredBars || volumeSize < requiredBars || 
-           timeSize < requiredBars)
-        {
-            CV2EAUtils::LogError(StringFormat(
-                "[%s] Insufficient data for analysis. Need %d bars, got High:%d Low:%d Close:%d Volume:%d Time:%d",
-                TimeToString(TimeCurrent()), requiredBars, highSize, lowSize, closeSize, volumeSize, timeSize
-            ));
-            return false;
-        }
-        
-        // Reset key levels array
-        m_keyLevelCount = 0;
-        
-        // Get current hour for stats tracking
-        datetime currentTime = TimeCurrent();
-        MqlDateTime dt;
-        TimeToStruct(currentTime, dt);
-        datetime currentHour = currentTime - dt.min * 60 - dt.sec;
-        
-        static datetime lastStatReset = 0;
-        
-        // Check if we need to reset hourly stats
-        if(lastStatReset < currentHour)
-        {
-            // Reset hourly stats structure
-            m_hourlyStats.Reset();
-            lastStatReset = currentHour;
-            
-            CV2EAUtils::LogInfo("Reset hourly stats for new hour");
-        }
-        
-        // Use the minimum size for iteration to prevent out of bounds access
-        int maxBars = MathMin(MathMin(MathMin(highSize, lowSize), 
-                            MathMin(closeSize, volumeSize)), timeSize);
-        int barsToProcess = MathMin(requiredBars, maxBars - 4);  // Leave room for swing detection
-        
-        if(m_showDebugPrints)
-        {
-            CV2EAUtils::LogInfo(StringFormat(
-                "Processing %d bars out of %d available",
-                barsToProcess, maxBars
-            ));
-        }
-        
-        // Find swing highs (resistance levels)
-        for(int i = 2; i < barsToProcess - 2; i++)
-        {
-            if(IsSwingHigh(highs, i))
-            {
-                m_hourlyStats.totalSwingHighs++;
-                double level = highs[i];
-                
-                if(!IsNearExistingLevel(level))
-                {
-                    SKeyLevel newLevel;
-                    newLevel.price = level;
-                    newLevel.isResistance = true;
-                    newLevel.firstTouch = times[i];
-                    newLevel.lastTouch = times[i];
-                    STouchQuality quality;
-                    newLevel.touchCount = CountTouches(level, true, highs, lows, times, quality);
-                    
-                    if(newLevel.touchCount < m_minTouches)
-                    {
-                        m_hourlyStats.lowTouchCount++;
-                        continue;
-                    }
-                    
-                    newLevel.strength = CalculateLevelStrength(newLevel, quality);
-                    
-                    // Add volume strength bonus if there's a volume spike
-                    double volumeBonus = GetVolumeStrengthBonus(volumes, i);
-                    if(volumeBonus > 0)
-                    {
-                        newLevel.strength = MathMin(newLevel.strength * (1.0 + volumeBonus), 0.98);
-                        newLevel.volumeConfirmed = true;
-                        newLevel.volumeRatio = (double)volumes[i] / GetAverageVolume(volumes, i, 20);
-                    }
-                    else
-                    {
-                        newLevel.volumeConfirmed = false;
-                        newLevel.volumeRatio = 1.0;
-                    }
-                    
-                    if(newLevel.strength >= m_minStrength)
-                    {
-                        AddKeyLevel(newLevel);
-                        m_hourlyStats.validLevels++;
-                    }
-                    else
-                    {
-                        m_hourlyStats.lowStrength++;
-                    }
-                }
-                else
-                {
-                    m_hourlyStats.nearExistingLevels++;
-                }
-            }
-        }
-        
-        // Find swing lows (support levels)
-        for(int i = 2; i < barsToProcess - 2; i++)
-        {
-            if(IsSwingLow(lows, i))
-            {
-                m_hourlyStats.totalSwingLows++;
-                double level = lows[i];
-                
-                if(!IsNearExistingLevel(level))
-                {
-                    SKeyLevel newLevel;
-                    newLevel.price = level;
-                    newLevel.isResistance = false;
-                    newLevel.firstTouch = times[i];
-                    newLevel.lastTouch = times[i];
-                    STouchQuality quality;
-                    newLevel.touchCount = CountTouches(level, false, highs, lows, times, quality);
-                    
-                    if(newLevel.touchCount < m_minTouches)
-                    {
-                        m_hourlyStats.lowTouchCount++;
-                        continue;
-                    }
-                    
-                    newLevel.strength = CalculateLevelStrength(newLevel, quality);
-                    
-                    // Add volume strength bonus if there's a volume spike
-                    double volumeBonus = GetVolumeStrengthBonus(volumes, i);
-                    if(volumeBonus > 0)
-                    {
-                        newLevel.strength = MathMin(newLevel.strength * (1.0 + volumeBonus), 0.98);
-                        newLevel.volumeConfirmed = true;
-                        newLevel.volumeRatio = (double)volumes[i] / GetAverageVolume(volumes, i, 20);
-                    }
-                    else
-                    {
-                        newLevel.volumeConfirmed = false;
-                        newLevel.volumeRatio = 1.0;
-                    }
-                    
-                    if(newLevel.strength >= m_minStrength)
-                    {
-                        AddKeyLevel(newLevel);
-                        m_hourlyStats.validLevels++;
-                    }
-                    else
-                    {
-                        m_hourlyStats.lowStrength++;
-                    }
-                }
-                else
-                {
-                    m_hourlyStats.nearExistingLevels++;
-                }
-            }
-        }
-        
-        // Find strongest level
-        if(m_keyLevelCount > 0)
-        {
-            int strongestIdx = 0;
-            double maxStrength = m_currentKeyLevels[0].strength;
-            
-            for(int i = 1; i < m_keyLevelCount; i++)
-            {
-                if(m_currentKeyLevels[i].strength > maxStrength)
-                {
-                    maxStrength = m_currentKeyLevels[i].strength;
-                    strongestIdx = i;
-                }
-            }
-            
-            outStrongestLevel = m_currentKeyLevels[strongestIdx];
-            m_lastKeyLevelUpdate = TimeCurrent();
-            
-            return true;
-        }
-        
-        return false;
-    }
-
-    bool ProcessStrategyOnData(const double &highs[], const double &lows[], const double &closes[], 
-                             const long &volumes[], const datetime &times[], SKeyLevel &outStrongestLevel)
-    {
-        if(!m_initialized)
-        {
-            CV2EAUtils::LogError("Strategy not initialized");
-            return false;
-        }
-        
-        // Validate array sizes
-        int highSize = ArraySize(highs);
-        int lowSize = ArraySize(lows);
-        int closeSize = ArraySize(closes);
-        int volumeSize = ArraySize(volumes);
-        int timeSize = ArraySize(times);
-        
-        // Get required lookback based on timeframe
-        int requiredBars = m_lookbackPeriod;  // Default to configured value
-        ENUM_TIMEFRAMES tf = Period();
-        
-        // Adjust lookback based on instrument type and timeframe
-        if(CV2EAUtils::IsUS500()) {
-            switch(tf) {
-                case PERIOD_MN1: requiredBars = 12; break;  // 1 year
-                case PERIOD_W1:  requiredBars = 52; break;  // 1 year
-                case PERIOD_D1:  requiredBars = 90; break;  // ~3 months
-                case PERIOD_H4:  requiredBars = 180; break; // ~30 days
-                case PERIOD_H1:  requiredBars = 168; break; // 1 week
-                default:         requiredBars = m_lookbackPeriod;
-            }
-        }
-        else if(CV2EAUtils::IsForexPair()) {
-            switch(tf) {
-                case PERIOD_MN1: requiredBars = 12; break;  // 1 year
-                case PERIOD_W1:  requiredBars = 52; break;  // 1 year
-                case PERIOD_D1:  requiredBars = 90; break;  // ~3 months
-                case PERIOD_H4:  requiredBars = 180; break; // ~30 days
-                case PERIOD_H1:  requiredBars = 168; break; // 1 week
-                default:         requiredBars = m_lookbackPeriod;
-            }
-        }
-        
-        // All arrays should have the same size and be large enough
-        if(highSize < requiredBars || lowSize < requiredBars || 
-           closeSize < requiredBars || volumeSize < requiredBars || 
-           timeSize < requiredBars)
-        {
-            CV2EAUtils::LogError(StringFormat(
-                "[%s] Insufficient data for analysis. Need %d bars, got High:%d Low:%d Close:%d Volume:%d Time:%d",
-                TimeToString(TimeCurrent()), requiredBars, highSize, lowSize, closeSize, volumeSize, timeSize
-            ));
-            return false;
-        }
-        
-        // Reset key levels array
-        m_keyLevelCount = 0;
-        
-        // Get current hour for stats tracking
-        datetime currentTime = TimeCurrent();
-        MqlDateTime dt;
-        TimeToStruct(currentTime, dt);
-        datetime currentHour = currentTime - dt.min * 60 - dt.sec;
-        
-        static datetime lastStatReset = 0;
-        
-        // Check if we need to reset hourly stats
-        if(lastStatReset < currentHour)
-        {
-            // Reset hourly stats structure
-            m_hourlyStats.Reset();
-            lastStatReset = currentHour;
-            
-            CV2EAUtils::LogInfo("Reset hourly stats for new hour");
-        }
-        
-        // Use the minimum size for iteration to prevent out of bounds access
-        int maxBars = MathMin(MathMin(MathMin(highSize, lowSize), 
-                            MathMin(closeSize, volumeSize)), timeSize);
-        int barsToProcess = MathMin(requiredBars, maxBars - 4);  // Leave room for swing detection
-        
-        if(m_showDebugPrints)
-        {
-            CV2EAUtils::LogInfo(StringFormat(
-                "Processing %d bars out of %d available",
-                barsToProcess, maxBars
-            ));
-        }
-        
-        // Find swing highs (resistance levels)
-        for(int i = 2; i < barsToProcess - 2; i++)
-        {
-            if(IsSwingHigh(highs, i))
-            {
-                m_hourlyStats.totalSwingHighs++;
-                double level = highs[i];
-                
-                if(!IsNearExistingLevel(level))
-                {
-                    SKeyLevel newLevel;
-                    newLevel.price = level;
-                    newLevel.isResistance = true;
-                    newLevel.firstTouch = times[i];
-                    newLevel.lastTouch = times[i];
-                    STouchQuality quality;
-                    newLevel.touchCount = CountTouches(level, true, highs, lows, times, quality);
-                    
-                    if(newLevel.touchCount < m_minTouches)
-                    {
-                        m_hourlyStats.lowTouchCount++;
-                        continue;
-                    }
-                    
-                    newLevel.strength = CalculateLevelStrength(newLevel, quality);
-                    
-                    // Add volume strength bonus if there's a volume spike
-                    double volumeBonus = GetVolumeStrengthBonus(volumes, i);
-                    if(volumeBonus > 0)
-                    {
-                        newLevel.strength = MathMin(newLevel.strength * (1.0 + volumeBonus), 0.98);
-                        newLevel.volumeConfirmed = true;
-                        newLevel.volumeRatio = (double)volumes[i] / GetAverageVolume(volumes, i, 20);
-                    }
-                    else
-                    {
-                        newLevel.volumeConfirmed = false;
-                        newLevel.volumeRatio = 1.0;
-                    }
-                    
-                    if(newLevel.strength >= m_minStrength)
-                    {
-                        AddKeyLevel(newLevel);
-                        m_hourlyStats.validLevels++;
-                    }
-                    else
-                    {
-                        m_hourlyStats.lowStrength++;
-                    }
-                }
-                else
-                {
-                    m_hourlyStats.nearExistingLevels++;
-                }
-            }
-        }
-        
-        // Find swing lows (support levels)
-        for(int i = 2; i < barsToProcess - 2; i++)
-        {
-            if(IsSwingLow(lows, i))
-            {
-                m_hourlyStats.totalSwingLows++;
-                double level = lows[i];
-                
-                if(!IsNearExistingLevel(level))
-                {
-                    SKeyLevel newLevel;
-                    newLevel.price = level;
-                    newLevel.isResistance = false;
-                    newLevel.firstTouch = times[i];
-                    newLevel.lastTouch = times[i];
-                    STouchQuality quality;
-                    newLevel.touchCount = CountTouches(level, false, highs, lows, times, quality);
-                    
-                    if(newLevel.touchCount < m_minTouches)
-                    {
-                        m_hourlyStats.lowTouchCount++;
-                        continue;
-                    }
-                    
-                    newLevel.strength = CalculateLevelStrength(newLevel, quality);
-                    
-                    // Add volume strength bonus if there's a volume spike
-                    double volumeBonus = GetVolumeStrengthBonus(volumes, i);
-                    if(volumeBonus > 0)
-                    {
-                        newLevel.strength = MathMin(newLevel.strength * (1.0 + volumeBonus), 0.98);
-                        newLevel.volumeConfirmed = true;
-                        newLevel.volumeRatio = (double)volumes[i] / GetAverageVolume(volumes, i, 20);
-                    }
-                    else
-                    {
-                        newLevel.volumeConfirmed = false;
-                        newLevel.volumeRatio = 1.0;
-                    }
-                    
-                    if(newLevel.strength >= m_minStrength)
-                    {
-                        AddKeyLevel(newLevel);
-                        m_hourlyStats.validLevels++;
-                    }
-                    else
-                    {
-                        m_hourlyStats.lowStrength++;
-                    }
-                }
-                else
-                {
-                    m_hourlyStats.nearExistingLevels++;
-                }
-            }
-        }
-        
-        // Find strongest level
-        if(m_keyLevelCount > 0)
-        {
-            int strongestIdx = 0;
-            double maxStrength = m_currentKeyLevels[0].strength;
-            
-            for(int i = 1; i < m_keyLevelCount; i++)
-            {
-                if(m_currentKeyLevels[i].strength > maxStrength)
-                {
-                    maxStrength = m_currentKeyLevels[i].strength;
-                    strongestIdx = i;
-                }
-            }
-            
-            outStrongestLevel = m_currentKeyLevels[strongestIdx];
-            m_lastKeyLevelUpdate = TimeCurrent();
-            
-            return true;
-        }
-        
-        return false;
-    }
 }; 
