@@ -9,7 +9,9 @@
 
 #include "V-2-EA-BreakoutsStrategy.mqh"
 #include <Trade\Trade.mqh>
+#include <Trade\DealInfo.mqh>
 #include "V-2-EA-Utils.mqh"
+#include "V-2-EA-PerformanceLogger.mqh"
 
 // Version tracking
 #define EA_VERSION "1.0.4"
@@ -47,6 +49,7 @@ input double RetestPipsThreshold = 15;     // Pips threshold for retest zone
 
 //--- Global Variables
 CV2EABreakoutsStrategy g_strategy;
+CV2EAPerformanceLogger* g_performanceLogger = NULL;
 datetime g_lastBarTime = 0;
 string g_requiredStrategyVersion = "1.0.4";
 
@@ -126,6 +129,37 @@ int OnInit()
         return INIT_FAILED;
     }
     
+    // Initialize performance logger
+    // Pattern from: Professional backtesting analysis framework
+    // Reference: MQL5 Expert Advisor initialization patterns
+    SOptimizationParameters params;
+    params.lookbackPeriod = LookbackPeriod;
+    params.minStrength = MinStrength;
+    params.touchZone = TouchZone;
+    params.minTouches = MinTouches;
+    params.riskPercentage = RiskPercentage;
+    params.atrMultiplierSL = ATRMultiplierSL;
+    params.atrMultiplierTP = ATRMultiplierTP;
+    params.useVolumeFilter = UseVolumeFilter;
+    params.useRetest = UseRetest;
+    params.breakoutLookback = BreakoutLookback;
+    params.minStrengthThreshold = MinStrengthThreshold;
+    params.retestATRMultiplier = RetestATRMultiplier;
+    params.retestPipsThreshold = RetestPipsThreshold;
+    params.optimizationStart = TimeCurrent();
+    params.optimizationEnd = 0; // Will be set on deinit
+    params.symbol = _Symbol;
+    params.timeframe = Period();
+    
+    g_performanceLogger = new CV2EAPerformanceLogger();
+    if(!g_performanceLogger.Initialize(_Symbol, Period(), params))
+    {
+        Print("❌ Failed to initialize performance logger");
+        delete g_performanceLogger;
+        g_performanceLogger = NULL;
+        return INIT_FAILED;
+    }
+    
     // Store initial state
     g_lastBarTime = 0; // Will be set on first tick or timer
     
@@ -134,6 +168,7 @@ int OnInit()
     Print(StringFormat("⚙️ Breakouts Component: Market Hours Ignored = %s", !EnforceMarketHours ? "YES" : "NO"));
     Print(StringFormat("⚙️ CRITICAL: CurrentTimeframeOnly = %s", CurrentTimeframeOnly ? "TRUE" : "FALSE"));
     Print(StringFormat("⚙️ TRADING: Enabled = %s, Risk = %.1f%%, Magic = %d", EnableTrading ? "YES" : "NO", RiskPercentage, MagicNumber));
+    Print("📊 PERFORMANCE LOGGING: Enabled with comprehensive tracking");
     
     // Print timeframe info
     Print(StringFormat("Initializing EA on %s timeframe", EnumToString(Period())));
@@ -174,6 +209,24 @@ void OnDeinit(const int reason)
     // Clean up ATR indicator handle
     if(g_handleATR != INVALID_HANDLE)
         IndicatorRelease(g_handleATR);
+    
+    // Clean up performance logger and generate final reports
+    // Pattern from: MQL5 Expert Advisor cleanup patterns
+    // Reference: Professional backtesting cleanup procedures
+    if(g_performanceLogger != NULL)
+    {
+        if(ShowDebugPrints)
+            Print("📊 Generating final performance report...");
+        
+        g_performanceLogger.PrintPerformanceSummary();
+        g_performanceLogger.LogOptimizationResult();
+        
+        delete g_performanceLogger;
+        g_performanceLogger = NULL;
+        
+        if(ShowDebugPrints)
+            Print("✅ Performance logger cleaned up successfully");
+    }
     
     // Strategy object will clean up its own chart objects through destructor
     if(ShowDebugPrints)
@@ -269,6 +322,31 @@ void OnTick()
         g_strategy.GetReport(report);
         if(report.isValid && ShowDebugPrints)
             PrintKeyLevelReport(report);
+            
+        // Update performance tracking on new bars
+        // Pattern from: Professional performance tracking systems
+        // Reference: Daily performance analysis for backtesting
+        if(g_performanceLogger != NULL)
+        {
+            // Update balance tracking
+            double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+            g_performanceLogger.UpdateBalance(currentBalance);
+            
+            // Check if it's a new day for daily reporting
+            static int lastDay = 0;
+            MqlDateTime dt;
+            TimeToStruct(TimeCurrent(), dt);
+            
+            if(dt.day != lastDay && lastDay != 0)
+            {
+                g_performanceLogger.LogDailyUpdate();
+                lastDay = dt.day;
+            }
+            else if(lastDay == 0)
+            {
+                lastDay = dt.day; // Initialize on first run
+            }
+        }
     }
     
     // TRADING LOGIC - Only if trading is enabled
@@ -292,6 +370,85 @@ void OnTick()
     } else {
         if(ShowDebugPrints && isNewBar)
             Print("⚠️ Trading is DISABLED - EnableTrading = false");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Trade transaction event handler                                    |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction& trans,
+                       const MqlTradeRequest& request,
+                       const MqlTradeResult& result)
+{
+    // Pattern from: MQL5 Expert Advisor trade event handling
+    // Reference: MetaTrader 5 trade transaction documentation
+    
+    // Only process deals (actual trade executions)
+    if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
+    {
+        // Check if this is our trade
+        if(trans.symbol == _Symbol)
+        {
+            CDealInfo dealInfo;
+            if(dealInfo.SelectByIndex(HistoryDealsTotal() - 1))
+            {
+                // Check if it's our magic number
+                if(dealInfo.Magic() == MagicNumber)
+                {
+                    ENUM_DEAL_TYPE dealType = dealInfo.DealType();
+                    
+                    // Process position closing deals (OUT deals)
+                    if(dealType == DEAL_TYPE_SELL || dealType == DEAL_TYPE_BUY)
+                    {
+                        // Check if this is a closing deal by looking at position ID
+                        if(dealInfo.PositionId() > 0)
+                        {
+                            // Get deal details
+                            double closePrice = dealInfo.Price();
+                            double profit = dealInfo.Profit();
+                            double commission = dealInfo.Commission();
+                            double swap = dealInfo.Swap();
+                            datetime closeTime = dealInfo.Time();
+                            
+                            // Determine exit reason based on deal comment
+                            string exitReason = "UNKNOWN";
+                            string comment = dealInfo.Comment();
+                            
+                            if(StringFind(comment, "tp") >= 0 || StringFind(comment, "take profit") >= 0)
+                                exitReason = "TP";
+                            else if(StringFind(comment, "sl") >= 0 || StringFind(comment, "stop loss") >= 0)
+                                exitReason = "SL";
+                            else if(StringFind(comment, "so") >= 0 || StringFind(comment, "stop out") >= 0)
+                                exitReason = "STOPOUT";
+                            else
+                                exitReason = "MANUAL";
+                            
+                            // Log trade closure
+                            if(g_performanceLogger != NULL)
+                            {
+                                g_performanceLogger.LogTradeClose(
+                                    closeTime,
+                                    closePrice,
+                                    profit,
+                                    commission,
+                                    swap,
+                                    exitReason
+                                );
+                                
+                                if(ShowDebugPrints)
+                                {
+                                    Print(StringFormat("📊 Trade closed: P/L=%.2f, Exit=%s, Commission=%.2f, Swap=%.2f", 
+                                          profit, exitReason, commission, swap));
+                                }
+                            }
+                            
+                            // Update position state
+                            g_hasPositionOpen = false;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -425,6 +582,27 @@ void ManageOpenPositions()
             double takeProfit = PositionGetDouble(POSITION_TP);
             ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
             
+            // Update trade performance tracking
+            // Pattern from: Professional trade tracking systems
+            // Reference: MFE/MAE analysis for trade optimization
+            if(g_performanceLogger != NULL)
+            {
+                double mfe = 0, mae = 0;
+                
+                if(posType == POSITION_TYPE_BUY)
+                {
+                    mfe = MathMax(0, currentPrice - openPrice);
+                    mae = MathMax(0, openPrice - currentPrice);
+                }
+                else
+                {
+                    mfe = MathMax(0, openPrice - currentPrice);
+                    mae = MathMax(0, currentPrice - openPrice);
+                }
+                
+                g_performanceLogger.LogTradeUpdate(currentPrice, mfe, mae);
+            }
+            
             // Check for breakeven (move SL to entry after price moves favorably)
             if(stopLoss != 0 && takeProfit != 0) {
                 double risk = MathAbs(openPrice - stopLoss);
@@ -521,6 +699,21 @@ bool DetectBreakoutAndInitRetest()
     // Check ATR distance
     bool atrOK = IsATRDistanceMet(lastClose, levelPrice);
     
+    // Log filter results to performance logger
+    // Pattern from: Professional trading system analysis
+    // Reference: Filter effectiveness tracking for optimization
+    if(g_performanceLogger != NULL && (bullishBreak || bearishBreak))
+    {
+        g_performanceLogger.LogVolumeFilterResult(volumeOK);
+        g_performanceLogger.LogATRFilterResult(atrOK);
+        
+        // Log failed breakout attempts (breakout signal but filters failed)
+        if(!volumeOK || !atrOK)
+        {
+            g_performanceLogger.LogBreakoutAttempt(levelPrice, false);
+        }
+    }
+    
     // Use established CV2EAUtils throttled logging pattern (only for valid trades)
     if((bullishBreak || bearishBreak) && atrOK && volumeOK) {
         // Only log valid breakouts that meet ALL criteria (following CV2EAUtils pattern)
@@ -592,8 +785,24 @@ void CheckRetestConditions()
         if(ShowDebugPrints)
             Print(StringFormat("✅ Retest confirmed at %.5f", currentPrice));
         
+        // Log successful retest
+        // Pattern from: Professional retest analysis
+        // Reference: Retest effectiveness tracking for strategy optimization
+        if(g_performanceLogger != NULL)
+        {
+            g_performanceLogger.LogRetestAttempt(retestZone, true);
+        }
+        
         ExecuteBreakoutTrade(g_breakoutState.isBullish, g_breakoutState.breakoutLevel);
         g_breakoutState.awaitingRetest = false;
+    }
+    else if(priceInZone)
+    {
+        // Price is in zone but retest validation failed - log failed retest
+        if(g_performanceLogger != NULL)
+        {
+            g_performanceLogger.LogRetestAttempt(retestZone, false);
+        }
     }
 }
 
@@ -686,6 +895,54 @@ bool ExecuteBreakoutTrade(bool isBullish, double breakoutLevel)
         if(resultCode == TRADE_RETCODE_DONE || resultCode == TRADE_RETCODE_PLACED || resultCode == TRADE_RETCODE_DONE_PARTIAL) {
             g_lastTradeTime = currentTime;
             g_hasPositionOpen = true;
+            
+            // Log trade opening to performance logger
+            // Pattern from: Professional trade tracking systems
+            // Reference: MetaTrader 5 trade execution documentation
+            if(g_performanceLogger != NULL)
+            {
+                // Get volume data for logging
+                long volumes[];
+                ArraySetAsSeries(volumes, true);
+                if(CopyTickVolume(_Symbol, Period(), 0, 1, volumes) > 0)
+                {
+                    g_performanceLogger.LogTradeOpen(
+                        currentTime, 
+                        trade.ResultPrice(), 
+                        lotSize,
+                        isBullish ? "BUY" : "SELL",
+                        slPrice, 
+                        tpPrice,
+                        breakoutLevel, 
+                        g_breakoutState.awaitingRetest, 
+                        atrValue, 
+                        volumes[0]
+                    );
+                }
+                else
+                {
+                    // Fallback without volume data
+                    g_performanceLogger.LogTradeOpen(
+                        currentTime, 
+                        trade.ResultPrice(), 
+                        lotSize,
+                        isBullish ? "BUY" : "SELL",
+                        slPrice, 
+                        tpPrice,
+                        breakoutLevel, 
+                        g_breakoutState.awaitingRetest, 
+                        atrValue, 
+                        0
+                    );
+                }
+                
+                // Log breakout attempt
+                g_performanceLogger.LogBreakoutAttempt(breakoutLevel, true);
+                
+                // Log filter results
+                g_performanceLogger.LogVolumeFilterResult(true); // Trade was executed, so filters passed
+                g_performanceLogger.LogATRFilterResult(true);
+            }
             
             if(ShowDebugPrints) {
                 Print(StringFormat("✅ TRADE EXECUTED SUCCESSFULLY:\n" +
