@@ -1,7 +1,3 @@
-//+------------------------------------------------------------------+
-//|                                           V-2-EA-ForexData.mqh   |
-//|                   Forex-Specific Configuration Parameters        |
-//+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
 #property link      "https://vsol-systems.com"
 #property version   "1.00"
@@ -13,9 +9,6 @@
 #include "V-2-EA-MarketData.mqh"
 #include "V-2-EA-Utils.mqh"
 
-//+------------------------------------------------------------------+
-//| Forex Configuration Class                                        |
-//+------------------------------------------------------------------+
 class CV2EAForexData : public CV2EAMarketDataBase
 {
 private:
@@ -33,17 +26,15 @@ private:
     static bool   m_initialized;
 
 public:
-    //--- Reset static variables for deterministic behavior
     static void Reset()
     {
-        m_initialized = false;  // Force reinitialization
+        m_initialized = false;
         m_lastSpread = 0;
         m_lastSpreadUpdate = 0;
         m_pipValue = 0;
         m_pipDigits = 0;
         m_maxAllowedSpread = 0;
         
-        // Clear all arrays to force reinitialization
         ArrayFree(m_forexTouchZones);
         ArrayFree(m_forexBounceMinSizes);
         ArrayFree(m_forexMinTouches);
@@ -69,12 +60,10 @@ public:
     }
 
 public:
-    //--- Initialization ---
     static void Initialize()
     {
         if(m_initialized) return;
         
-        // Initialize arrays with proper indices
         ArrayResize(m_forexTouchZones, 9);
         ArrayResize(m_forexBounceMinSizes, 9);
         ArrayResize(m_forexMinTouches, 9);
@@ -82,7 +71,6 @@ public:
         ArrayResize(m_forexLookbacks, 9);
         ArrayResize(m_forexMaxBounceDelays, 9);
 
-        // Use GetTimeframeIndex() for proper array indexing
         m_forexTouchZones[GetTimeframeIndex(PERIOD_MN1)] = 200.0;
         m_forexTouchZones[GetTimeframeIndex(PERIOD_W1)]  = 100.0;
         m_forexTouchZones[GetTimeframeIndex(PERIOD_D1)]  = 60.0;
@@ -93,7 +81,6 @@ public:
         m_forexTouchZones[GetTimeframeIndex(PERIOD_M5)]  = 3.0;
         m_forexTouchZones[GetTimeframeIndex(PERIOD_M1)]  = 2.0;
 
-        // Minimum bounce sizes (pips)
         m_forexBounceMinSizes[GetTimeframeIndex(PERIOD_MN1)] = 200.0;
         m_forexBounceMinSizes[GetTimeframeIndex(PERIOD_W1)]  = 150.0;
         m_forexBounceMinSizes[GetTimeframeIndex(PERIOD_D1)]  = 100.0;
@@ -104,7 +91,6 @@ public:
         m_forexBounceMinSizes[GetTimeframeIndex(PERIOD_M5)]  = 7.0;
         m_forexBounceMinSizes[GetTimeframeIndex(PERIOD_M1)]  = 5.0;
 
-        // Minimum touches
         m_forexMinTouches[GetTimeframeIndex(PERIOD_MN1)] = 2;
         m_forexMinTouches[GetTimeframeIndex(PERIOD_W1)]  = 2;
         m_forexMinTouches[GetTimeframeIndex(PERIOD_D1)]  = 3;
@@ -115,7 +101,6 @@ public:
         m_forexMinTouches[GetTimeframeIndex(PERIOD_M5)]  = 5;
         m_forexMinTouches[GetTimeframeIndex(PERIOD_M1)]  = 5;
 
-        // Minimum strength thresholds
         m_forexMinStrengths[GetTimeframeIndex(PERIOD_MN1)] = 0.50;
         m_forexMinStrengths[GetTimeframeIndex(PERIOD_W1)]  = 0.55;
         m_forexMinStrengths[GetTimeframeIndex(PERIOD_D1)]  = 0.60;
@@ -155,7 +140,6 @@ public:
         m_initialized = true;
     }
 
-    //--- Timeframe Bonus ---
     static double GetTimeframeBonus(ENUM_TIMEFRAMES tf)
     {
         if(!m_initialized) Initialize();
@@ -174,7 +158,6 @@ public:
         }
     }
 
-    //--- Getters ---
     static double GetTouchZone(ENUM_TIMEFRAMES tf) 
     {
         if(!m_initialized) Initialize();
@@ -197,7 +180,6 @@ public:
     }
 };
 
-// Initialize static members
 double CV2EAForexData::m_forexTouchZones[];
 double CV2EAForexData::m_forexBounceMinSizes[];
 int    CV2EAForexData::m_forexMinTouches[];
@@ -211,9 +193,6 @@ double CV2EAForexData::m_pipValue = 0.0;
 int    CV2EAForexData::m_pipDigits = 0;
 bool   CV2EAForexData::m_initialized = false;
 
-//+------------------------------------------------------------------+
-//| Global reset function for Forex data statics                     |
-//+------------------------------------------------------------------+
 void ResetForexDataStatics()
 {
     CV2EAForexData::Reset();

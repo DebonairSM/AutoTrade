@@ -1,36 +1,26 @@
-//+------------------------------------------------------------------+
-//|                                              V-2-EA-Breakouts.mqh |
-//|                                    Key Level Detection Implementation|
-//+------------------------------------------------------------------+
 #property copyright "VSol Trading Systems"
 #property link      "https://vsol-systems.com"
 #property version   "1.04"
 
+#define VOLUME_SPIKE_MULTIPLIER      2.0
+#define VOLUME_LOOKBACK_BARS         20
+#define VOLUME_STRENGTH_MAX_BONUS    0.15
+#define VOLUME_MIN_RATIO_BREAKOUT    1.5
+#define VOLUME_CONSISTENCY_THRESHOLD 0.3
+#define VOLUME_EXPANSION_THRESHOLD   0.2
+#define VOLUME_PRE_BREAKOUT_BARS     10
+#define VOLUME_RETEST_MIN_RATIO      0.5
 
-
-//--- Volume Analysis Constants
-#define VOLUME_SPIKE_MULTIPLIER      2.0    // Minimum ratio for volume spike detection (current/average)
-#define VOLUME_LOOKBACK_BARS         20     // Number of bars for volume average calculation
-#define VOLUME_STRENGTH_MAX_BONUS    0.15   // Maximum strength bonus from volume (15%)
-#define VOLUME_MIN_RATIO_BREAKOUT    1.5    // Minimum volume ratio required for breakout confirmation
-#define VOLUME_CONSISTENCY_THRESHOLD  0.3    // Minimum ratio of volume to average for consistency check
-#define VOLUME_EXPANSION_THRESHOLD   0.2    // Minimum ratio of bars with expanding volume
-#define VOLUME_PRE_BREAKOUT_BARS     10     // Bars to analyze before breakout
-#define VOLUME_RETEST_MIN_RATIO      0.5    // Minimum volume ratio for retest validation
-
-//--- Logging and Update Throttling Constants
-#define MIN_LOG_INTERVAL_SECONDS     60     // Minimum 1 minute between similar log messages
-#define MIN_CHART_UPDATE_SECONDS     5      // Minimum 5 seconds between chart updates
-#define MIN_HEALTH_REPORT_SECONDS    1800   // Minimum 30 minutes between health reports
-#define MIN_LEVEL_REPORT_SECONDS     300    // Minimum 5 minutes between level reports
-#define MIN_ALERT_INTERVAL_SECONDS   120    // Minimum 2 minutes between trade alerts
-
-
+#define MIN_LOG_INTERVAL_SECONDS     60
+#define MIN_CHART_UPDATE_SECONDS     5
+#define MIN_HEALTH_REPORT_SECONDS    1800
+#define MIN_LEVEL_REPORT_SECONDS     300
+#define MIN_ALERT_INTERVAL_SECONDS   120
 
 #include <Trade\Trade.mqh>
-#include <VErrorDesc.mqh>  // Add this include for error descriptions
-#include "V-2-EA-MarketData.mqh"  // Add this include for market data functions
-#include "V-2-EA-Utils.mqh"  // Add this include for utilities
+#include <VErrorDesc.mqh>
+#include "V-2-EA-MarketData.mqh"
+#include "V-2-EA-Utils.mqh"
 #include "V-2-EA-US500Data.mqh"
 #include "V-2-EA-ForexData.mqh"
 
@@ -214,7 +204,6 @@ private:
     SStrategyState m_state;
     bool            m_initialized;
     
-    //--- Hourly statistics
     struct SHourlyStats
     {
         int totalSwingHighs;
@@ -407,9 +396,6 @@ public:
             m_lookbackPeriod = lookbackPeriod;
         }
         
-        // Already set above with GetOptimalTouchZone()
-        
-        // Reinitialize arrays
         if(!InitializeArrays("Init"))
         {
             ThrottledLogError("Failed to initialize arrays in Init");
@@ -421,7 +407,6 @@ public:
         m_state.Reset();
         m_lastChartUpdate = 0;
         
-        // Reset logging throttle
         m_logThrottle.Reset();
         
         // Validate symbol point value with error handling
