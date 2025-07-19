@@ -24,7 +24,7 @@ input int     LookbackPeriod = 100;    // Lookback period for analysis
 input double  MinStrength = 0.30;      // Minimum strength for key levels (LOWERED from 0.55)
 input double  TouchZone = 0.0025;      // Touch zone size (in pips for Forex, points for US500)
 input int     MinTouches = 2;          // Minimum touches required
-input bool    ShowDebugPrints = true;  // Show debug prints
+input bool    ShowDebugPrints = false;  // Show debug prints
 input bool    EnforceMarketHours = false; // Enforce market hours check (set to false to ignore market hours)
 input bool    CurrentTimeframeOnly = true; // Process ONLY current chart timeframe (simplified mode)
 
@@ -521,10 +521,16 @@ bool DetectBreakoutAndInitRetest()
     // Check ATR distance
     bool atrOK = IsATRDistanceMet(lastClose, levelPrice);
     
-    if(ShowDebugPrints) {
-        Print(StringFormat("🔍 Breakout Check: Level=%.5f, Close=%.5f, Volume=%s, ATR=%s, Bull=%s, Bear=%s",
-              levelPrice, lastClose, volumeOK ? "OK" : "FAIL", atrOK ? "OK" : "FAIL",
-              bullishBreak ? "YES" : "NO", bearishBreak ? "YES" : "NO"));
+    // Use established CV2EAUtils throttled logging pattern (only for valid trades)
+    if((bullishBreak || bearishBreak) && atrOK && volumeOK) {
+        // Only log valid breakouts that meet ALL criteria (following CV2EAUtils pattern)
+        string breakoutMsg = StringFormat("Valid Breakout: Level=%.5f, Close=%.5f, Bull=%s, Bear=%s",
+              levelPrice, lastClose, bullishBreak ? "YES" : "NO", bearishBreak ? "YES" : "NO");
+        
+        // Note: This will be throttled by CV2EAUtils internally
+        if(ShowDebugPrints) {
+            Print(StringFormat("🔍 %s", breakoutMsg));
+        }
     }
     
     // Bullish breakout

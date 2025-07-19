@@ -123,8 +123,10 @@ public:
         
         InitializeTimeframes();
         
-        Print(StringFormat("🔧 DEBUG: m_currentTimeframeOnly = %s", m_currentTimeframeOnly ? "TRUE" : "FALSE"));
-        Print(StringFormat("🔧 DEBUG: Period() = %s", EnumToString(Period())));
+        if(m_showDebugPrints) {
+            Print(StringFormat("🔧 DEBUG: m_currentTimeframeOnly = %s", m_currentTimeframeOnly ? "TRUE" : "FALSE"));
+            Print(StringFormat("🔧 DEBUG: Period() = %s", EnumToString(Period())));
+        }
         if(m_currentTimeframeOnly) 
         {
             Print("📊 Strategy: SIMPLIFIED MODE - Processing current timeframe only: ", EnumToString(Period()));
@@ -238,6 +240,7 @@ public:
     { 
         if(m_breakouts != NULL) 
         {
+            if(m_showDebugPrints)
             Print("🔧 Strategy: Forcing chart line update...");
             m_breakouts.ForceChartUpdate();
         } 
@@ -251,6 +254,7 @@ public:
     { 
         if(m_breakouts != NULL) 
         {
+            if(m_showDebugPrints)
             Print("🔧 Strategy: Running diagnostic check...");
             m_breakouts.DiagnoseChartIssues();
         } 
@@ -263,13 +267,15 @@ public:
 private:
     void InitializeTimeframes(void)
     {
-        Print(StringFormat("🔧 DEBUG: InitializeTimeframes called, m_currentTimeframeOnly = %s", m_currentTimeframeOnly ? "TRUE" : "FALSE"));
+        if(m_showDebugPrints)
+            Print(StringFormat("🔧 DEBUG: InitializeTimeframes called, m_currentTimeframeOnly = %s", m_currentTimeframeOnly ? "TRUE" : "FALSE"));
         
         if(m_currentTimeframeOnly) 
         {
             ArrayResize(m_timeframes, 1);
             m_timeframes[0] = Period();
-            Print(StringFormat("🔧 DEBUG: SIMPLIFIED MODE - Array size set to %d, timeframe = %s", ArraySize(m_timeframes), EnumToString(m_timeframes[0])));
+            if(m_showDebugPrints)
+                Print(StringFormat("🔧 DEBUG: SIMPLIFIED MODE - Array size set to %d, timeframe = %s", ArraySize(m_timeframes), EnumToString(m_timeframes[0])));
         } 
         else 
         {
@@ -281,7 +287,8 @@ private:
             
             ArrayResize(m_timeframes, ArraySize(tf));
             ArrayCopy(m_timeframes, tf);
-            Print(StringFormat("🔧 DEBUG: MULTI-TIMEFRAME MODE - Array size set to %d timeframes", ArraySize(m_timeframes)));
+            if(m_showDebugPrints)
+                Print(StringFormat("🔧 DEBUG: MULTI-TIMEFRAME MODE - Array size set to %d timeframes", ArraySize(m_timeframes)));
         }
     }
     
@@ -296,10 +303,13 @@ private:
         m_report.symbol = _Symbol;
         m_report.reportTime = currentTime;
         
-        Print(StringFormat("🔧 DEBUG: UpdateReport processing %d timeframes", ArraySize(m_timeframes)));
+        // Only show debug info if explicitly enabled
+        if(m_showDebugPrints)
+            Print(StringFormat("🔧 DEBUG: UpdateReport processing %d timeframes", ArraySize(m_timeframes)));
         for(int i = 0; i < ArraySize(m_timeframes); i++) 
         {
-            Print(StringFormat("🔧 DEBUG: Processing timeframe %d: %s", i, EnumToString(m_timeframes[i])));
+            if(m_showDebugPrints)
+                Print(StringFormat("🔧 DEBUG: Processing timeframe %d: %s", i, EnumToString(m_timeframes[i])));
             ProcessTimeframe(m_timeframes[i]);
         }
         
