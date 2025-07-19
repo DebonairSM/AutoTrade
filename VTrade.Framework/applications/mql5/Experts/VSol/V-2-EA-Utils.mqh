@@ -62,6 +62,29 @@ public:
         Print(StringFormat("[%s] %s ❌ %s", timestamp, priceStr, message));
     }
     
+    //--- File Naming Utilities
+    static string GenerateUniqueTimestamp()
+    {
+        datetime currentTime = TimeCurrent();
+        ulong microseconds = GetMicrosecondCount();
+        MqlDateTime dt;
+        TimeToStruct(currentTime, dt);
+        
+        // Format: YYYYMMDD_HHMMSS_microseconds
+        return StringFormat("%04d%02d%02d_%02d%02d%02d_%06d", 
+            dt.year, dt.mon, dt.day,
+            dt.hour, dt.min, dt.sec,
+            (int)(microseconds % 1000000)); // Last 6 digits for uniqueness
+    }
+    
+    static string CreateUniqueLogFilename(string baseName, string extension = "txt", string symbol = "", string timeframe = "")
+    {
+        string timestamp = GenerateUniqueTimestamp();
+        string symbolPart = (symbol != "") ? ("_" + symbol) : "";
+        string timeframePart = (timeframe != "") ? ("_" + timeframe) : "";
+        return baseName + symbolPart + timeframePart + "_" + timestamp + "." + extension;
+    }
+    
     static void LogWarning(string message, bool showPrice = true)
     {
         string timestamp = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS);

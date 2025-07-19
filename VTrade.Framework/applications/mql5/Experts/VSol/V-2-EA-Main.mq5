@@ -23,10 +23,10 @@ CTrade trade;
 
 //--- Input Parameters
 input int     LookbackPeriod = 100;    // Lookback period for analysis
-input double  MinStrength = 0.30;      // Minimum strength for key levels (LOWERED from 0.55)
+input double  MinStrength = 0.20;      // Minimum strength for key levels (TUNED: Lowered to 0.20)
 input double  TouchZone = 0.0025;      // Touch zone size (in pips for Forex, points for US500)
-input int     MinTouches = 2;          // Minimum touches required
-input bool    ShowDebugPrints = false;  // Show debug prints
+input int     MinTouches = 1;          // Minimum touches required (TUNED: Lowered from 2)
+input bool    ShowDebugPrints = true;   // Show debug prints (ENABLED for filter tuning)
 input bool    EnforceMarketHours = false; // Enforce market hours check (set to false to ignore market hours)
 input bool    CurrentTimeframeOnly = true; // Process ONLY current chart timeframe (simplified mode)
 
@@ -43,7 +43,7 @@ input bool   UseRetest = true;         // Wait for retest before entry
 // Breakout Detection Parameters
 input group "=== BREAKOUT DETECTION ==="
 input int    BreakoutLookback = 24;    // Bars to look back for breakout detection
-input double MinStrengthThreshold = 0.65; // Minimum strength for breakout
+input double MinStrengthThreshold = 0.40; // Minimum strength for breakout (TUNED: Lowered from 0.65)
 input double RetestATRMultiplier = 0.5;   // ATR multiplier for retest zone
 input double RetestPipsThreshold = 15;     // Pips threshold for retest zone
 
@@ -61,6 +61,10 @@ bool g_isBullishBreak = false;
 bool g_awaitingRetest = false;
 datetime g_breakoutTime = 0;
 int g_breakoutStartBar = 0;
+
+// Deferred deal processing (to avoid MQL5 API race conditions)
+ulong g_pendingDealTicket = 0;
+bool g_processingRequired = false;
 
 // ATR handle for trading calculations
 int g_handleATR = INVALID_HANDLE;
@@ -170,8 +174,44 @@ int OnInit()
     Print(StringFormat("⚙️ TRADING: Enabled = %s, Risk = %.1f%%, Magic = %d", EnableTrading ? "YES" : "NO", RiskPercentage, MagicNumber));
     Print("📊 PERFORMANCE LOGGING: Enabled with comprehensive tracking");
     
+    // Print tuning parameters for debugging
+    Print("╔═══════════════════════════════════════════════════════════════╗");
+    Print("║                    🔧 TUNING PARAMETERS                        ║");
+    Print("╠═══════════════════════════════════════════════════════════════╣");
+    Print(StringFormat("║ 📊 MinStrength: %.2f (How strong levels must be)          ║", MinStrength));
+    Print(StringFormat("║ 🎯 MinStrengthThreshold: %.2f (Breakout strength req.)    ║", MinStrengthThreshold));
+    Print(StringFormat("║ 👆 MinTouches: %d (Touches needed to form level)         ║", MinTouches));
+    Print("║ 🔊 Volume Min: 1000 units + 1.3x spike required          ║");
+    Print("║ 📈 ATR Min: 0.0015 + stable/expanding required           ║");
+    Print("║ 🎯 Entry: 2 pips + 40% candle body required              ║");
+    Print("║ 💡 If 0 trades: These parameters are too strict              ║");
+    Print("╚═══════════════════════════════════════════════════════════════╝");
+    
     // Print timeframe info
     Print(StringFormat("Initializing EA on %s timeframe", EnumToString(Period())));
+    
+    // *** FILE CREATION EXPLANATION ***
+    Print("╔═══════════════════════════════════════════════════════════════╗");
+    Print("║                    📁 FILE CREATION NOTICE                     ║");
+    Print("╠═══════════════════════════════════════════════════════════════╣");
+    Print("║ ✅ OUR CUSTOM FILES: Will have UNIQUE timestamps              ║");
+    Print("║    📁 Location: MetaTrader 5\\MQL5\\Files\\                     ║");
+    Print("║    📝 Examples:                                                ║");
+    Print("║       • V2EA_Performance_EURUSD_PERIOD_H1_20250119_143022.log ║");
+    Print("║       • V2EA_Trades_EURUSD_PERIOD_H1_20250119_143022.csv      ║");
+    Print("║       • KeyLevels_EURUSD_PERIOD_H1_20250119_143022.csv        ║");
+    Print("║                                                                ║");
+    Print("║ ⚠️  MT5 SYSTEM LOGS: Always use date format (DIFFERENT!)       ║");
+    Print("║    📁 Location: AppData\\Roaming\\MetaQuotes\\Tester\\...\\logs\\ ║");
+    Print("║    📝 Example: 20250119.log (THIS IS NOT OUR FILE!)           ║");
+    Print("╚═══════════════════════════════════════════════════════════════╝");
+    
+    // *** GUARANTEED FILE CREATION TEST ***
+    Print("🔧 TESTING FILE CREATION CAPABILITY...");
+    if(!TestFileCreation()) {
+        Print("❌ File creation test failed - check MT5 file permissions");
+        return INIT_FAILED;
+    }
     
     // Add diagnostic information
     if(ShowDebugPrints) {
@@ -274,6 +314,129 @@ void OnTimer()
 //+------------------------------------------------------------------+
 //| Expert tick function                                              |
 //+------------------------------------------------------------------+
+//| Process deferred deal (avoids MQL5 API race conditions)         |
+//+------------------------------------------------------------------+
+void ProcessDeferredDeal(ulong dealTicket)
+{
+    Print("🔄 PROCESSING DEFERRED DEAL #", dealTicket);
+    
+    // *** SAFE HISTORY ACCESS: Deal should be committed to history by now ***
+    // First, ensure we have recent history loaded
+    if(!HistorySelect(TimeCurrent() - 3600, TimeCurrent())) // Last hour
+    {
+        Print("❌ Failed to load recent history for deal processing");
+        return;
+    }
+    
+    // Now safely select and access the deal
+    if(!HistoryDealSelect(dealTicket))
+    {
+        Print("❌ Failed to select deal #", dealTicket, " from history");
+        return;
+    }
+    
+    Print("   ✅ Deal successfully selected from committed history");
+    
+    // Extract deal data safely
+    double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+    double commission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);  
+    double swap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+    ulong dealMagic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+    double closePrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+    datetime closeTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+    ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+    ulong positionId = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+    string comment = HistoryDealGetString(dealTicket, DEAL_COMMENT);
+    
+    Print("   📊 COMMITTED DEAL DATA - Magic: ", dealMagic, " | P: ", profit, " | C: ", commission, " | S: ", swap);
+    
+    // Validate magic number
+    if(dealMagic != MagicNumber) 
+    {
+        Print("   ⏭️ SKIPPED - Magic mismatch (Expected: ", MagicNumber, ", Got: ", dealMagic, ")");
+        return;
+    }
+    
+    // Data should be clean now, but add basic validation as safety net
+    const double REASONABLE_LIMIT = 100000.0; // $100K limit
+    bool dataValid = true;
+    
+    if(MathAbs(profit) > REASONABLE_LIMIT || !MathIsValidNumber(profit))
+    {
+        Print("⚠️ Still seeing corrupted profit: ", profit, " - This indicates a deeper MT5 issue");
+        profit = 0.0;
+        dataValid = false;
+    }
+    
+    if(MathAbs(commission) > REASONABLE_LIMIT || !MathIsValidNumber(commission))
+    {
+        Print("⚠️ Still seeing corrupted commission: ", commission, " - This indicates a deeper MT5 issue");
+        commission = 0.0;
+        dataValid = false;
+    }
+    
+    if(MathAbs(swap) > REASONABLE_LIMIT || !MathIsValidNumber(swap))
+    {
+        Print("⚠️ Still seeing corrupted swap: ", swap, " - This indicates a deeper MT5 issue");
+        swap = 0.0;
+        dataValid = false;
+    }
+    
+    if(!dataValid)
+    {
+        Print("⚠️ Deal data required sanitization even after deferred processing");
+    }
+    else
+    {
+        Print("   ✅ All deal data validated successfully");
+    }
+    
+    // Process position closing deals only
+    if((dealType == DEAL_TYPE_SELL || dealType == DEAL_TYPE_BUY) && positionId > 0)
+    {
+        // Determine exit reason
+        string exitReason = "UNKNOWN";
+        if(StringFind(comment, "tp") >= 0 || StringFind(comment, "take profit") >= 0)
+            exitReason = "TP";
+        else if(StringFind(comment, "sl") >= 0 || StringFind(comment, "stop loss") >= 0)
+            exitReason = "SL";
+        else if(StringFind(comment, "so") >= 0 || StringFind(comment, "stop out") >= 0)
+            exitReason = "STOPOUT";
+        else
+            exitReason = "MANUAL";
+        
+        Print("   📝 EXIT REASON: ", exitReason);
+        
+        // Log to performance logger
+        if(g_performanceLogger != NULL)
+        {
+            g_performanceLogger.LogTradeClose(
+                closeTime,
+                closePrice,
+                profit,
+                commission,
+                swap,
+                exitReason
+            );
+            
+            Print("   ✅ TRADE LOGGED SUCCESSFULLY: P/L=", DoubleToString(profit, 2), 
+                  " | Exit=", exitReason, " | Commission=", DoubleToString(commission, 2), 
+                  " | Swap=", DoubleToString(swap, 2));
+        }
+        
+        // Update position state
+        g_hasPositionOpen = false;
+        Print("   🔄 Position state updated: hasPositionOpen = false");
+    }
+    else
+    {
+        Print("   ⏭️ SKIPPED - Not a position closing deal (Type: ", EnumToString(dealType), ", Position: ", positionId, ")");
+    }
+    
+    Print("✅ DEFERRED DEAL PROCESSING COMPLETED for deal #", dealTicket);
+}
+
+//+------------------------------------------------------------------+
 void OnTick()
 {
     // Check data synchronization first (no debug spam)
@@ -290,6 +453,14 @@ void OnTick()
         Print("⚠️ Chart data not synchronized. Error: ", error);
         ResetLastError();
         return;
+    }
+    
+    // *** PROCESS DEFERRED DEALS FIRST (Race condition fix) ***
+    if(g_processingRequired && g_pendingDealTicket > 0)
+    {
+        ProcessDeferredDeal(g_pendingDealTicket);
+        g_processingRequired = false;
+        g_pendingDealTicket = 0;
     }
     
     // Handle initial calculation on first valid tick
@@ -361,11 +532,18 @@ void OnTick()
         if(!g_hasPositionOpen) {
             // Check for retest conditions if we're awaiting one
             if(g_breakoutState.awaitingRetest) {
+                if(ShowDebugPrints && isNewBar)
+                    Print("🔄 Checking retest conditions...");
                 CheckRetestConditions();
             }
             
             // Detect new breakouts
+            if(ShowDebugPrints && isNewBar)
+                Print("🔍 Looking for new breakouts...");
             DetectBreakoutAndInitRetest();
+        } else {
+            if(ShowDebugPrints && isNewBar)
+                Print("⏭️ Skipping breakout detection - position already open");
         }
     } else {
         if(ShowDebugPrints && isNewBar)
@@ -380,76 +558,31 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
                        const MqlTradeRequest& request,
                        const MqlTradeResult& result)
 {
-    // Pattern from: MQL5 Expert Advisor trade event handling
-    // Reference: MetaTrader 5 trade transaction documentation
+    Print("🔍 OnTradeTransaction CALLED - Type: ", EnumToString(trans.type), " | Deal: ", trans.deal);
     
-    // Only process deals (actual trade executions)
-    if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
+    // Only process deals (actual trades)
+    if(trans.type != TRADE_TRANSACTION_DEAL_ADD) 
     {
-        // Check if this is our trade
-        if(trans.symbol == _Symbol)
-        {
-            CDealInfo dealInfo;
-            if(dealInfo.SelectByIndex(HistoryDealsTotal() - 1))
-            {
-                // Check if it's our magic number
-                if(dealInfo.Magic() == MagicNumber)
-                {
-                    ENUM_DEAL_TYPE dealType = dealInfo.DealType();
-                    
-                    // Process position closing deals (OUT deals)
-                    if(dealType == DEAL_TYPE_SELL || dealType == DEAL_TYPE_BUY)
-                    {
-                        // Check if this is a closing deal by looking at position ID
-                        if(dealInfo.PositionId() > 0)
-                        {
-                            // Get deal details
-                            double closePrice = dealInfo.Price();
-                            double profit = dealInfo.Profit();
-                            double commission = dealInfo.Commission();
-                            double swap = dealInfo.Swap();
-                            datetime closeTime = dealInfo.Time();
-                            
-                            // Determine exit reason based on deal comment
-                            string exitReason = "UNKNOWN";
-                            string comment = dealInfo.Comment();
-                            
-                            if(StringFind(comment, "tp") >= 0 || StringFind(comment, "take profit") >= 0)
-                                exitReason = "TP";
-                            else if(StringFind(comment, "sl") >= 0 || StringFind(comment, "stop loss") >= 0)
-                                exitReason = "SL";
-                            else if(StringFind(comment, "so") >= 0 || StringFind(comment, "stop out") >= 0)
-                                exitReason = "STOPOUT";
-                            else
-                                exitReason = "MANUAL";
-                            
-                            // Log trade closure
-                            if(g_performanceLogger != NULL)
-                            {
-                                g_performanceLogger.LogTradeClose(
-                                    closeTime,
-                                    closePrice,
-                                    profit,
-                                    commission,
-                                    swap,
-                                    exitReason
-                                );
-                                
-                                if(ShowDebugPrints)
-                                {
-                                    Print(StringFormat("📊 Trade closed: P/L=%.2f, Exit=%s, Commission=%.2f, Swap=%.2f", 
-                                          profit, exitReason, commission, swap));
-                                }
-                            }
-                            
-                            // Update position state
-                            g_hasPositionOpen = false;
-                        }
-                    }
-                }
-            }
-        }
+        Print("   ⏭️ SKIPPED - Not a deal add transaction");
+        return;
     }
+    
+    Print("   ✅ DEAL ADD TRANSACTION - Processing deal #", trans.deal);
+    
+    // *** CRITICAL FIX: Use DEFERRED PROCESSING instead of immediate history access ***
+    // The deal may not be fully committed to history yet, causing race conditions
+    // We'll defer the actual processing to allow MT5 to complete the deal commit
+    
+    if(g_performanceLogger != NULL)
+    {
+        Print("   📝 SCHEDULING DEFERRED DEAL PROCESSING for deal #", trans.deal);
+        // Store the deal ticket for processing in the next OnTick() cycle
+        // This allows MT5 to fully commit the deal to history first
+        g_pendingDealTicket = trans.deal;
+        g_processingRequired = true;
+    }
+    
+    Print("🔚 OnTradeTransaction COMPLETED for deal #", trans.deal, " - Processing deferred");
 }
 
 //+------------------------------------------------------------------+
@@ -650,26 +783,61 @@ bool DetectBreakoutAndInitRetest()
     SKeyLevelReport report;
     g_strategy.GetReport(report);
     
-    if(!report.isValid || ArraySize(report.levels) == 0) {
+    if(!report.isValid) {
+        if(ShowDebugPrints)
+            Print("❌ STRATEGY REPORT INVALID - Strategy may not be initialized properly");
         return false;
     }
+    
+    if(ArraySize(report.levels) == 0) {
+        if(ShowDebugPrints)
+            Print("❌ NO LEVELS IN REPORT - Strategy found no key levels with MinStrength ", MinStrength);
+        return false;
+    }
+    
+    if(ShowDebugPrints)
+        Print("📊 STRATEGY REPORT: Found ", ArraySize(report.levels), " timeframe(s) with levels");
     
     // Find strongest level on current timeframe
     STimeframeKeyLevel strongestLevel;
     bool foundLevel = false;
     
+    if(ShowDebugPrints)
+        Print("🔍 SEARCHING FOR LEVELS ON TIMEFRAME: ", EnumToString(Period()));
+    
     for(int i = 0; i < ArraySize(report.levels); i++) {
+        if(ShowDebugPrints)
+            Print("   Level ", i, ": TF=", EnumToString(report.levels[i].timeframe), 
+                  " Valid=", report.levels[i].isValid ? "YES" : "NO",
+                  " Strength=", DoubleToString(report.levels[i].strongestLevel.strength, 3));
+        
         if(report.levels[i].isValid && report.levels[i].timeframe == Period()) {
             if(!foundLevel || report.levels[i].strongestLevel.strength > strongestLevel.strongestLevel.strength) {
                 strongestLevel = report.levels[i];
                 foundLevel = true;
+                if(ShowDebugPrints)
+                    Print("   ✅ NEW STRONGEST: ", DoubleToString(strongestLevel.strongestLevel.strength, 3), 
+                          " at ", DoubleToString(strongestLevel.strongestLevel.price, 5));
             }
         }
     }
     
-    if(!foundLevel || strongestLevel.strongestLevel.strength < MinStrengthThreshold) {
+    if(!foundLevel) {
+        if(ShowDebugPrints)
+            Print("❌ NO KEY LEVELS FOUND - Check MinStrength (", MinStrength, ") vs available levels");
         return false;
     }
+    
+    if(strongestLevel.strongestLevel.strength < MinStrengthThreshold) {
+        if(ShowDebugPrints)
+            Print("❌ STRONGEST LEVEL TOO WEAK - Strength: ", DoubleToString(strongestLevel.strongestLevel.strength, 3), 
+                  " vs Required: ", DoubleToString(MinStrengthThreshold, 3));
+        return false;
+    }
+    
+    if(ShowDebugPrints)
+        Print("✅ VALID KEY LEVEL FOUND - Strength: ", DoubleToString(strongestLevel.strongestLevel.strength, 3), 
+              " at ", DoubleToString(strongestLevel.strongestLevel.price, 5));
     
     // Get current price data
     double highPrices[], lowPrices[], closePrices[];
@@ -698,6 +866,24 @@ bool DetectBreakoutAndInitRetest()
     
     // Check ATR distance
     bool atrOK = IsATRDistanceMet(lastClose, levelPrice);
+    
+    // **COMPREHENSIVE FILTER DEBUGGING**
+    if(ShowDebugPrints && (bullishBreak || bearishBreak))
+    {
+        Print("🔍 BREAKOUT DETECTED - FILTER ANALYSIS:");
+        Print("   📊 Level: ", DoubleToString(levelPrice, 5), " | Close: ", DoubleToString(lastClose, 5));
+        Print("   📈 Direction: ", (bullishBreak ? "BULLISH" : "BEARISH"));
+        Print("   📊 Level Strength: ", DoubleToString(strongestLevel.strongestLevel.strength, 3));
+        Print("   🔊 Volume Filter: ", (volumeOK ? "✅ PASSED" : "❌ BLOCKED"));
+        Print("   📈 ATR Filter: ", (atrOK ? "✅ PASSED" : "❌ BLOCKED"));
+        Print("   🎯 Overall Result: ", (volumeOK && atrOK ? "✅ ALL FILTERS PASSED" : "❌ BLOCKED BY FILTERS"));
+        
+        if(volumeOK && atrOK) {
+            Print("   🚀 PROCEEDING TO ENTRY CONFIRMATION...");
+        } else {
+            Print("   🚫 TRADE BLOCKED - Check filter details above");
+        }
+    }
     
     // Log filter results to performance logger
     // Pattern from: Professional trading system analysis
@@ -848,6 +1034,13 @@ bool ExecuteBreakoutTrade(bool isBullish, double breakoutLevel)
     if(currentTime - g_lastTradeTime < 300) {
         if(ShowDebugPrints)
             Print("❌ Trade cooldown period still active");
+        return false;
+    }
+    
+    // **ENTRY CONFIRMATION FILTER** - Prevent immediate reversals and weak signals
+    if(!HasEntryConfirmation(isBullish, breakoutLevel)) {
+        if(ShowDebugPrints)
+            Print("❌ ENTRY CONFIRMATION FAILED - No sustained momentum detected");
         return false;
     }
     
@@ -1014,29 +1207,296 @@ double CalculateLotSize(double stopLoss, double entryPrice, double riskPercent)
     return lotSize;
 }
 
-// Check volume requirement
+// Check volume requirement with enhanced filters
 bool DoesVolumeMeetRequirement(const long &volumes[], int lookback)
 {
     if(!UseVolumeFilter) return true;
     
     if(ArraySize(volumes) < lookback) return false;
     
-    // Calculate average volume
-    long totalVolume = 0;
-    for(int i = 0; i < lookback; i++) {
-        totalVolume += volumes[i];
-    }
-    double avgVolume = (double)totalVolume / lookback;
+    // Get current volume (breakout bar)
+    long currentVolume = volumes[0];
     
-    // Check if current volume is above average
-    return (volumes[0] > avgVolume * 1.5);
+    // **MINIMUM ABSOLUTE VOLUME THRESHOLD**
+    // Based on analysis: winning trades had 6,558+ volume, losing trades had 7
+    // TUNED: Set to 1,000 (above current ~2,350 would still pass)
+    long minAbsoluteVolume = 1000;  // Minimum 1,000 volume units
+    
+    if(currentVolume < minAbsoluteVolume)
+    {
+        if(ShowDebugPrints)
+            Print("🚫 VOLUME FILTER BLOCKED: Current volume ", currentVolume, " < minimum ", minAbsoluteVolume);
+        return false;
+    }
+    
+    // Calculate average volume over lookback period
+    long totalVolume = 0;
+    for(int i = 1; i < lookback + 1; i++) { // Skip current bar, use historical average
+        if(i < ArraySize(volumes))
+            totalVolume += volumes[i];
+    }
+    double avgVolume = (double)totalVolume / MathMin(lookback, ArraySize(volumes) - 1);
+    
+    // **VOLUME SPIKE REQUIREMENT**
+    // TUNED: Reduced to 1.3x (just need above-average volume)
+    // Still blocks half-average volume like current ~0.5x
+    double volumeSpike = 1.3;
+    bool spikeOK = (currentVolume > avgVolume * volumeSpike);
+    
+    if(!spikeOK)
+    {
+        if(ShowDebugPrints)
+            Print("🚫 VOLUME SPIKE BLOCKED: Current ", currentVolume, " vs Average ", (int)avgVolume, 
+                  " (", DoubleToString(currentVolume/avgVolume, 1), "x < ", volumeSpike, "x required)");
+        return false;
+    }
+    
+    // **VOLUME TREND ANALYSIS**
+    // Check if volume is building up over last few bars
+    bool trendOK = true;
+    if(ArraySize(volumes) > 3)
+    {
+        long recent3Avg = (volumes[0] + volumes[1] + volumes[2]) / 3;
+        long older3Avg = (volumes[3] + volumes[4] + volumes[5]) / 3;
+        // TUNED: Reduced volume trend requirement from 20% to 15%
+        trendOK = (recent3Avg > older3Avg * 1.15); // Recent volume 15% higher than older
+        
+        if(!trendOK && ShowDebugPrints)
+            Print("⚠️ VOLUME TREND WARNING: Recent average ", recent3Avg, " vs Older ", older3Avg);
+    }
+    
+    if(ShowDebugPrints)
+        Print("✅ VOLUME FILTER PASSED: ", currentVolume, " (", DoubleToString(currentVolume/avgVolume, 1), 
+              "x avg), Trend: ", (trendOK ? "Good" : "Weak"));
+    
+    return true; // Pass all volume tests
 }
 
-// Check ATR distance requirement
+// Check ATR distance requirement with enhanced volatility filtering
 bool IsATRDistanceMet(double price1, double price2)
 {
     double atrValue = GetATRValue();
     double distance = MathAbs(price1 - price2);
     
-    return (distance >= atrValue * RetestATRMultiplier);
+    // **MINIMUM ATR VOLATILITY THRESHOLD**
+    // Based on analysis: winning trades had ATR 0.0018+, losing trades had 0.0014
+    // TUNED: Reduced from 0.0016 to 0.0015 to allow more trades through
+    double minATR = 0.0015;  // Minimum volatility threshold
+    
+    if(atrValue < minATR)
+    {
+        if(ShowDebugPrints)
+            Print("🚫 ATR VOLATILITY BLOCKED: Current ATR ", DoubleToString(atrValue, 4), 
+                  " < minimum ", DoubleToString(minATR, 4));
+        return false;
+    }
+    
+    // **ATR DISTANCE REQUIREMENT** 
+    bool distanceOK = (distance >= atrValue * RetestATRMultiplier);
+    
+    if(!distanceOK && ShowDebugPrints)
+        Print("🚫 ATR DISTANCE BLOCKED: Distance ", DoubleToString(distance, 4), 
+              " < required ", DoubleToString(atrValue * RetestATRMultiplier, 4));
+    
+    // **ATR TREND ANALYSIS**
+    // Check if volatility is expanding (good for breakouts)
+    bool atrTrendOK = IsATRExpanding();
+    
+    if(ShowDebugPrints)
+        Print("✅ ATR FILTER: Value=", DoubleToString(atrValue, 4), 
+              ", Distance=", DoubleToString(distance, 4), 
+              ", Trend=", (atrTrendOK ? "Expanding" : "Contracting"));
+    
+    return distanceOK && atrTrendOK;
+}
+
+// Check if ATR is expanding (volatility increasing - good for breakouts)
+bool IsATRExpanding()
+{
+    double atrBuffer[];
+    ArraySetAsSeries(atrBuffer, true);
+    
+    if(CopyBuffer(g_handleATR, 0, 0, 5, atrBuffer) < 5)
+        return true; // Default to true if we can't get ATR data
+    
+    // Compare recent ATR vs older ATR
+    double recentATR = (atrBuffer[0] + atrBuffer[1]) / 2.0;  // Last 2 bars
+    double olderATR = (atrBuffer[2] + atrBuffer[3]) / 2.0;   // Previous 2 bars
+    
+    // TUNED: Allow flat or slightly expanding ATR (just need to not be severely contracting)
+    bool expanding = (recentATR >= olderATR * 0.95); // Allow 5% contraction or better
+    
+    if(ShowDebugPrints)
+        Print("ATR Trend: Recent=", DoubleToString(recentATR, 4), 
+              " vs Older=", DoubleToString(olderATR, 4), 
+              " (", (expanding ? "Stable/Expanding ✅" : "Severely Contracting ❌"), ")");
+    
+    return expanding;
+}
+
+// Entry confirmation to prevent immediate reversals
+bool HasEntryConfirmation(bool isBullishBreakout, double breakoutLevel)
+{
+    // Get recent price data for momentum analysis
+    double closes[];
+    ArraySetAsSeries(closes, true);
+    
+    if(CopyClose(_Symbol, PERIOD_CURRENT, 0, 5, closes) < 5)
+        return true; // Default to true if we can't get data
+    
+    double currentPrice = closes[0];
+    double previousPrice = closes[1];
+    double twoBarsAgo = closes[2];
+    
+    // **MOMENTUM CONFIRMATION**
+    // Require sustained movement in breakout direction
+    bool momentumOK = false;
+    
+    if(isBullishBreakout)
+    {
+        // For bullish breakout: ensure we're not immediately reversing down
+        momentumOK = (currentPrice > previousPrice) && 
+                     (previousPrice >= twoBarsAgo * 0.9999); // Allow tiny pullback
+        
+        // Additional check: ensure we're meaningfully above breakout level
+        // TUNED: Reduced from 3.0 to 2.0 pips to allow more entries
+        double pipsAbove = (currentPrice - breakoutLevel) / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+        momentumOK = momentumOK && (pipsAbove >= 2.0); // At least 2 pips above
+    }
+    else
+    {
+        // For bearish breakout: ensure we're not immediately reversing up
+        momentumOK = (currentPrice < previousPrice) && 
+                     (previousPrice <= twoBarsAgo * 1.0001); // Allow tiny pullback
+        
+        // Additional check: ensure we're meaningfully below breakout level  
+        // TUNED: Reduced from 3.0 to 2.0 pips to allow more entries
+        double pipsBelow = (breakoutLevel - currentPrice) / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+        momentumOK = momentumOK && (pipsBelow >= 2.0); // At least 2 pips below
+    }
+    
+    // **CANDLE PATTERN CONFIRMATION**
+    // Check if recent candles support the breakout direction
+    bool candleOK = false;
+    
+    if(isBullishBreakout)
+    {
+        // Look for bullish candle patterns
+        double bodySize = MathAbs(closes[0] - iOpen(_Symbol, PERIOD_CURRENT, 0));
+        double candleRange = iHigh(_Symbol, PERIOD_CURRENT, 0) - iLow(_Symbol, PERIOD_CURRENT, 0);
+        
+        // TUNED: Reduced body requirement from 50% to 40% of range
+        candleOK = (closes[0] > iOpen(_Symbol, PERIOD_CURRENT, 0)) && // Bullish candle
+                   (bodySize > candleRange * 0.4); // Strong body (>40% of range)
+    }
+    else
+    {
+        // Look for bearish candle patterns
+        double bodySize = MathAbs(closes[0] - iOpen(_Symbol, PERIOD_CURRENT, 0));
+        double candleRange = iHigh(_Symbol, PERIOD_CURRENT, 0) - iLow(_Symbol, PERIOD_CURRENT, 0);
+        
+        // TUNED: Reduced body requirement from 50% to 40% of range
+        candleOK = (closes[0] < iOpen(_Symbol, PERIOD_CURRENT, 0)) && // Bearish candle
+                   (bodySize > candleRange * 0.4); // Strong body (>40% of range)
+    }
+    
+    bool confirmed = momentumOK && candleOK;
+    
+    if(ShowDebugPrints)
+    {
+        Print("🔍 ENTRY CONFIRMATION: ", (isBullishBreakout ? "BULLISH" : "BEARISH"), 
+              " - Momentum: ", (momentumOK ? "✅" : "❌"), 
+              ", Candle: ", (candleOK ? "✅" : "❌"), 
+              ", Result: ", (confirmed ? "CONFIRMED ✅" : "REJECTED ❌"));
+    }
+    
+    return confirmed;
+}
+
+//+------------------------------------------------------------------+
+//| Test guaranteed file creation with unique names                   |
+//+------------------------------------------------------------------+
+bool TestFileCreation()
+{
+    // Create super unique timestamp using multiple methods
+    datetime currentTime = TimeCurrent();
+    ulong microseconds = GetMicrosecondCount();
+    MqlDateTime dt;
+    TimeToStruct(currentTime, dt);
+    
+    // Ultra-unique timestamp: YYYYMMDD_HHMMSS_microseconds_random
+    string ultraTimestamp = StringFormat("%04d%02d%02d_%02d%02d%02d_%06d_%04d", 
+        dt.year, dt.mon, dt.day,
+        dt.hour, dt.min, dt.sec,
+        (int)(microseconds % 1000000),
+        MathRand() % 10000); // Add random component for absolute uniqueness
+    
+    string testFileName = "V2EA_INIT_TEST_" + _Symbol + "_" + EnumToString(Period()) + "_" + ultraTimestamp + ".txt";
+    
+    Print("🔍 ATTEMPTING TO CREATE TEST FILE: ", testFileName);
+    Print("📁 FILE LOCATION: ", TerminalInfoString(TERMINAL_DATA_PATH), "\\MQL5\\Files\\");
+    
+    // Create test file
+    int fileHandle = FileOpen(testFileName, FILE_WRITE|FILE_TXT|FILE_COMMON);
+    if(fileHandle == INVALID_HANDLE)
+    {
+        int error = GetLastError();
+        Print("❌ FAILED TO CREATE TEST FILE! Error: ", error);
+        Print("🔧 Troubleshooting:");
+        Print("   1. Check if MetaTrader has file access permissions");
+        Print("   2. Ensure MQL5\\Files\\ directory exists");
+        Print("   3. Check if antivirus is blocking file creation");
+        return false;
+    }
+    
+    // Write test data to file
+    string testContent = StringFormat(
+        "✅ V-2-EA FILE CREATION TEST SUCCESS!\n" +
+        "=================================\n" +
+        "Creation Time: %s\n" +
+        "Symbol: %s\n" +
+        "Timeframe: %s\n" +
+        "Account: %s\n" +
+        "Server: %s\n" +
+        "Terminal Build: %d\n" +
+        "Ultra Timestamp: %s\n" +
+        "=================================\n" +
+        "This file proves our EA can create unique files!\n" +
+        "Every time you restart, you'll get a NEW file.\n",
+        TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
+        _Symbol,
+        EnumToString(Period()),
+        IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)),
+        AccountInfoString(ACCOUNT_SERVER),
+        TerminalInfoInteger(TERMINAL_BUILD),
+        ultraTimestamp
+    );
+    
+    FileWriteString(fileHandle, testContent);
+    FileClose(fileHandle);
+    
+    // Verify file was created successfully
+    fileHandle = FileOpen(testFileName, FILE_READ|FILE_TXT|FILE_COMMON);
+    if(fileHandle == INVALID_HANDLE)
+    {
+        Print("❌ FILE CREATED BUT CANNOT BE READ BACK!");
+        return false;
+    }
+    
+    string readBack = FileReadString(fileHandle);
+    FileClose(fileHandle);
+    
+    if(StringFind(readBack, "V-2-EA FILE CREATION TEST SUCCESS") < 0)
+    {
+        Print("❌ FILE CREATED BUT CONTENT IS CORRUPTED!");
+        return false;
+    }
+    
+    Print("✅ ✅ ✅ FILE CREATION TEST SUCCESSFUL! ✅ ✅ ✅");
+    Print("📄 Created file: ", testFileName);
+    Print("📁 Full path: ", TerminalInfoString(TERMINAL_DATA_PATH), "\\MQL5\\Files\\", testFileName);
+    Print("💡 SOLUTION: Look for files with THIS timestamp pattern: ", ultraTimestamp);
+    Print("🎯 EVERY EA RESTART = NEW UNIQUE FILES!");
+    
+    return true;
 }

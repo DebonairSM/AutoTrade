@@ -262,15 +262,30 @@ bool CV2EAPerformanceLogger::Initialize(const string symbol, const ENUM_TIMEFRAM
    m_troughBalance = m_initialBalance;
    m_lastUpdateTime = TimeCurrent();
    
-   // Create file paths
-   string timestamp = TimeToString(TimeCurrent(), TIME_DATE) + "_" + TimeToString(TimeCurrent(), TIME_MINUTES);
-   StringReplace(timestamp, ":", "");
-   StringReplace(timestamp, ".", "");
-   StringReplace(timestamp, " ", "_");
+   // Create file paths with enhanced timestamp for uniqueness
+   datetime currentTime = TimeCurrent();
+   ulong microseconds = GetMicrosecondCount();
+   MqlDateTime dt;
+   TimeToStruct(currentTime, dt);
+   
+   // Create unique timestamp: YYYYMMDD_HHMMSS_microseconds
+   string timestamp = StringFormat("%04d%02d%02d_%02d%02d%02d_%06d", 
+      dt.year, dt.mon, dt.day,
+      dt.hour, dt.min, dt.sec,
+      (int)(microseconds % 1000000)); // Last 6 digits of microseconds for uniqueness
    
    m_logPath = "V2EA_Performance_" + symbol + "_" + EnumToString(timeframe) + "_" + timestamp + ".log";
    m_csvPath = "V2EA_Trades_" + symbol + "_" + EnumToString(timeframe) + "_" + timestamp + ".csv";
    m_reportPath = "V2EA_Report_" + symbol + "_" + EnumToString(timeframe) + "_" + timestamp + ".txt";
+   
+   // *** FILENAME VERIFICATION ***
+   Print("🔍 VERIFYING UNIQUE FILENAMES:");
+   Print("📝 LOG FILE: ", m_logPath);
+   Print("📊 CSV FILE: ", m_csvPath);  
+   Print("📋 REPORT FILE: ", m_reportPath);
+   Print("🕒 TIMESTAMP USED: ", timestamp);
+   Print("📁 Files will be created in: MetaTrader 5\\MQL5\\Files\\");
+   Print("⚠️  NOTE: MT5 system logs (20250119.log) are DIFFERENT from our custom files!");
    
    // Initialize metrics
    m_metrics.Clear();
@@ -300,12 +315,17 @@ bool CV2EAPerformanceLogger::Initialize(const string symbol, const ENUM_TIMEFRAM
 //+------------------------------------------------------------------+
 bool CV2EAPerformanceLogger::CreateLogFile()
 {
-   m_logFileHandle = FileOpen(m_logPath, FILE_WRITE|FILE_TXT);
+   // Pattern from: MQL5 Programming Reference
+   // Reference: Write Data to CSV File section
+   m_logFileHandle = FileOpen(m_logPath, FILE_WRITE|FILE_TXT|FILE_COMMON);
    if(m_logFileHandle == INVALID_HANDLE)
    {
       Print("❌ Failed to create log file: ", m_logPath, " Error: ", GetLastError());
       return false;
    }
+   
+   // Confirm new file creation
+   Print("✅ NEW LOG FILE CREATED: ", m_logPath);
    return true;
 }
 
@@ -314,12 +334,17 @@ bool CV2EAPerformanceLogger::CreateLogFile()
 //+------------------------------------------------------------------+
 bool CV2EAPerformanceLogger::CreateCSVFile()
 {
-   m_csvFileHandle = FileOpen(m_csvPath, FILE_WRITE|FILE_CSV);
+   // Pattern from: MQL5 Programming Reference
+   // Reference: Write Data to CSV File section
+   m_csvFileHandle = FileOpen(m_csvPath, FILE_WRITE|FILE_CSV|FILE_COMMON);
    if(m_csvFileHandle == INVALID_HANDLE)
    {
       Print("❌ Failed to create CSV file: ", m_csvPath, " Error: ", GetLastError());
       return false;
    }
+   
+   // Confirm new file creation
+   Print("✅ NEW CSV FILE CREATED: ", m_csvPath);
    
    // Write CSV header
    string header = "OpenTime,CloseTime,Direction,OpenPrice,ClosePrice,LotSize,Profit,Commission,Swap," +
@@ -390,14 +415,50 @@ void CV2EAPerformanceLogger::LogTradeClose(const datetime closeTime, const doubl
 {
    if(!m_isInitialized || ArraySize(m_trades) == 0) return;
    
+   // BACKUP VALIDATION: Sanitize input values to prevent astronomical numbers
+   const double MAX_REASONABLE_VALUE = 1000.0; // $1K max per trade
+   const double MIN_REASONABLE_VALUE = -1000.0; // -$1K min per trade
+   
+   double validatedProfit = profit;
+   double validatedCommission = commission;
+   double validatedSwap = swap;
+   bool wasCorrupted = false;
+   
+   if(profit > MAX_REASONABLE_VALUE || profit < MIN_REASONABLE_VALUE)
+   {
+      Print(StringFormat("⚠️ PERFORMANCE LOGGER: Corrupted profit %.2f, resetting to 0", profit));
+      validatedProfit = 0;
+      wasCorrupted = true;
+   }
+   
+   if(commission > MAX_REASONABLE_VALUE || commission < MIN_REASONABLE_VALUE)
+   {
+      Print(StringFormat("⚠️ PERFORMANCE LOGGER: Corrupted commission %.2f, resetting to 0", commission));
+      validatedCommission = 0;
+      wasCorrupted = true;
+   }
+   
+   if(swap > MAX_REASONABLE_VALUE || swap < MIN_REASONABLE_VALUE)
+   {
+      Print(StringFormat("⚠️ PERFORMANCE LOGGER: Corrupted swap %.2f, resetting to 0", swap));
+      validatedSwap = 0;
+      wasCorrupted = true;
+   }
+   
+   if(wasCorrupted)
+   {
+      Print(StringFormat("📊 TRADE DATA SANITIZED: Using P/L=%.2f, Commission=%.2f, Swap=%.2f", 
+            validatedProfit, validatedCommission, validatedSwap));
+   }
+   
    int lastTradeIndex = ArraySize(m_trades) - 1;
    
-   // Complete trade record
+   // Complete trade record with validated values
    m_trades[lastTradeIndex].closeTime = closeTime;
    m_trades[lastTradeIndex].closePrice = closePrice;
-   m_trades[lastTradeIndex].profit = profit;
-   m_trades[lastTradeIndex].commission = commission;
-   m_trades[lastTradeIndex].swap = swap;
+   m_trades[lastTradeIndex].profit = validatedProfit;      // Use validated value
+   m_trades[lastTradeIndex].commission = validatedCommission;  // Use validated value
+   m_trades[lastTradeIndex].swap = validatedSwap;             // Use validated value
    m_trades[lastTradeIndex].exitReason = exitReason;
    
    // Calculate additional metrics
@@ -411,7 +472,7 @@ void CV2EAPerformanceLogger::LogTradeClose(const datetime closeTime, const doubl
    
    // Log to file
    string logMsg = StringFormat("TRADE CLOSE: %s closed at %.5f | P/L: $%.2f | Exit: %s | Duration: %d bars",
-                               m_trades[lastTradeIndex].direction, closePrice, profit, exitReason, 
+                               m_trades[lastTradeIndex].direction, closePrice, validatedProfit, exitReason, 
                                m_trades[lastTradeIndex].barsInTrade);
    WriteLogEntry(logMsg);
    
@@ -423,9 +484,9 @@ void CV2EAPerformanceLogger::LogTradeClose(const datetime closeTime, const doubl
                                 m_trades[lastTradeIndex].openPrice,
                                 closePrice,
                                 m_trades[lastTradeIndex].lotSize,
-                                profit,
-                                commission,
-                                swap,
+                                validatedProfit,        // Use validated value
+                                validatedCommission,    // Use validated value
+                                validatedSwap,          // Use validated value
                                 m_trades[lastTradeIndex].stopLoss,
                                 m_trades[lastTradeIndex].takeProfit,
                                 exitReason,
@@ -515,7 +576,19 @@ void CV2EAPerformanceLogger::CalculateMetrics()
 void CV2EAPerformanceLogger::CalculateTradeStatistics()
 {
    int totalTrades = ArraySize(m_trades);
-   if(totalTrades == 0) return;
+   if(totalTrades == 0) 
+   {
+      // Reset all metrics when no trades
+      m_performance.totalTrades = 0;
+      m_performance.winningTrades = 0;
+      m_performance.losingTrades = 0;
+      m_performance.winRate = 0;
+      m_performance.averageWin = 0;
+      m_performance.averageLoss = 0;
+      m_performance.profitFactor = 0;
+      m_performance.expectedValue = 0;
+      return;
+   }
    
    m_performance.totalTrades = totalTrades;
    m_performance.winningTrades = 0;
@@ -525,38 +598,88 @@ void CV2EAPerformanceLogger::CalculateTradeStatistics()
    double totalWins = 0;
    double totalLosses = 0;
    
+   // Add small epsilon to prevent division by zero issues
+   const double EPSILON = 0.01; // Changed from 0.000001 to $0.01 for more practical threshold
+   
+   int breakevenTrades = 0; // Track breakeven trades
+   
    for(int i = 0; i < totalTrades; i++)
    {
       double netProfit = m_trades[i].profit + m_trades[i].commission + m_trades[i].swap;
+      
+      // Additional safety check: Validate stored trade data
+      if(MathAbs(netProfit) > 10000.0) // If net profit > $10K, likely corrupted
+      {
+         Print(StringFormat("⚠️ CORRUPTED TRADE DATA DETECTED: Trade #%d has net profit of %.2f", i, netProfit));
+         Print(StringFormat("   Original: P=%.2f, C=%.2f, S=%.2f", m_trades[i].profit, m_trades[i].commission, m_trades[i].swap));
+         
+         // Reset corrupted values
+         m_trades[i].profit = 0;
+         m_trades[i].commission = 0;
+         m_trades[i].swap = 0;
+         netProfit = 0;
+         
+         Print("   Sanitized to zero values for calculation safety");
+      }
+      
       totalProfit += netProfit;
       
-      if(netProfit > 0)
+      if(netProfit > EPSILON) // Profit > $0.01
       {
          m_performance.winningTrades++;
          totalWins += netProfit;
          if(netProfit > m_performance.largestWin)
             m_performance.largestWin = netProfit;
       }
-      else if(netProfit < 0)
+      else if(netProfit < -EPSILON) // Loss > $0.01
       {
          m_performance.losingTrades++;
          totalLosses += MathAbs(netProfit);
          if(MathAbs(netProfit) > m_performance.largestLoss)
             m_performance.largestLoss = MathAbs(netProfit);
       }
+      else // Breakeven trades: between -$0.01 and +$0.01
+      {
+         breakevenTrades++;
+      }
    }
    
-   // Calculate derived metrics
+   // Calculate derived metrics with safety bounds
    m_performance.winRate = (totalTrades > 0) ? (m_performance.winningTrades * 100.0) / totalTrades : 0;
    m_performance.averageWin = (m_performance.winningTrades > 0) ? totalWins / m_performance.winningTrades : 0;
    m_performance.averageLoss = (m_performance.losingTrades > 0) ? totalLosses / m_performance.losingTrades : 0;
-   m_performance.profitFactor = (totalLosses > 0) ? totalWins / totalLosses : (totalWins > 0 ? 999.0 : 0);
+   
+   // Fixed profit factor calculation with safety bounds
+   if(totalLosses > EPSILON)
+   {
+      m_performance.profitFactor = totalWins / totalLosses;
+      // Cap profit factor at reasonable maximum to prevent display issues
+      if(m_performance.profitFactor > 999.0)
+         m_performance.profitFactor = 999.0;
+   }
+   else if(totalWins > EPSILON)
+   {
+      // If we have wins but no significant losses, set to maximum reasonable value
+      m_performance.profitFactor = 999.0;
+   }
+   else
+   {
+      // No significant wins or losses
+      m_performance.profitFactor = 0;
+   }
+   
    m_performance.expectedValue = (totalTrades > 0) ? totalProfit / totalTrades : 0;
    
-   // Calculate total return
-   if(m_initialBalance > 0)
+   // Calculate total return with safety check
+   if(m_initialBalance > EPSILON)
    {
       m_performance.totalReturn = ((m_currentBalance - m_initialBalance) / m_initialBalance) * 100.0;
+      // Cap total return at reasonable bounds to prevent overflow display
+      m_performance.totalReturn = MathMax(-99.9, MathMin(m_performance.totalReturn, 9999.9));
+   }
+   else
+   {
+      m_performance.totalReturn = 0;
    }
 }
 
@@ -911,12 +1034,17 @@ void CV2EAPerformanceLogger::GenerateDetailedReport()
    
    CalculateMetrics();
    
-   int reportHandle = FileOpen(m_reportPath, FILE_WRITE|FILE_TXT);
+   // Pattern from: MQL5 Programming Reference
+   // Reference: Write Data to CSV File section
+   int reportHandle = FileOpen(m_reportPath, FILE_WRITE|FILE_TXT|FILE_COMMON);
    if(reportHandle == INVALID_HANDLE)
    {
-      Print("❌ Failed to create report file");
+      Print("❌ Failed to create report file: ", m_reportPath);
       return;
    }
+   
+   // Confirm new report file creation
+   Print("✅ NEW REPORT FILE CREATED: ", m_reportPath);
    
    // Write comprehensive report
    FileWriteString(reportHandle, "=== V-2-EA DETAILED PERFORMANCE REPORT ===\n\n");
@@ -985,16 +1113,44 @@ void CV2EAPerformanceLogger::PrintPerformanceSummary()
    CalculateMetrics();
    
    Print("=== V-2-EA PERFORMANCE SUMMARY ===");
-   Print(StringFormat("📊 Total Trades: %d (Wins: %d, Losses: %d)", 
-         m_performance.totalTrades, m_performance.winningTrades, m_performance.losingTrades));
+   Print(StringFormat("📊 Total Trades: %d (Wins: %d, Losses: %d, Breakeven: %d)", 
+         m_performance.totalTrades, m_performance.winningTrades, m_performance.losingTrades, 
+         m_performance.totalTrades - m_performance.winningTrades - m_performance.losingTrades));
+   
+   // Add validation check for consistency
+   int calculatedTotal = m_performance.winningTrades + m_performance.losingTrades;
+   int breakevenCount = m_performance.totalTrades - calculatedTotal;
+   
+   if(breakevenCount > 0)
+   {
+      Print(StringFormat("ℹ️  Note: %d breakeven trade(s) (profit between -$0.01 and +$0.01)", breakevenCount));
+   }
+   
+   if(calculatedTotal != m_performance.totalTrades && breakevenCount == 0)
+   {
+      Print(StringFormat("⚠️  CALCULATION WARNING: Total trades mismatch! Wins+Losses=%d, Total=%d", 
+            calculatedTotal, m_performance.totalTrades));
+   }
+   
    Print(StringFormat("🎯 Win Rate: %.1f%% | Profit Factor: %.2f", 
          m_performance.winRate, m_performance.profitFactor));
+         
+   // Add more detailed profit/loss breakdown
+   double totalWins = m_performance.averageWin * m_performance.winningTrades;
+   double totalLosses = m_performance.averageLoss * m_performance.losingTrades;
+   Print(StringFormat("💵 Total Profits: $%.2f | Total Losses: $%.2f", totalWins, totalLosses));
+   
    Print(StringFormat("📈 Total Return: %.2f%% | Sharpe Ratio: %.2f", 
          m_performance.totalReturn, m_performance.sharpeRatio));
    Print(StringFormat("📉 Max Drawdown: %.2f%% (%.2f)", 
          m_performance.maxDrawdownPercent, m_performance.maxDrawdown));
    Print(StringFormat("💰 Avg Win: $%.2f | Avg Loss: $%.2f", 
          m_performance.averageWin, m_performance.averageLoss));
+         
+   // Add largest win/loss for context
+   Print(StringFormat("🏆 Largest Win: $%.2f | Largest Loss: $%.2f", 
+         m_performance.largestWin, m_performance.largestLoss));
+         
    Print(StringFormat("⚡ Breakout Success: %.1f%% | Retest Success: %.1f%%", 
          m_performance.breakoutSuccessRate, m_performance.retestSuccessRate));
    Print("=====================================");

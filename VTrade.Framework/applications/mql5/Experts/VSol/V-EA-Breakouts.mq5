@@ -310,7 +310,25 @@ string GetKeyLevelLogFilename()
 {
    string symbol = _Symbol;
    string timeframe = EnumToString(Period());
-   return "KeyLevels_" + symbol + "_" + timeframe + ".csv";
+   
+   // Create unique timestamp for this run
+   static string runTimestamp = "";
+   if(runTimestamp == "")
+   {
+      datetime currentTime = TimeCurrent();
+      ulong microseconds = GetMicrosecondCount();
+      MqlDateTime dt;
+      TimeToStruct(currentTime, dt);
+      runTimestamp = StringFormat("%04d%02d%02d_%02d%02d%02d_%06d", 
+         dt.year, dt.mon, dt.day,
+         dt.hour, dt.min, dt.sec,
+         (int)(microseconds % 1000000));
+      
+      // *** FILENAME VERIFICATION ***
+      Print("🔍 KEY LEVEL CSV TIMESTAMP CREATED: ", runTimestamp);
+   }
+   
+   return "KeyLevels_" + symbol + "_" + timeframe + "_" + runTimestamp + ".csv";
 }
 
 void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason="")
@@ -331,14 +349,17 @@ void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason
       lastLogTime = now;
    
    // Log to CSV file for detailed analysis (keep this for strategy optimization)
+   // Pattern from: MQL5 Programming Reference
+   // Reference: Write Data to CSV File section
    static bool headerWritten = false;
    string filename = GetKeyLevelLogFilename();
    
    if(!headerWritten)
    {
-      int handle = FileOpen(filename, FILE_WRITE|FILE_CSV);
+      int handle = FileOpen(filename, FILE_WRITE|FILE_CSV|FILE_COMMON);
       if(handle != INVALID_HANDLE)
       {
+         Print("✅ NEW KEY LEVEL CSV CREATED: ", filename);
          FileWrite(handle, 
             "Timestamp",
             "Price",
@@ -369,8 +390,8 @@ void LogKeyLevel(const SKeyLevel &level, bool isAccepted, string rejectionReason
             level.strength));
    }
    
-   // Always write to CSV for complete analysis
-   int handle = FileOpen(filename, FILE_READ|FILE_WRITE|FILE_CSV);
+   // Always write to CSV for complete analysis using official pattern
+   int handle = FileOpen(filename, FILE_READ|FILE_WRITE|FILE_CSV|FILE_COMMON);
    if(handle != INVALID_HANDLE)
    {
       FileSeek(handle, 0, SEEK_END);
@@ -799,12 +820,43 @@ bool DetectBreakoutAndInitRetest(double &outBreakoutLevel, bool &outBullish)
       
       // Store last stats and log to file
       g_lastBreakoutStats = breakoutStats;
-      int handle = FileOpen("OptimizationLog.txt", FILE_WRITE|FILE_READ|FILE_TXT);
-      if(handle != INVALID_HANDLE)
+      
+      // Create unique optimization log filename using centralized function
+      static string optimizationLogFile = "";
+      if(optimizationLogFile == "")
       {
-         FileSeek(handle, 0, SEEK_END);
-         FileWriteString(handle, breakoutStats + "\n");
-         FileClose(handle);
+         optimizationLogFile = GetOptimizationLogFilename();
+         Print("🔍 OPTIMIZATION LOG FILENAME: ", optimizationLogFile);
+      }
+      
+      // Pattern from: MQL5 Programming Reference
+      // Reference: Write Data to CSV File section
+      static bool optimizationLogInitialized = false;
+      
+      if(!optimizationLogInitialized)
+      {
+         // First time: create new file with header
+         int handle = FileOpen(optimizationLogFile, FILE_WRITE|FILE_TXT|FILE_COMMON);
+         if(handle != INVALID_HANDLE)
+         {
+            Print("✅ NEW OPTIMIZATION LOG CREATED: ", optimizationLogFile);
+            FileWriteString(handle, "# V-2-EA Optimization Log - " + TimeToString(TimeCurrent()) + "\n");
+            FileWriteString(handle, "# Timestamp\tPrice\tDirection\tStrength\tVolumeOK\tATROK\tTouchCount\tTotalBreakouts\tAvgStrength\n");
+            FileWriteString(handle, breakoutStats + "\n");
+            FileClose(handle);
+            optimizationLogInitialized = true;
+         }
+      }
+      else
+      {
+         // Subsequent times: append to existing file using standard pattern
+         int handle = FileOpen(optimizationLogFile, FILE_READ|FILE_WRITE|FILE_TXT|FILE_COMMON);
+         if(handle != INVALID_HANDLE)
+         {
+            FileSeek(handle, 0, SEEK_END);
+            FileWriteString(handle, breakoutStats + "\n");
+            FileClose(handle);
+         }
       }
    }
 
@@ -2444,3 +2496,29 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
+
+string GetOptimizationLogFilename() 
+{
+   string symbol = _Symbol;
+   string timeframe = EnumToString(Period());
+   
+   // Create unique timestamp for this run
+   static string runTimestamp = "";
+   if(runTimestamp == "")
+   {
+      datetime currentTime = TimeCurrent();
+      ulong microseconds = GetMicrosecondCount();
+      MqlDateTime dt;
+      TimeToStruct(currentTime, dt);
+      runTimestamp = StringFormat("%04d%02d%02d_%02d%02d%02d_%06d", 
+         dt.year, dt.mon, dt.day,
+         dt.hour, dt.min, dt.sec,
+         (int)(microseconds % 1000000));
+      
+      // *** FILENAME VERIFICATION ***
+      Print("🔍 OPTIMIZATION LOG TIMESTAMP CREATED: ", runTimestamp);
+   }
+   
+   string filename = "OptimizationLog_" + symbol + "_" + timeframe + "_" + runTimestamp + ".txt";
+   return filename;
+}

@@ -258,7 +258,13 @@ bool TestKeyLevelComponents()
     CV2EAUtils::LogInfo("Testing key level detection components...");
     
     // Test swing high/low detection logic
-    double testPrices[] = {1.1000, 1.1010, 1.1020, 1.1015, 1.1005};
+    double testPrices[];
+    ArrayResize(testPrices, 5);
+    testPrices[0] = 1.1000;
+    testPrices[1] = 1.1010;
+    testPrices[2] = 1.1020;
+    testPrices[3] = 1.1015;
+    testPrices[4] = 1.1005;
     ArraySetAsSeries(testPrices, true);
     
     // Test swing high at index 2 (1.1020)
@@ -619,12 +625,25 @@ void GenerateMasterReport(bool allTestsPassed)
             fullReport += "   • Validate fixes in paper trading\n";
         }
         
-        int fileHandle = FileOpen("Enhanced_Position_Management_Master_Report.txt", FILE_WRITE | FILE_TXT);
+        // Create unique test report filename
+        datetime currentTime = TimeCurrent();
+        ulong microseconds = GetMicrosecondCount();
+        MqlDateTime dt;
+        TimeToStruct(currentTime, dt);
+        string timestamp = StringFormat("%04d%02d%02d_%02d%02d%02d_%06d", 
+           dt.year, dt.mon, dt.day,
+           dt.hour, dt.min, dt.sec,
+           (int)(microseconds % 1000000));
+        
+        string reportFilename = "Enhanced_Position_Management_Master_Report_" + timestamp + ".txt";
+        // Pattern from: MQL5 Programming Reference
+        // Reference: Write Data to CSV File section
+        int fileHandle = FileOpen(reportFilename, FILE_WRITE | FILE_TXT | FILE_COMMON);
         if(fileHandle != INVALID_HANDLE)
         {
             FileWriteString(fileHandle, fullReport);
             FileClose(fileHandle);
-            CV2EAUtils::LogSuccess("📄 Master report saved to Enhanced_Position_Management_Master_Report.txt");
+            CV2EAUtils::LogSuccess("📄 Master report saved to " + reportFilename);
         }
     }
     
