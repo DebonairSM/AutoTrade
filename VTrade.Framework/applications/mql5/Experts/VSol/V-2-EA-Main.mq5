@@ -185,15 +185,11 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-    // Add immediate debug to see if timer fires at all
-    if(ShowDebugPrints)
-        Print("⏰ OnTimer FIRED! Current time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
+    // Timer only used for initial calculation if OnTick doesn't fire
     
     // Only process if we haven't done initial calculation yet
     if(g_lastBarTime != 0) {
-        if(ShowDebugPrints)
-            Print("⏰ OnTimer: Already calculated, will continue running");
-        return;
+        return; // OnTick is working, no need for timer fallback
     }
     
     if(ShowDebugPrints)
@@ -227,11 +223,7 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    // Add debug message to confirm OnTick is being called (respect debug setting)
-    if(ShowDebugPrints)
-        Print("📊 OnTick() FIRED! Current time: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
-    
-    // Check data synchronization first
+    // Check data synchronization first (no debug spam)
     datetime currentBarTime = iTime(_Symbol, Period(), 0);
     if(currentBarTime == 0) {
         int error = GetLastError();
@@ -247,10 +239,6 @@ void OnTick()
         return;
     }
     
-    if(ShowDebugPrints) {
-        Print("✅ Data checks passed. CurrentBarTime: ", TimeToString(currentBarTime, TIME_SECONDS));
-    }
-    
     // Handle initial calculation on first valid tick
     if(g_lastBarTime == 0) {
         g_lastBarTime = currentBarTime;
@@ -258,26 +246,30 @@ void OnTick()
         return;
     }
     
-    // Regular new bar detection
-    if(currentBarTime <= g_lastBarTime) 
-        return;
-        
-    if(!IsDuringMarketHours()) {
+    // Only check market hours if enforcement is enabled
+    if(EnforceMarketHours && !IsDuringMarketHours()) {
         if(ShowDebugPrints)
             Print(StringFormat("Skipping processing outside market hours (EnforceMarketHours=%s)", 
                 EnforceMarketHours ? "true" : "false"));
         return;
     }
     
-    // Update state and process new bar
-    g_lastBarTime = currentBarTime;
-    g_strategy.OnNewBar();
+    // Check for new bar and update strategy if needed
+    bool isNewBar = (currentBarTime > g_lastBarTime);
+    if(isNewBar) {
+        g_lastBarTime = currentBarTime;
+        g_strategy.OnNewBar();
+        if(ShowDebugPrints)
+            Print("🆕 NEW BAR: ", TimeToString(currentBarTime, TIME_MINUTES));
+    }
     
-    // Get and print report
-    SKeyLevelReport report;
-    g_strategy.GetReport(report);
-    if(report.isValid)
-        PrintKeyLevelReport(report);
+    // Get and print report (only on new bars to avoid spam)
+    if(isNewBar) {
+        SKeyLevelReport report;
+        g_strategy.GetReport(report);
+        if(report.isValid && ShowDebugPrints)
+            PrintKeyLevelReport(report);
+    }
     
     // TRADING LOGIC - Only if trading is enabled
     if(EnableTrading) {
@@ -297,6 +289,9 @@ void OnTick()
             // Detect new breakouts
             DetectBreakoutAndInitRetest();
         }
+    } else {
+        if(ShowDebugPrints && isNewBar)
+            Print("⚠️ Trading is DISABLED - EnableTrading = false");
     }
 }
 
@@ -382,12 +377,12 @@ bool IsDuringMarketHours()
     if(!EnforceMarketHours)
         return true;
         
-    // US/EU session overlap check
+    // Expanded trading hours - European and US sessions
     datetime nyTime = TimeCurrent() - 5*3600;
     int nyHour = (int)(nyTime % 86400) / 3600;
     
-    // Monday-Friday 13:30-16:00 NY time (FX liquid hours)
-    if(nyHour >= 13 && nyHour < 16)
+    // Extended hours: 3:00-17:00 NY time (covers London + NY sessions)
+    if(nyHour >= 3 && nyHour < 17)
         return true;
     return false;
 }
