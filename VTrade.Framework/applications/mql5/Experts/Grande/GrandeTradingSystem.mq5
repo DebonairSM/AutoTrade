@@ -35,6 +35,9 @@ input bool   InpShowRegimeBackground = true;     // Show Regime Background Color
 input bool   InpShowRegimeInfo = true;           // Show Regime Info Panel
 input bool   InpShowKeyLevels = true;            // Show Key Level Lines
 input bool   InpShowSystemStatus = true;         // Show System Status Panel
+input bool   InpShowRegimeTrendArrows = true;    // Show Regime Trend Arrows
+input bool   InpShowADXStrengthMeter = true;     // Show ADX Strength Meter
+input bool   InpShowRegimeAlerts = true;         // Show Regime Change Alerts
 input bool   InpLogDetailedInfo = true;          // Log Detailed Information
 
 input group "=== Update Settings ==="
@@ -56,6 +59,9 @@ long                          g_chartID;
 const string REGIME_BACKGROUND_NAME = "GrandeRegimeBackground";
 const string REGIME_INFO_PANEL_NAME = "GrandeRegimeInfoPanel";
 const string SYSTEM_STATUS_PANEL_NAME = "GrandeSystemStatusPanel";
+const string REGIME_TREND_ARROW_NAME = "GrandeRegimeTrendArrow";
+const string ADX_STRENGTH_METER_NAME = "GrandeADXStrengthMeter";
+const string REGIME_ALERT_NAME = "GrandeRegimeAlert";
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -116,9 +122,8 @@ int OnInit()
         return INIT_FAILED;
     }
     
-    // Set up chart display
-    if(InpShowRegimeBackground || InpShowRegimeInfo)
-        SetupChartDisplay();
+    // Set up chart display - always setup for any visual features
+    SetupChartDisplay();
     
     // Set timer for updates
     EventSetTimer(MathMin(InpRegimeUpdateSeconds, InpKeyLevelUpdateSeconds));
@@ -237,13 +242,15 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void SetupChartDisplay()
 {
+    Print("[Grande] DEBUG: Setting up chart display properties");
+    
     // Set chart properties for better visualization
     ChartSetInteger(g_chartID, CHART_SHOW_GRID, false);
     ChartSetInteger(g_chartID, CHART_COLOR_BACKGROUND, clrBlack);
     ChartSetInteger(g_chartID, CHART_COLOR_FOREGROUND, clrWhite);
     ChartSetInteger(g_chartID, CHART_COLOR_GRID, clrDimGray);
     
-    Print("[Grande] Chart display setup completed");
+    Print("[Grande] DEBUG: Chart display setup completed - Chart ID: ", g_chartID);
 }
 
 //+------------------------------------------------------------------+
@@ -277,8 +284,12 @@ void PerformInitialAnalysis()
         }
     }
     
-    // Update display
+    // Force immediate visual update
     UpdateDisplayElements();
+    Print("[Grande] Visual display elements updated");
+    
+    // Ensure chart redraws
+    ChartRedraw(g_chartID);
 }
 
 //+------------------------------------------------------------------+
@@ -286,21 +297,49 @@ void PerformInitialAnalysis()
 //+------------------------------------------------------------------+
 void UpdateDisplayElements()
 {
-    if(g_regimeDetector == NULL) return;
+    if(g_regimeDetector == NULL) 
+    {
+        Print("[Grande] DEBUG: Regime detector is NULL - skipping display update");
+        return;
+    }
     
     RegimeSnapshot currentRegime = g_regimeDetector.GetLastSnapshot();
+    Print("[Grande] DEBUG: Updating display elements for regime: ", g_regimeDetector.RegimeToString(currentRegime.regime));
     
     // Update regime background
     if(InpShowRegimeBackground)
+    {
+        Print("[Grande] DEBUG: Updating regime background");
         UpdateRegimeBackground(currentRegime.regime);
+    }
     
     // Update info panels
     if(InpShowRegimeInfo)
+    {
+        Print("[Grande] DEBUG: Updating regime info panel");
         UpdateRegimeInfoPanel(currentRegime);
+    }
         
     if(InpShowSystemStatus)
+    {
+        Print("[Grande] DEBUG: Updating system status panel");
         UpdateSystemStatusPanel();
+    }
+        
+    // Update additional visual indicators
+    if(InpShowRegimeTrendArrows)
+    {
+        Print("[Grande] DEBUG: Updating regime trend arrows");
+        UpdateRegimeTrendArrows(currentRegime);
+    }
+        
+    if(InpShowADXStrengthMeter)
+    {
+        Print("[Grande] DEBUG: Updating ADX strength meter");
+        UpdateADXStrengthMeter(currentRegime);
+    }
     
+    Print("[Grande] DEBUG: Forcing chart redraw");
     ChartRedraw(g_chartID);
 }
 
@@ -330,6 +369,8 @@ void UpdateRegimeBackground(MARKET_REGIME regime)
             break;
     }
     
+    Print("[Grande] DEBUG: Background color for regime ", regime, " = ", bgColor);
+    
     // Remove existing background
     ObjectDelete(g_chartID, REGIME_BACKGROUND_NAME);
     
@@ -341,13 +382,25 @@ void UpdateRegimeBackground(MARKET_REGIME regime)
         double priceHigh = ChartGetDouble(g_chartID, CHART_PRICE_MAX);
         double priceLow = ChartGetDouble(g_chartID, CHART_PRICE_MIN);
         
-        ObjectCreate(g_chartID, REGIME_BACKGROUND_NAME, OBJ_RECTANGLE, 0, 
+        Print("[Grande] DEBUG: Creating background rectangle from ", TimeToString(timeStart), " to ", TimeToString(timeEnd));
+        Print("[Grande] DEBUG: Price range ", priceLow, " to ", priceHigh);
+        
+        bool created = ObjectCreate(g_chartID, REGIME_BACKGROUND_NAME, OBJ_RECTANGLE, 0, 
                     timeStart, priceLow, timeEnd, priceHigh);
-        ObjectSetInteger(g_chartID, REGIME_BACKGROUND_NAME, OBJPROP_COLOR, bgColor);
-        ObjectSetInteger(g_chartID, REGIME_BACKGROUND_NAME, OBJPROP_FILL, true);
-        ObjectSetInteger(g_chartID, REGIME_BACKGROUND_NAME, OBJPROP_BACK, true);
-        ObjectSetInteger(g_chartID, REGIME_BACKGROUND_NAME, OBJPROP_SELECTABLE, false);
-        ObjectSetInteger(g_chartID, REGIME_BACKGROUND_NAME, OBJPROP_HIDDEN, true);
+        
+        if(created)
+        {
+            ObjectSetInteger(g_chartID, REGIME_BACKGROUND_NAME, OBJPROP_COLOR, bgColor);
+            ObjectSetInteger(g_chartID, REGIME_BACKGROUND_NAME, OBJPROP_FILL, true);
+            ObjectSetInteger(g_chartID, REGIME_BACKGROUND_NAME, OBJPROP_BACK, true);
+            ObjectSetInteger(g_chartID, REGIME_BACKGROUND_NAME, OBJPROP_SELECTABLE, false);
+            ObjectSetInteger(g_chartID, REGIME_BACKGROUND_NAME, OBJPROP_HIDDEN, true);
+            Print("[Grande] DEBUG: Background rectangle created successfully");
+        }
+        else
+        {
+            Print("[Grande] DEBUG: FAILED to create background rectangle. Error: ", GetLastError());
+        }
     }
 }
 
@@ -383,16 +436,27 @@ void UpdateRegimeInfoPanel(const RegimeSnapshot &snapshot)
         TimeToString(snapshot.timestamp, TIME_MINUTES)
     );
     
+    Print("[Grande] DEBUG: Creating info panel with text length: ", StringLen(infoText));
+    
     // Create text label
-    ObjectCreate(g_chartID, REGIME_INFO_PANEL_NAME, OBJ_LABEL, 0, 0, 0);
-    ObjectSetString(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_TEXT, infoText);
-    ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-    ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_XDISTANCE, 10);
-    ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_YDISTANCE, 30);
-    ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_COLOR, clrWhite);
-    ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_FONTSIZE, 9);
-    ObjectSetString(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_FONT, "Consolas");
-    ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_SELECTABLE, false);
+    bool created = ObjectCreate(g_chartID, REGIME_INFO_PANEL_NAME, OBJ_LABEL, 0, 0, 0);
+    
+    if(created)
+    {
+        ObjectSetString(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_TEXT, infoText);
+        ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+        ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_XDISTANCE, 10);
+        ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_YDISTANCE, 30);
+        ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_COLOR, clrWhite);
+        ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_FONTSIZE, 9);
+        ObjectSetString(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_FONT, "Consolas");
+        ObjectSetInteger(g_chartID, REGIME_INFO_PANEL_NAME, OBJPROP_SELECTABLE, false);
+        Print("[Grande] DEBUG: Info panel created successfully");
+    }
+    else
+    {
+        Print("[Grande] DEBUG: FAILED to create info panel. Error: ", GetLastError());
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -469,6 +533,9 @@ void LogRegimeChange(const RegimeSnapshot &snapshot)
           " H4:", DoubleToString(snapshot.adx_h4, 1), 
           " D1:", DoubleToString(snapshot.adx_d1, 1));
     
+    // Show visual alert for regime change
+    ShowRegimeChangeAlert(snapshot);
+    
     // Check if regime aligns with key levels
     if(g_keyLevelDetector != NULL)
     {
@@ -501,6 +568,9 @@ void CleanupChartObjects()
     ObjectDelete(g_chartID, REGIME_BACKGROUND_NAME);
     ObjectDelete(g_chartID, REGIME_INFO_PANEL_NAME);
     ObjectDelete(g_chartID, SYSTEM_STATUS_PANEL_NAME);
+    ObjectDelete(g_chartID, REGIME_TREND_ARROW_NAME);
+    ObjectDelete(g_chartID, ADX_STRENGTH_METER_NAME);
+    ObjectDelete(g_chartID, REGIME_ALERT_NAME);
     
     // Clean up key level lines
     if(g_keyLevelDetector != NULL)
@@ -548,5 +618,192 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
                 UpdateDisplayElements();
             }
         }
+        else if(lparam == 'T' || lparam == 't') // Press 'T' to test visuals
+        {
+            Print("[Grande] TESTING VISUALS - Creating test elements");
+            CreateTestVisuals();
+        }
+        else if(lparam == 'C' || lparam == 'c') // Press 'C' to clear all objects
+        {
+            Print("[Grande] CLEARING ALL OBJECTS");
+            CleanupChartObjects();
+        }
     }
+}
+
+//+------------------------------------------------------------------+
+//| Update regime trend arrows                                       |
+//+------------------------------------------------------------------+
+void UpdateRegimeTrendArrows(const RegimeSnapshot &snapshot)
+{
+    // Remove existing arrows
+    ObjectDelete(g_chartID, REGIME_TREND_ARROW_NAME);
+    
+    if(snapshot.regime == REGIME_RANGING || snapshot.regime == REGIME_HIGH_VOLATILITY)
+        return; // No arrows for ranging/high volatility
+    
+    // Get current price and time
+    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    datetime currentTime = TimeCurrent();
+    
+    // Determine arrow properties
+    int arrowCode = 0;
+    color arrowColor = clrNONE;
+    string arrowName = REGIME_TREND_ARROW_NAME;
+    
+    switch(snapshot.regime)
+    {
+        case REGIME_TREND_BULL:
+            arrowCode = 233; // Up arrow
+            arrowColor = clrLime;
+            break;
+        case REGIME_TREND_BEAR:
+            arrowCode = 234; // Down arrow  
+            arrowColor = clrRed;
+            break;
+        case REGIME_BREAKOUT_SETUP:
+            arrowCode = 159; // Diamond
+            arrowColor = clrYellow;
+            break;
+    }
+    
+    if(arrowCode > 0)
+    {
+        ObjectCreate(g_chartID, arrowName, OBJ_ARROW, 0, currentTime, currentPrice);
+        ObjectSetInteger(g_chartID, arrowName, OBJPROP_ARROWCODE, arrowCode);
+        ObjectSetInteger(g_chartID, arrowName, OBJPROP_COLOR, arrowColor);
+        ObjectSetInteger(g_chartID, arrowName, OBJPROP_WIDTH, 3);
+        ObjectSetInteger(g_chartID, arrowName, OBJPROP_SELECTABLE, false);
+        ObjectSetString(g_chartID, arrowName, OBJPROP_TOOLTIP, 
+                       StringFormat("Regime: %s (Confidence: %.2f)", 
+                                   g_regimeDetector.RegimeToString(snapshot.regime),
+                                   snapshot.confidence));
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Update ADX strength meter                                        |
+//+------------------------------------------------------------------+
+void UpdateADXStrengthMeter(const RegimeSnapshot &snapshot)
+{
+    // Remove existing meter
+    ObjectDelete(g_chartID, ADX_STRENGTH_METER_NAME);
+    
+    // Create ADX strength visualization
+    string meterText = StringFormat(
+        "ADX STRENGTH METER\n" +
+        "══════════════════\n" +
+        "Current TF: %.1f %s\n" +
+        "H4: %.1f %s\n" +
+        "D1: %.1f %s\n" +
+        "══════════════════\n" +
+        "Trend Strength:\n" +
+        "%s",
+        snapshot.adx_h1, GetADXStrengthBar(snapshot.adx_h1),
+        snapshot.adx_h4, GetADXStrengthBar(snapshot.adx_h4),
+        snapshot.adx_d1, GetADXStrengthBar(snapshot.adx_d1),
+        GetTrendStrengthDescription(snapshot.adx_h1)
+    );
+    
+    // Create meter label
+    ObjectCreate(g_chartID, ADX_STRENGTH_METER_NAME, OBJ_LABEL, 0, 0, 0);
+    ObjectSetString(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_TEXT, meterText);
+    ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_CORNER, CORNER_LEFT_LOWER);
+    ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_XDISTANCE, 10);
+    ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_YDISTANCE, 150);
+    ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_COLOR, clrCyan);
+    ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_FONTSIZE, 8);
+    ObjectSetString(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_FONT, "Consolas");
+    ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_SELECTABLE, false);
+}
+
+//+------------------------------------------------------------------+
+//| Show regime change alert                                         |
+//+------------------------------------------------------------------+
+void ShowRegimeChangeAlert(const RegimeSnapshot &snapshot)
+{
+    if(!InpShowRegimeAlerts) return;
+    
+    // Remove existing alert
+    ObjectDelete(g_chartID, REGIME_ALERT_NAME);
+    
+    // Create alert text
+    string alertText = StringFormat(
+        "🚨 REGIME CHANGE ALERT 🚨\n" +
+        "NEW: %s\n" +
+        "Confidence: %.2f\n" +
+        "Time: %s",
+        g_regimeDetector.RegimeToString(snapshot.regime),
+        snapshot.confidence,
+        TimeToString(snapshot.timestamp, TIME_MINUTES)
+    );
+    
+    // Create alert label (center of chart)
+    ObjectCreate(g_chartID, REGIME_ALERT_NAME, OBJ_LABEL, 0, 0, 0);
+    ObjectSetString(g_chartID, REGIME_ALERT_NAME, OBJPROP_TEXT, alertText);
+    ObjectSetInteger(g_chartID, REGIME_ALERT_NAME, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+    ObjectSetInteger(g_chartID, REGIME_ALERT_NAME, OBJPROP_XDISTANCE, 300);
+    ObjectSetInteger(g_chartID, REGIME_ALERT_NAME, OBJPROP_YDISTANCE, 100);
+    ObjectSetInteger(g_chartID, REGIME_ALERT_NAME, OBJPROP_COLOR, clrOrange);
+    ObjectSetInteger(g_chartID, REGIME_ALERT_NAME, OBJPROP_FONTSIZE, 12);
+    ObjectSetString(g_chartID, REGIME_ALERT_NAME, OBJPROP_FONT, "Arial Bold");
+    ObjectSetInteger(g_chartID, REGIME_ALERT_NAME, OBJPROP_SELECTABLE, false);
+    
+    // Auto-remove alert after 10 seconds
+    EventSetTimer(10);
+}
+
+//+------------------------------------------------------------------+
+//| Helper functions for visual indicators                           |
+//+------------------------------------------------------------------+
+string GetADXStrengthBar(double adxValue)
+{
+    if(adxValue >= 40) return "████████ VERY STRONG";
+    if(adxValue >= 30) return "██████   STRONG";
+    if(adxValue >= 25) return "████     TRENDING";
+    if(adxValue >= 20) return "██       WEAK";
+    return "         NO TREND";
+}
+
+string GetTrendStrengthDescription(double adxValue)
+{
+    if(adxValue >= 40) return "💪 VERY STRONG TREND";
+    if(adxValue >= 30) return "🔥 STRONG TREND";
+    if(adxValue >= 25) return "📈 TRENDING MARKET";
+    if(adxValue >= 20) return "⚡ WEAK TREND";
+    return "�� RANGING MARKET";
+} 
+
+//+------------------------------------------------------------------+
+//| Test visual elements function                                    |
+//+------------------------------------------------------------------+
+void CreateTestVisuals()
+{
+    // Create a simple test label to verify chart objects work
+    string testName = "GrandeTestLabel";
+    ObjectDelete(g_chartID, testName);
+    
+    bool created = ObjectCreate(g_chartID, testName, OBJ_LABEL, 0, 0, 0);
+    
+    if(created)
+    {
+        ObjectSetString(g_chartID, testName, OBJPROP_TEXT, "GRANDE VISUAL TEST\nIf you see this, chart objects work!");
+        ObjectSetInteger(g_chartID, testName, OBJPROP_CORNER, CORNER_RIGHT_LOWER);
+        ObjectSetInteger(g_chartID, testName, OBJPROP_XDISTANCE, 10);
+        ObjectSetInteger(g_chartID, testName, OBJPROP_YDISTANCE, 50);
+        ObjectSetInteger(g_chartID, testName, OBJPROP_COLOR, clrYellow);
+        ObjectSetInteger(g_chartID, testName, OBJPROP_FONTSIZE, 12);
+        ObjectSetString(g_chartID, testName, OBJPROP_FONT, "Arial Bold");
+        ObjectSetInteger(g_chartID, testName, OBJPROP_SELECTABLE, false);
+        
+        Print("[Grande] TEST: Visual test label created successfully");
+    }
+    else
+    {
+        Print("[Grande] TEST: FAILED to create test label. Error: ", GetLastError());
+    }
+    
+    // Force display update
+    UpdateDisplayElements();
+    ChartRedraw(g_chartID);
 } 
