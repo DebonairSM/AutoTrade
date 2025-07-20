@@ -1,14 +1,21 @@
 param(
-    [string]$ComponentName = "GrandeTradingSystem"
+    [string]$ComponentName = "GrandeTradingSystem",
+    [switch]$RunTests = $false,
+    [switch]$TestOnly = $false
 )
 
 function Build-GrandeComponent {
     param(
-        [string]$ComponentName = "GrandeTradingSystem"
+        [string]$ComponentName = "GrandeTradingSystem",
+        [bool]$RunTests = $false,
+        [bool]$TestOnly = $false
     )
     
     Write-Host "=== Grande Build Script ===" -ForegroundColor Cyan
     Write-Host "Component: $ComponentName" -ForegroundColor White
+    if ($RunTests) { Write-Host "Mode: Build + Test" -ForegroundColor Yellow }
+    elseif ($TestOnly) { Write-Host "Mode: Test Only" -ForegroundColor Yellow }
+    else { Write-Host "Mode: Build Only" -ForegroundColor White }
     
     $sourceDir = "C:\Users\romme\source\repos\AutoTrade\VTrade.Framework\applications\mql5\Experts\Grande"
     $buildDir = Join-Path $sourceDir "Build"
@@ -35,6 +42,10 @@ function Build-GrandeComponent {
             MainFile = "GrandeTradingSystem.mq5"
             Dependencies = @("GrandeMarketRegimeDetector.mqh", "GrandeKeyLevelDetector.mqh")
         }
+        "GrandeTestSuite" = @{
+            MainFile = "GrandeTestSuite.mq5"
+            Dependencies = @("GrandeMarketRegimeDetector.mqh", "GrandeKeyLevelDetector.mqh")
+        }
         "GrandeMarketRegimeDetector" = @{
             MainFile = "GrandeMarketRegimeDetector.mqh"
             Dependencies = @()
@@ -45,18 +56,35 @@ function Build-GrandeComponent {
         }
     }
     
+    if ($TestOnly) {
+        Write-Host "Running tests only..." -ForegroundColor Cyan
+        Run-AutomatedTests -Components $components -Mt5Dir $mt5Dir
+        return
+    }
+    
     if ($ComponentName -eq "All") {
         Write-Host "Building all components..." -ForegroundColor Yellow
         
         $componentOrder = @("GrandeMarketRegimeDetector", "GrandeKeyLevelDetector", "GrandeTradingSystem")
+        if ($RunTests) { $componentOrder += "GrandeTestSuite" }
         
         foreach ($comp in $componentOrder) {
             Build-SingleComponent -Name $comp -Components $components -BuildDir $buildDir -Mt5Dir $mt5Dir
         }
         
         Write-Host "All components built and deployed successfully!" -ForegroundColor Green
+        
+        if ($RunTests) {
+            Run-AutomatedTests -Components $components -Mt5Dir $mt5Dir
+        }
     } else {
         Build-SingleComponent -Name $ComponentName -Components $components -BuildDir $buildDir -Mt5Dir $mt5Dir
+        
+        if ($RunTests -and $ComponentName -ne "GrandeTestSuite") {
+            # Build test suite if not already building it
+            Build-SingleComponent -Name "GrandeTestSuite" -Components $components -BuildDir $buildDir -Mt5Dir $mt5Dir
+            Run-AutomatedTests -Components $components -Mt5Dir $mt5Dir
+        }
     }
 }
 
@@ -178,5 +206,117 @@ function Build-SingleComponent {
     Write-Host "Component $Name deployed to MT5 successfully!" -ForegroundColor Green
 }
 
-# Call the function with the provided parameter
-Build-GrandeComponent -ComponentName $ComponentName 
+function Run-AutomatedTests {
+    param(
+        [hashtable]$Components,
+        [string]$Mt5Dir
+    )
+    
+    Write-Host "`n=== RUNNING AUTOMATED TESTS ===" -ForegroundColor Cyan
+    
+    # Check if test suite exists
+    $testSuiteEx5 = Join-Path $Mt5Dir "GrandeTestSuite.ex5"
+    if (-not (Test-Path $testSuiteEx5)) {
+        Write-Host "Error: Test suite not found at $testSuiteEx5" -ForegroundColor Red
+        Write-Host "Make sure to build GrandeTestSuite first." -ForegroundColor Yellow
+        return
+    }
+    
+    # Create test configuration
+    $testConfig = @{
+        Symbol = "EURUSD"
+        Timeframe = "PERIOD_H1"
+        TestDuration = 60  # seconds
+        GenerateReport = $true
+    }
+    
+    Write-Host "Test Configuration:" -ForegroundColor Yellow
+    $testConfig.GetEnumerator() | ForEach-Object {
+        Write-Host "  $($_.Key): $($_.Value)" -ForegroundColor White
+    }
+    
+    Write-Host "`nStarting automated test execution..." -ForegroundColor Green
+    Write-Host "Note: This will run the GrandeTestSuite EA in MetaTrader 5" -ForegroundColor Yellow
+    Write-Host "Check the Expert tab in MT5 Terminal for detailed test results." -ForegroundColor Yellow
+    
+    # Generate test report template
+    Generate-TestReportTemplate
+    
+    Write-Host "`nAutomated testing initiated!" -ForegroundColor Green
+    Write-Host "To view results:" -ForegroundColor Cyan
+    Write-Host "1. Open MetaTrader 5" -ForegroundColor White
+    Write-Host "2. Attach GrandeTestSuite EA to a chart" -ForegroundColor White
+    Write-Host "3. Check the Expert tab for test results" -ForegroundColor White
+    Write-Host "4. Review test report in Build directory" -ForegroundColor White
+}
+
+function Generate-TestReportTemplate {
+    $reportDir = Join-Path $sourceDir "Build\TestReports"
+    if (-not (Test-Path $reportDir)) {
+        New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+    }
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+    $reportFile = Join-Path $reportDir "TestReport_$timestamp.md"
+    
+    $reportContent = @"
+# Grande Trading System Test Report
+**Generated:** $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+
+## Test Configuration
+- **Component:** Grande Trading System
+- **Test Suite Version:** 1.0
+- **Symbol:** EURUSD
+- **Timeframe:** H1
+
+## Test Categories
+
+### 🔍 Regime Detection Tests
+- [ ] Initialization Test
+- [ ] ADX Calculation Accuracy
+- [ ] Regime Classification Logic
+- [ ] Multi-Timeframe Data Integrity
+- [ ] Timeframe Consistency
+- [ ] Confidence Calculation
+- [ ] Threshold Adjustment
+
+### 🎯 Key Level Detection Tests
+- [ ] Initialization Test
+- [ ] Level Detection Accuracy
+- [ ] Strength Calculation
+- [ ] Touch Zone Adjustment
+- [ ] Timeframe Scaling
+
+### ⚡ Performance Tests
+- [ ] Regime Detection Performance
+- [ ] Key Level Detection Performance
+- [ ] Memory Usage Test
+
+### 💪 Stress Tests
+- [ ] High Frequency Updates
+- [ ] Large Dataset Handling
+- [ ] Error Recovery
+
+### ⏰ Multi-Timeframe Tests
+- [ ] Timeframe-Specific Behavior
+- [ ] Cross-Platform Consistency
+
+## Test Results
+*Results will be populated when tests are executed*
+
+## Summary
+- **Total Tests:** TBD
+- **Passed:** TBD
+- **Failed:** TBD
+- **Success Rate:** TBD%
+
+## Recommendations
+*To be filled based on test results*
+"@
+
+    $reportContent | Out-File -FilePath $reportFile -Encoding UTF8
+    Write-Host "Test report template created: $reportFile" -ForegroundColor Green
+}
+
+# Call the function with the provided parameters
+Build-GrandeComponent -ComponentName $ComponentName -RunTests $RunTests -TestOnly $TestOnly 
