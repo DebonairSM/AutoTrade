@@ -85,7 +85,7 @@ public:
                                   m_minStrength(0),
                                   m_touchZone(0),
                                   m_minTouches(0),
-                                  m_version("1.0.4")
+                                  m_version("2.1.0")
     {
         m_report.Reset();
     }

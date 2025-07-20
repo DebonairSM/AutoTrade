@@ -1,0 +1,38 @@
+;--- V-2-EA-Main Conservative Optimization Settings
+;--- Generated for MT5 Strategy Tester
+;--- Focus: Stability & Risk Management
+;--- Target: Lower Drawdown, Steady Returns
+;--- Estimated Time: 1-2 hours
+
+LookbackPeriod=100||90||5||110||1||100
+MinStrength=0.45||0.40||0.05||0.55||1||0.45
+TouchZone=0.002500||0.002000||0.000250||0.003000||1||0.002500
+MinTouches=3||3||0||3||0||3
+ShowDebugPrints=false||false||0||false||0||false
+EnforceMarketHours=false||false||0||false||0||false
+CurrentTimeframeOnly=true||true||0||true||0||true
+EnableTrading=true||true||0||true||0||true
+RiskPercentage=1.50||1.00||0.25||2.00||1||1.50
+ATRMultiplierSL=1.00||0.90||0.05||1.20||1||1.00
+ATRMultiplierTP=6.00||5.00||0.50||7.00||1||6.00
+MagicNumber=12345||12345||0||12345||0||12345
+UseVolumeFilter=true||true||0||true||0||true
+UseRetest=true||true||0||true||0||true
+UseTrailingStop=true||true||0||true||0||true
+TrailingStartPips=20.0||20.0||0||20.0||0||20.0
+TrailingStepPips=10.0||10.0||0||10.0||0||10.0
+UseBreakeven=true||true||0||true||0||true
+BreakoutLookback=20||20||0||20||0||20
+MinStrengthThreshold=0.70||0.65||0.05||0.80||1||0.70
+RetestATRMultiplier=0.40||0.40||0||0.40||0||0.40
+RetestPipsThreshold=12.0||12.0||0||12.0||0||12.0
+UseRegimeFilter=true||true||0||true||0||true
+TradeOnlyBreakoutRegime=false||false||0||false||0||false
+AvoidRangingMarkets=true||true||0||true||0||true
+ReduceRiskInHighVol=false||false||0||true||1||false
+HighVolRiskReduction=0.50||0.40||0.10||0.60||1||0.50
+MinRegimeConfidence=0.75||0.70||0.05||0.85||1||0.75
+UseTrendFilter=false||false||0||false||0||false
+FastMA_Period=21||21||0||21||0||21
+SlowMA_Period=50||50||0||50||0||50
+MA_Method=1||1||0||1||0||1 
