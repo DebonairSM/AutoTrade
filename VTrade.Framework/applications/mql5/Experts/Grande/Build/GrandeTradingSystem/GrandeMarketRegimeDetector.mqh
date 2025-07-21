@@ -267,12 +267,12 @@ public:
     {
         switch(regime)
         {
-            case REGIME_TREND_BULL:      return "BULL TREND";
-            case REGIME_TREND_BEAR:      return "BEAR TREND";
-            case REGIME_BREAKOUT_SETUP:  return "BREAKOUT SETUP";
-            case REGIME_RANGING:         return "RANGING";
-            case REGIME_HIGH_VOLATILITY: return "HIGH VOLATILITY";
-            default:                     return "UNKNOWN";
+            case REGIME_TREND_BULL:      return " BULL TREND ";
+            case REGIME_TREND_BEAR:      return " BEAR TREND ";
+            case REGIME_BREAKOUT_SETUP:  return " BREAKOUT SETUP ";
+            case REGIME_RANGING:         return " RANGING ";
+            case REGIME_HIGH_VOLATILITY: return " HIGH VOLATILITY ";
+            default:                     return " UNKNOWN ";
         }
     }
     

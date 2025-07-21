@@ -25,10 +25,10 @@ input int    InpATRAvgPeriod = 90;               // ATR Average Period
 input double InpHighVolMultiplier = 2.0;         // High Volatility Multiplier
 
 input group "=== Key Level Detection Settings ==="
-input int    InpLookbackPeriod = 100;            // Lookback Period for Key Levels
-input double InpMinStrength = 0.65;              // Minimum Level Strength
-input double InpTouchZone = 0.0005;              // Touch Zone (0 = auto)
-input int    InpMinTouches = 2;                  // Minimum Touches Required
+input int    InpLookbackPeriod = 300;            // Lookback Period for Key Levels
+input double InpMinStrength = 0.40;              // Minimum Level Strength
+input double InpTouchZone = 0.0010;              // Touch Zone (0 = auto)
+input int    InpMinTouches = 1;                  // Minimum Touches Required
 
 input group "=== Display Settings ==="
 input bool   InpShowRegimeBackground = true;     // Show Regime Background Colors
