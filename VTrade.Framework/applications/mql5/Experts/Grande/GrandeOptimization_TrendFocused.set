@@ -1,0 +1,48 @@
+;Grande Trading System - Trend Focused Optimization
+;Optimized for trending market conditions
+;Generated: 2025-01-20
+
+;=== Market Regime Settings ===
+InpADXTrendThreshold=25.0|22.0|30.0|1.0
+InpADXBreakoutMin=20.0|18.0|25.0|1.0
+InpATRPeriod=14|12|18|1
+InpATRAvgPeriod=90|75|105|5
+InpHighVolMultiplier=2.0|1.8|2.5|0.1
+
+;=== Key Level Detection Settings ===
+InpLookbackPeriod=300|250|400|25
+InpMinStrength=0.40|0.35|0.50|0.05
+InpTouchZone=0.0010|0.0008|0.0015|0.0001
+InpMinTouches=1|1|2|1
+
+;=== Trading Settings ===
+InpEnableTrading=true
+InpAccountRiskPctTrend=2.5|2.0|4.0|0.25
+InpAccountRiskPctRange=1.0|0.75|1.5|0.25
+InpAccountRiskPctBreak=3.0|2.5|4.5|0.5
+InpMaxAccountDDPct=25.0|20.0|30.0|2.5
+InpMagicNumber=123456
+InpSlippage=30|25|40|5
+
+;=== Signal Settings ===
+InpEMA50Period=50|40|60|5
+InpEMA200Period=200|180|220|10
+InpEMA20Period=20|18|25|2
+InpRSIPeriod=14|12|16|1
+InpStochPeriod=14|12|16|1
+InpStochK=3|2|4|1
+InpStochD=3|2|4|1
+
+;=== Display Settings ===
+InpShowRegimeBackground=true
+InpShowRegimeInfo=true
+InpShowKeyLevels=true
+InpShowSystemStatus=true
+InpShowRegimeTrendArrows=true
+InpShowADXStrengthMeter=true
+InpShowRegimeAlerts=true
+InpLogDetailedInfo=false
+
+;=== Update Settings ===
+InpRegimeUpdateSeconds=5|4|8|1
+InpKeyLevelUpdateSeconds=300|240|360|30 

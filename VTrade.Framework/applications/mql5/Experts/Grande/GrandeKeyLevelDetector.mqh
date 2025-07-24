@@ -429,6 +429,9 @@ public:
         ArrayFree(m_chartLines);
         ArrayResize(m_chartLines, m_levelCount);
         
+        // Reclassify levels based on current price relationship
+        ReclassifyLevelsBasedOnCurrentPrice(currentPrice);
+        
         // Sort levels by strength for optimal display
         SortLevelsByStrength();
         
@@ -1146,19 +1149,30 @@ private:
         // Determine base color by position and type
         if(level.isResistance)
         {
-            if(level.strength >= 0.90)      baseColor = isAbovePrice ? clrDarkRed : clrMaroon;
-            else if(level.strength >= 0.80) baseColor = isAbovePrice ? clrRed : clrCrimson;
-            else if(level.strength >= 0.70) baseColor = isAbovePrice ? clrOrangeRed : clrIndianRed;
-            else if(level.strength >= 0.60) baseColor = isAbovePrice ? clrOrange : clrSandyBrown;
-            else                            baseColor = isAbovePrice ? clrGold : clrKhaki;
+            // All resistance levels should use red color scheme for consistency
+            if(level.strength >= 0.90)      baseColor = clrDarkRed;     // Strongest resistance - dark red
+            else if(level.strength >= 0.80) baseColor = clrRed;         // Strong resistance - red
+            else if(level.strength >= 0.70) baseColor = clrCrimson;     // Medium-strong resistance - crimson
+            else if(level.strength >= 0.60) baseColor = clrOrangeRed;   // Medium resistance - orange-red
+            else                            baseColor = clrIndianRed;    // Weak resistance - indian red
+            
+            // Debug validation for 15-minute timeframe
+            if(m_showDebugPrints && Period() == PERIOD_M15)
+            {
+                LogInfo(StringFormat("🔴 RESISTANCE %.5f: Strength=%.3f, Color=%s, AbovePrice=%s", 
+                    level.price, level.strength, 
+                    (baseColor == clrDarkRed ? "DarkRed" : baseColor == clrRed ? "Red" : "Other"), 
+                    isAbovePrice ? "YES" : "NO"));
+            }
         }
         else // Support
         {
-            if(level.strength >= 0.90)      baseColor = isAbovePrice ? clrDarkGreen : clrForestGreen;
-            else if(level.strength >= 0.80) baseColor = isAbovePrice ? clrLime : clrGreen;
-            else if(level.strength >= 0.70) baseColor = isAbovePrice ? clrLimeGreen : clrSeaGreen;
-            else if(level.strength >= 0.60) baseColor = isAbovePrice ? clrAqua : clrCadetBlue;
-            else                            baseColor = isAbovePrice ? clrDeepSkyBlue : clrSteelBlue;
+            // Support levels use green color scheme
+            if(level.strength >= 0.90)      baseColor = clrDarkGreen;   // Strongest support
+            else if(level.strength >= 0.80) baseColor = clrGreen;       // Strong support
+            else if(level.strength >= 0.70) baseColor = clrLimeGreen;   // Medium-strong support
+            else if(level.strength >= 0.60) baseColor = clrSeaGreen;    // Medium support
+            else                            baseColor = clrCadetBlue;    // Weak support
         }
         
         // Add volume confirmation accent
@@ -1233,6 +1247,10 @@ private:
         string strengthDesc = GetStrengthDescription(level.strength);
         string volumeIcon = level.volumeConfirmed ? "🔊" : "🔇";
         
+        // Handle invalid/uninitialized datetime values
+        string firstTouchStr = (level.firstTouch > 0) ? TimeToString(level.firstTouch, TIME_DATE|TIME_MINUTES) : "Not Available";
+        string lastTouchStr = (level.lastTouch > 0) ? TimeToString(level.lastTouch, TIME_DATE|TIME_MINUTES) : "Not Available";
+        
         return StringFormat(
             "%s LEVEL\n" +
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
@@ -1250,8 +1268,8 @@ private:
             level.strength, strengthDesc,
             level.touchCount,
             (int)(distance / _Point),
-            TimeToString(level.firstTouch, TIME_DATE),
-            TimeToString(level.lastTouch, TIME_DATE),
+            firstTouchStr,
+            lastTouchStr,
             volumeIcon, level.volumeRatio,
             level.bounceQuality,
             level.slopeConsistency
@@ -1284,7 +1302,7 @@ private:
             return false;
         }
         
-        // Validate data integrity
+        // Validate data integrity including datetime values
         for(int i = 0; i < MathMin(10, ArraySize(highs)); i++)
         {
             if(highs[i] <= 0 || lows[i] <= 0 || highs[i] < lows[i])
@@ -1292,9 +1310,127 @@ private:
                 LogError(StringFormat("Invalid price data at index %d: H=%.5f, L=%.5f", i, highs[i], lows[i]));
                 return false;
             }
+            
+            // Validate datetime values
+            if(times[i] <= 0)
+            {
+                LogError(StringFormat("Invalid datetime at index %d: %s", i, TimeToString(times[i])));
+                return false;
+            }
         }
         
         return true;
+    }
+    
+    //+------------------------------------------------------------------+
+    //| Level Classification Correction Methods                          |
+    //+------------------------------------------------------------------+
+    void ReclassifyLevelsBasedOnCurrentPrice(double currentPrice)
+    {
+        int reclassified = 0;
+        
+        for(int i = 0; i < m_levelCount; i++)
+        {
+            bool shouldBeResistance = (m_keyLevels[i].price > currentPrice);
+            
+            if(m_keyLevels[i].isResistance != shouldBeResistance)
+            {
+                string oldType = m_keyLevels[i].isResistance ? "RESISTANCE" : "SUPPORT";
+                string newType = shouldBeResistance ? "RESISTANCE" : "SUPPORT";
+                
+                if(m_showDebugPrints)
+                {
+                    LogInfo(StringFormat("🔄 Reclassifying level %.5f: %s → %s (Current price: %.5f)", 
+                        m_keyLevels[i].price, oldType, newType, currentPrice));
+                }
+                
+                m_keyLevels[i].isResistance = shouldBeResistance;
+                reclassified++;
+            }
+        }
+        
+        if(reclassified > 0)
+        {
+            LogInfo(StringFormat("✅ Reclassified %d levels based on current price %.5f", reclassified, currentPrice));
+        }
+        
+        // Validate all levels after reclassification
+        if(m_showDebugPrints && Period() == PERIOD_M15)
+        {
+            LogInfo("🔍 Post-reclassification validation:");
+            for(int i = 0; i < m_levelCount; i++)
+            {
+                bool isCorrect = (m_keyLevels[i].isResistance && m_keyLevels[i].price > currentPrice) ||
+                               (!m_keyLevels[i].isResistance && m_keyLevels[i].price < currentPrice);
+                
+                LogInfo(StringFormat("  Level %d: %.5f %s %s", 
+                    i, m_keyLevels[i].price,
+                    m_keyLevels[i].isResistance ? "RESISTANCE" : "SUPPORT",
+                    isCorrect ? "✅" : "❌"));
+            }
+        }
+    }
+    
+    //+------------------------------------------------------------------+
+    //| Enhanced Validation Methods                                      |
+    //+------------------------------------------------------------------+
+    bool ValidateKeyLevelData(const SKeyLevel &level, int index = -1)
+    {
+        bool isValid = true;
+        string prefix = (index >= 0) ? StringFormat("[Level %d] ", index) : "";
+        
+        // Validate price
+        if(level.price <= 0)
+        {
+            LogError(StringFormat("%sInvalid price: %.5f", prefix, level.price));
+            isValid = false;
+        }
+        
+        // Validate datetime values
+        if(level.firstTouch <= 0)
+        {
+            LogError(StringFormat("%sInvalid firstTouch: %s (timestamp: %d)", 
+                prefix, TimeToString(level.firstTouch), (int)level.firstTouch));
+            isValid = false;
+        }
+        
+        if(level.lastTouch <= 0)
+        {
+            LogError(StringFormat("%sInvalid lastTouch: %s (timestamp: %d)", 
+                prefix, TimeToString(level.lastTouch), (int)level.lastTouch));
+            isValid = false;
+        }
+        
+        // Validate touch count
+        if(level.touchCount <= 0)
+        {
+            LogError(StringFormat("%sInvalid touchCount: %d", prefix, level.touchCount));
+            isValid = false;
+        }
+        
+        // Log level type validation for 15-minute timeframe
+        if(m_showDebugPrints && Period() == PERIOD_M15)
+        {
+            double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            bool shouldBeResistance = (level.price > currentPrice);
+            
+            if(level.isResistance != shouldBeResistance)
+            {
+                LogError(StringFormat("%s⚠️  Type mismatch: Level %.5f marked as %s but price %.5f suggests %s", 
+                    prefix, level.price, 
+                    level.isResistance ? "RESISTANCE" : "SUPPORT",
+                    currentPrice,
+                    shouldBeResistance ? "RESISTANCE" : "SUPPORT"));
+            }
+            else
+            {
+                LogInfo(StringFormat("%s✅ %s %.5f correctly identified (current: %.5f)", 
+                    prefix, level.isResistance ? "RESISTANCE" : "SUPPORT", 
+                    level.price, currentPrice));
+            }
+        }
+        
+        return isValid;
     }
     
     SKeyLevel CreateKeyLevel(double price, bool isResistance, datetime firstTouch)
@@ -1304,6 +1440,18 @@ private:
         level.isResistance = isResistance;
         level.touchCount = 1;
         level.strength = 0.0;
+        
+        // Validate and set first touch - use current time if invalid
+        if(firstTouch <= 0)
+        {
+            firstTouch = TimeCurrent();
+            if(m_showDebugPrints)
+            {
+                LogError(StringFormat("Invalid firstTouch time for level %.5f, using current time: %s", 
+                    price, TimeToString(firstTouch, TIME_DATE|TIME_MINUTES)));
+            }
+        }
+        
         level.firstTouch = firstTouch;
         level.lastTouch = firstTouch;
         level.volumeConfirmed = false;
@@ -1438,6 +1586,13 @@ private:
     
     void AddKeyLevel(const SKeyLevel &level)
     {
+        // Validate key level data before adding
+        if(!ValidateKeyLevelData(level, m_levelCount))
+        {
+            LogError(StringFormat("❌ Skipping invalid key level at price %.5f", level.price));
+            return;
+        }
+        
         if(m_levelCount >= ArraySize(m_keyLevels))
         {
             ArrayResize(m_keyLevels, m_levelCount + 100);
@@ -1445,6 +1600,15 @@ private:
         
         m_keyLevels[m_levelCount] = level;
         m_levelCount++;
+        
+        // Log successful addition for 15-minute timeframe debugging
+        if(m_showDebugPrints && Period() == PERIOD_M15)
+        {
+            LogInfo(StringFormat("✅ Added %s level: %.5f (Strength: %.3f, First Touch: %s)", 
+                level.isResistance ? "RESISTANCE" : "SUPPORT",
+                level.price, level.strength,
+                TimeToString(level.firstTouch, TIME_DATE|TIME_MINUTES)));
+        }
     }
     
     double GetDynamicMinHeight()
