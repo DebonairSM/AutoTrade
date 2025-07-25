@@ -13,6 +13,7 @@
 
 #include "GrandeMarketRegimeDetector.mqh"
 #include "GrandeKeyLevelDetector.mqh"
+#include "..\VSol\AdvancedTrendFollower.mqh"
 #include <Trade\Trade.mqh>
 
 //+------------------------------------------------------------------+
@@ -49,6 +50,20 @@ input int    InpStochPeriod = 14;                // Stochastic Period
 input int    InpStochK = 3;                      // Stochastic %K
 input int    InpStochD = 3;                      // Stochastic %D
 
+input group "=== Advanced Trend Follower ==="
+input bool   InpEnableTrendFollower = true;      // Enable Trend Follower Confirmation
+input int    InpTFEmaFastPeriod = 50;            // TF Fast EMA Period
+input int    InpTFEmaSlowPeriod = 200;           // TF Slow EMA Period  
+input int    InpTFEmaPullbackPeriod = 20;        // TF Pullback EMA Period
+input int    InpTFMacdFastPeriod = 12;           // TF MACD Fast Period
+input int    InpTFMacdSlowPeriod = 26;           // TF MACD Slow Period
+input int    InpTFMacdSignalPeriod = 9;          // TF MACD Signal Period
+input int    InpTFRsiPeriod = 14;                // TF RSI Period
+input double InpTFRsiThreshold = 50.0;           // TF RSI Threshold
+input int    InpTFAdxPeriod = 14;                // TF ADX Period
+input double InpTFAdxThreshold = 25.0;           // TF ADX Minimum Threshold
+input bool   InpShowTrendFollowerPanel = true;   // Show TF Diagnostic Panel
+
 input group "=== Display Settings ==="
 input bool   InpShowRegimeBackground = true;     // Show Regime Background Colors
 input bool   InpShowRegimeInfo = true;           // Show Regime Info Panel
@@ -57,7 +72,7 @@ input bool   InpShowSystemStatus = true;         // Show System Status Panel
 input bool   InpShowRegimeTrendArrows = true;    // Show Regime Trend Arrows
 input bool   InpShowADXStrengthMeter = true;     // Show ADX Strength Meter
 input bool   InpShowRegimeAlerts = true;         // Show Regime Change Alerts
-input bool   InpLogDetailedInfo = true;          // Log Detailed Information
+input bool   InpLogDetailedInfo = false;         // Log Detailed Information
 
 input group "=== Update Settings ==="
 input int    InpRegimeUpdateSeconds = 5;         // Regime Update Interval (seconds)
@@ -68,6 +83,7 @@ input int    InpKeyLevelUpdateSeconds = 300;     // Key Level Update Interval (s
 //+------------------------------------------------------------------+
 CGrandeMarketRegimeDetector*  g_regimeDetector;
 CGrandeKeyLevelDetector*      g_keyLevelDetector;
+CAdvancedTrendFollower*       g_trendFollower;
 CTrade                        g_trade;
 RegimeConfig                  g_regimeConfig;
 datetime                      g_lastRegimeUpdate;
@@ -159,6 +175,39 @@ int OnInit()
         return INIT_FAILED;
     }
     
+    // Create and initialize trend follower (if enabled)
+    g_trendFollower = NULL;
+    if(InpEnableTrendFollower)
+    {
+        g_trendFollower = new CAdvancedTrendFollower();
+        if(g_trendFollower == NULL)
+        {
+            Print("ERROR: Failed to create Advanced Trend Follower");
+            delete g_regimeDetector;
+            delete g_keyLevelDetector;
+            g_regimeDetector = NULL;
+            g_keyLevelDetector = NULL;
+            return INIT_FAILED;
+        }
+        
+        if(!g_trendFollower.Init())
+        {
+            Print("ERROR: Failed to initialize Advanced Trend Follower");
+            delete g_regimeDetector;
+            delete g_keyLevelDetector;
+            delete g_trendFollower;
+            g_regimeDetector = NULL;
+            g_keyLevelDetector = NULL;
+            g_trendFollower = NULL;
+            return INIT_FAILED;
+        }
+        
+        // Configure trend follower display
+        g_trendFollower.ShowDiagnosticPanel(InpShowTrendFollowerPanel);
+        
+        Print("[Grande] Advanced Trend Follower initialized and integrated");
+    }
+    
     // Initialize risk management
     g_equityPeak = AccountInfoDouble(ACCOUNT_EQUITY);
     g_lastEquityPeakTime = TimeCurrent();
@@ -178,15 +227,20 @@ int OnInit()
     PerformInitialAnalysis();
     
     Print("Grande Trading System initialized successfully");
-    Print("Configuration Summary:");
-    Print("  - ADX Trend Threshold: ", InpADXTrendThreshold);
-    Print("  - Key Level Min Strength: ", InpMinStrength);
-    Print("  - Lookback Period: ", InpLookbackPeriod);
-    Print("  - Trading Enabled: ", InpEnableTrading ? "YES" : "NO");
-    Print("  - Account Risk %: Trend=", InpAccountRiskPctTrend, 
-          " Range=", InpAccountRiskPctRange, " Breakout=", InpAccountRiskPctBreak);
-    Print("  - Display Features: Regime=", InpShowRegimeBackground ? "ON" : "OFF", 
-          ", KeyLevels=", InpShowKeyLevels ? "ON" : "OFF");
+    if(InpLogDetailedInfo)
+    {
+        Print("Configuration Summary:");
+        Print("  - ADX Trend Threshold: ", InpADXTrendThreshold);
+        Print("  - Key Level Min Strength: ", InpMinStrength);
+        Print("  - Lookback Period: ", InpLookbackPeriod);
+        Print("  - Trading Enabled: ", InpEnableTrading ? "YES" : "NO");
+        Print("  - Trend Follower: ", InpEnableTrendFollower ? "ENABLED" : "DISABLED");
+        Print("  - Account Risk %: Trend=", InpAccountRiskPctTrend, 
+              " Range=", InpAccountRiskPctRange, " Breakout=", InpAccountRiskPctBreak);
+        Print("  - Display Features: Regime=", InpShowRegimeBackground ? "ON" : "OFF", 
+              ", KeyLevels=", InpShowKeyLevels ? "ON" : "OFF",
+              ", TrendFollower=", InpShowTrendFollowerPanel ? "ON" : "OFF");
+    }
     
     return INIT_SUCCEEDED;
 }
@@ -212,6 +266,12 @@ void OnDeinit(const int reason)
     {
         delete g_keyLevelDetector;
         g_keyLevelDetector = NULL;
+    }
+    
+    if(g_trendFollower != NULL)
+    {
+        delete g_trendFollower;
+        g_trendFollower = NULL;
     }
     
     // Clean up chart objects
@@ -281,6 +341,15 @@ void OnTimer()
         g_lastKeyLevelUpdate = currentTime;
     }
     
+    // Update trend follower
+    if(g_trendFollower != NULL && InpEnableTrendFollower)
+    {
+        if(!g_trendFollower.Refresh())
+        {
+            Print("[Grande] Warning: Trend Follower refresh failed");
+        }
+    }
+    
     // Update display elements
     if(currentTime - g_lastDisplayUpdate >= 10) // Update display every 10 seconds
     {
@@ -310,8 +379,11 @@ void PerformInitialAnalysis()
     if(g_regimeDetector != NULL)
     {
         RegimeSnapshot initialRegime = g_regimeDetector.DetectCurrentRegime();
-        Print("[Grande] Current Market Regime: ", g_regimeDetector.RegimeToString(initialRegime.regime));
-        Print("[Grande] Regime Confidence: ", DoubleToString(initialRegime.confidence, 3));
+        if(InpLogDetailedInfo)
+        {
+            Print("[Grande] Current Market Regime: ", g_regimeDetector.RegimeToString(initialRegime.regime));
+            Print("[Grande] Regime Confidence: ", DoubleToString(initialRegime.confidence, 3));
+        }
     }
     
     // Detect initial key levels
@@ -319,12 +391,13 @@ void PerformInitialAnalysis()
     {
         if(g_keyLevelDetector.DetectKeyLevels())
         {
-            Print("[Grande] Found ", g_keyLevelDetector.GetKeyLevelCount(), " key levels");
+            if(InpLogDetailedInfo)
+                Print("[Grande] Found ", g_keyLevelDetector.GetKeyLevelCount(), " key levels");
             
             if(InpShowKeyLevels)
                 g_keyLevelDetector.UpdateChartDisplay();
         }
-        else
+        else if(InpLogDetailedInfo)
         {
             Print("[Grande] No significant key levels detected");
         }
@@ -512,6 +585,19 @@ void UpdateSystemStatusPanel()
         positionsInfo = StringFormat("%d pos, %.2f USD", totalPositions, totalProfit);
     }
     
+    // Get trend follower status
+    string trendFollowerInfo = "Disabled";
+    if(g_trendFollower != NULL && InpEnableTrendFollower)
+    {
+        string trendMode = "None";
+        if(g_trendFollower.IsBullish()) trendMode = "🟢 BULL";
+        else if(g_trendFollower.IsBearish()) trendMode = "🔴 BEAR";
+        else trendMode = "⚪ NEUTRAL";
+        
+        double tfStrength = g_trendFollower.TrendStrength();
+        trendFollowerInfo = StringFormat("%s (ADX:%.1f)", trendMode, tfStrength);
+    }
+    
     // Get drawdown info
     double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
     double drawdown = 100.0 * (g_equityPeak - currentEquity) / g_equityPeak;
@@ -527,6 +613,8 @@ void UpdateSystemStatusPanel()
         "Positions: %s\n" +
         "Drawdown: %s\n" +
         "─────────────────────────────\n" +
+        "Trend Follower: %s\n" +
+        "─────────────────────────────\n" +
         "Strongest Level:\n" +
         "%s\n" +
         "─────────────────────────────\n" +
@@ -540,6 +628,7 @@ void UpdateSystemStatusPanel()
         tradingStatus,
         positionsInfo,
         drawdownInfo,
+        trendFollowerInfo,
         strongestLevelInfo,
         InpRegimeUpdateSeconds,
         InpKeyLevelUpdateSeconds
@@ -562,13 +651,21 @@ void UpdateSystemStatusPanel()
 //+------------------------------------------------------------------+
 void LogRegimeChange(const RegimeSnapshot &snapshot)
 {
-    Print("=== GRANDE REGIME CHANGE DETECTED ===");
-    Print("New Regime: ", g_regimeDetector.RegimeToString(snapshot.regime));
-    Print("Confidence: ", DoubleToString(snapshot.confidence, 3));
-    Print("Time: ", TimeToString(snapshot.timestamp, TIME_DATE|TIME_MINUTES));
-    Print("ADX Values - H1:", DoubleToString(snapshot.adx_h1, 1), 
-          " H4:", DoubleToString(snapshot.adx_h4, 1), 
-          " D1:", DoubleToString(snapshot.adx_d1, 1));
+    if(InpLogDetailedInfo)
+    {
+        Print("=== GRANDE REGIME CHANGE DETECTED ===");
+        Print("New Regime: ", g_regimeDetector.RegimeToString(snapshot.regime));
+        Print("Confidence: ", DoubleToString(snapshot.confidence, 3));
+        Print("Time: ", TimeToString(snapshot.timestamp, TIME_DATE|TIME_MINUTES));
+        Print("ADX Values - H1:", DoubleToString(snapshot.adx_h1, 1), 
+              " H4:", DoubleToString(snapshot.adx_h4, 1), 
+              " D1:", DoubleToString(snapshot.adx_d1, 1));
+    }
+    else
+    {
+        Print("[Grande] Regime: ", g_regimeDetector.RegimeToString(snapshot.regime), 
+              " (", DoubleToString(snapshot.confidence, 2), ")");
+    }
     
     // Show visual alert for regime change
     ShowRegimeChangeAlert(snapshot);
@@ -594,7 +691,9 @@ void LogRegimeChange(const RegimeSnapshot &snapshot)
             }
         }
     }
-    Print("=====================================");
+    
+    if(InpLogDetailedInfo)
+        Print("=====================================");
 }
 
 //+------------------------------------------------------------------+
@@ -616,7 +715,8 @@ void CleanupChartObjects()
     }
     
     ChartRedraw(g_chartID);
-    Print("[Grande] Chart objects cleaned up");
+    if(InpLogDetailedInfo)
+        Print("[Grande] Chart objects cleaned up");
 }
 
 //+------------------------------------------------------------------+
@@ -657,12 +757,14 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
         }
         else if(lparam == 'T' || lparam == 't') // Press 'T' to test visuals
         {
-            Print("[Grande] TESTING VISUALS - Creating test elements");
+            if(InpLogDetailedInfo)
+                Print("[Grande] TESTING VISUALS - Creating test elements");
             CreateTestVisuals();
         }
         else if(lparam == 'C' || lparam == 'c') // Press 'C' to clear all objects
         {
-            Print("[Grande] CLEARING ALL OBJECTS");
+            if(InpLogDetailedInfo)
+                Print("[Grande] CLEARING ALL OBJECTS");
             CleanupChartObjects();
         }
         else if(lparam == 'E' || lparam == 'e') // Press 'E' to enable/disable trading
@@ -684,6 +786,41 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
             {
                 Print("[Grande] CLOSING ALL POSITIONS");
                 CloseAllPositions();
+            }
+        }
+        else if(lparam == 'F' || lparam == 'f') // Press 'F' to toggle trend follower panel
+        {
+            if(g_trendFollower != NULL && InpEnableTrendFollower)
+            {
+                static bool panelVisible = InpShowTrendFollowerPanel;
+                panelVisible = !panelVisible;
+                g_trendFollower.ShowDiagnosticPanel(panelVisible);
+                Print("[Grande] Trend Follower panel ", panelVisible ? "SHOWN" : "HIDDEN");
+            }
+            else
+            {
+                Print("[Grande] Trend Follower is not enabled");
+            }
+        }
+        else if(lparam == 'S' || lparam == 's') // Press 'S' to show trend follower status
+        {
+            if(g_trendFollower != NULL && InpEnableTrendFollower)
+            {
+                bool isBull = g_trendFollower.IsBullish();
+                bool isBear = g_trendFollower.IsBearish();
+                double strength = g_trendFollower.TrendStrength();
+                double pullback = g_trendFollower.EntryPricePullback();
+                
+                Print("═══ TREND FOLLOWER STATUS ═══");
+                Print("Bullish Signal: ", isBull ? "YES ✅" : "NO ❌");
+                Print("Bearish Signal: ", isBear ? "YES ✅" : "NO ❌");
+                Print("ADX Strength: ", DoubleToString(strength, 2));
+                Print("Pullback Price (EMA20): ", DoubleToString(pullback, _Digits));
+                Print("═══════════════════════════");
+            }
+            else
+            {
+                Print("[Grande] Trend Follower is not enabled");
             }
         }
     }
@@ -866,11 +1003,13 @@ void CreateTestVisuals()
         ObjectSetString(g_chartID, testName, OBJPROP_FONT, "Arial Bold");
         ObjectSetInteger(g_chartID, testName, OBJPROP_SELECTABLE, false);
         
-        Print("[Grande] Visual test label created successfully");
+        if(InpLogDetailedInfo)
+            Print("[Grande] Visual test label created successfully");
     }
     else
     {
-        Print("[Grande] Failed to create test label. Error: ", GetLastError());
+        if(InpLogDetailedInfo)
+            Print("[Grande] Failed to create test label. Error: ", GetLastError());
     }
     
     // Force display update
@@ -995,6 +1134,31 @@ void RangeTrade(const RegimeSnapshot &rs)
 //+------------------------------------------------------------------+
 bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
 {
+    // === ADVANCED TREND FOLLOWER CONFIRMATION ===
+    if(g_trendFollower != NULL && InpEnableTrendFollower)
+    {
+        bool trendFollowerSignal = bullish ? g_trendFollower.IsBullish() : g_trendFollower.IsBearish();
+        
+        if(!trendFollowerSignal)
+        {
+            if(InpLogDetailedInfo)
+            {
+                Print("[Grande] Trend Follower BLOCKED ", bullish ? "BULLISH" : "BEARISH", 
+                      " signal - Multi-timeframe conditions not met");
+                Print("  - TF Strength: ", DoubleToString(g_trendFollower.TrendStrength(), 2));
+                Print("  - TF Pullback Price: ", DoubleToString(g_trendFollower.EntryPricePullback(), _Digits));
+            }
+            return false;
+        }
+        
+        if(InpLogDetailedInfo)
+        {
+            Print("[Grande] ✅ Trend Follower CONFIRMED ", bullish ? "BULLISH" : "BEARISH", 
+                  " signal (Strength: ", DoubleToString(g_trendFollower.TrendStrength(), 2), ")");
+        }
+    }
+    
+    // === ORIGINAL GRANDE EMA ALIGNMENT LOGIC ===
     // 50 & 200 EMA alignment across H1 + H4
     int ema50_h1_handle = iMA(_Symbol, PERIOD_H1, InpEMA50Period, 0, MODE_EMA, PRICE_CLOSE);
     int ema200_h1_handle = iMA(_Symbol, PERIOD_H1, InpEMA200Period, 0, MODE_EMA, PRICE_CLOSE);
@@ -1444,6 +1608,46 @@ bool ValidateInputParameters()
         isValid = false;
     }
     
+    // Advanced Trend Follower Settings
+    if(InpEnableTrendFollower)
+    {
+        if(InpTFEmaFastPeriod < 20 || InpTFEmaFastPeriod > 100)
+        {
+            Print("ERROR: InpTFEmaFastPeriod must be between 20 and 100. Current: ", InpTFEmaFastPeriod);
+            isValid = false;
+        }
+        
+        if(InpTFEmaSlowPeriod < 100 || InpTFEmaSlowPeriod > 300)
+        {
+            Print("ERROR: InpTFEmaSlowPeriod must be between 100 and 300. Current: ", InpTFEmaSlowPeriod);
+            isValid = false;
+        }
+        
+        if(InpTFEmaFastPeriod >= InpTFEmaSlowPeriod)
+        {
+            Print("ERROR: InpTFEmaFastPeriod must be less than InpTFEmaSlowPeriod");
+            isValid = false;
+        }
+        
+        if(InpTFEmaPullbackPeriod < 10 || InpTFEmaPullbackPeriod > 40)
+        {
+            Print("ERROR: InpTFEmaPullbackPeriod must be between 10 and 40. Current: ", InpTFEmaPullbackPeriod);
+            isValid = false;
+        }
+        
+        if(InpTFRsiThreshold < 30.0 || InpTFRsiThreshold > 70.0)
+        {
+            Print("ERROR: InpTFRsiThreshold must be between 30.0 and 70.0. Current: ", InpTFRsiThreshold);
+            isValid = false;
+        }
+        
+        if(InpTFAdxThreshold < 15.0 || InpTFAdxThreshold > 40.0)
+        {
+            Print("ERROR: InpTFAdxThreshold must be between 15.0 and 40.0. Current: ", InpTFAdxThreshold);
+            isValid = false;
+        }
+    }
+    
     // Update Settings
     if(InpRegimeUpdateSeconds < 1 || InpRegimeUpdateSeconds > 30)
     {
@@ -1487,15 +1691,18 @@ void CloseAllPositions()
                 if(g_trade.PositionClose(ticket))
                 {
                     closedCount++;
-                    Print("[Grande] Closed position #", ticket);
+                    if(InpLogDetailedInfo)
+                        Print("[Grande] Closed position #", ticket);
                 }
                 else
                 {
-                    Print("[Grande] Failed to close position #", ticket, " Error: ", GetLastError());
+                    if(InpLogDetailedInfo)
+                        Print("[Grande] Failed to close position #", ticket, " Error: ", GetLastError());
                 }
             }
         }
     }
     
-    Print("[Grande] Closed ", closedCount, " positions for ", _Symbol);
+    if(InpLogDetailedInfo)
+        Print("[Grande] Closed ", closedCount, " positions for ", _Symbol);
 } 
