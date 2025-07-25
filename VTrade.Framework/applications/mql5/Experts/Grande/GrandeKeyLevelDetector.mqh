@@ -332,7 +332,8 @@ public:
             bool isSwingLow = IsEnhancedSwingLow(lowPrices, highPrices, i);
             
             // Fallback to simple detection if enhanced is too restrictive
-            if(!isSwingLow && (potentialSwingHighs + potentialSwingLows) < 5 && i > m_lookbackPeriod / 2)
+            // More liberal fallback: trigger if we haven't found many lows OR we're in later part of analysis
+            if(!isSwingLow && (potentialSwingLows < 3 || i > m_lookbackPeriod * 0.6))
             {
                 isSwingLow = IsSimpleSwingLow(lowPrices, i);
             }
@@ -377,8 +378,15 @@ public:
         
         m_lastUpdate = TimeCurrent();
         
-        LogInfo(StringFormat("📊 DETECTION ANALYSIS: Swings Found - %d highs (%d valid), %d lows (%d valid)", 
-                potentialSwingHighs, validSwingHighs, potentialSwingLows, validSwingLows));
+                LogInfo(StringFormat("📊 DETECTION ANALYSIS: Swings Found - %d highs (%d valid), %d lows (%d valid)",
+               potentialSwingHighs, validSwingHighs, potentialSwingLows, validSwingLows));
+        
+        // Performance insight: If validSwingLows = 0, detection parameters may be too restrictive
+        if(validSwingLows == 0 && m_showDebugPrints)
+        {
+            LogInfo(StringFormat("⚠️  DETECTION ALERT: No valid swing lows found. Consider adjusting parameters for %s", 
+                   EnumToString(Period())));
+        }
         LogInfo(StringFormat("⚙️ FILTER SETTINGS: MinStrength=%.2f, TouchZone=%.5f, MinTouches=%d", 
                 m_minStrength, m_touchZone, m_minTouches));
         LogInfo(StringFormat("✅ Detection completed: %d levels (%dR/%dS) in %d ms", 
@@ -429,7 +437,7 @@ public:
         ArrayFree(m_chartLines);
         ArrayResize(m_chartLines, m_levelCount);
         
-        // Reclassify levels based on current price relationship
+        // Reclassify levels based on current price relationship FIRST
         ReclassifyLevelsBasedOnCurrentPrice(currentPrice);
         
         // Sort levels by strength for optimal display
@@ -521,6 +529,9 @@ public:
         if(!m_showDebugPrints) return;
         
         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        
+        // CRITICAL FIX: Reclassify levels before generating report
+        ReclassifyLevelsBasedOnCurrentPrice(currentPrice);
         
         LogInfo("┌" + StringRepeat("─", 78) + "┐");
         LogInfo("│" + StringFormat("%76s", "🏆 ENTERPRISE GRANDE KEY LEVELS REPORT") + " │");
@@ -795,13 +806,11 @@ private:
         int size = ArraySize(lows);
         if(index < 3 || index >= size - 3) return false;
         
-        // Basic pattern validation (6-point instead of 4-point)
+        // Basic pattern validation (4-point for better detection)
         bool basicPattern = lows[index] < lows[index-1] && 
                           lows[index] < lows[index-2] &&
-                          lows[index] < lows[index-3] &&
                           lows[index] < lows[index+1] && 
-                          lows[index] < lows[index+2] &&
-                          lows[index] < lows[index+3];
+                          lows[index] < lows[index+2];
         
         if(!basicPattern) return false;
         
@@ -1156,8 +1165,8 @@ private:
             else if(level.strength >= 0.60) baseColor = clrOrangeRed;   // Medium resistance - orange-red
             else                            baseColor = clrIndianRed;    // Weak resistance - indian red
             
-            // Debug validation for 15-minute timeframe
-            if(m_showDebugPrints && Period() == PERIOD_M15)
+            // Debug validation for all timeframes
+            if(m_showDebugPrints)
             {
                 LogInfo(StringFormat("🔴 RESISTANCE %.5f: Strength=%.3f, Color=%s, AbovePrice=%s", 
                     level.price, level.strength, 
@@ -1354,8 +1363,8 @@ private:
             LogInfo(StringFormat("✅ Reclassified %d levels based on current price %.5f", reclassified, currentPrice));
         }
         
-        // Validate all levels after reclassification
-        if(m_showDebugPrints && Period() == PERIOD_M15)
+        // Validate all levels after reclassification (works on all timeframes)
+        if(m_showDebugPrints)
         {
             LogInfo("🔍 Post-reclassification validation:");
             for(int i = 0; i < m_levelCount; i++)
@@ -1408,18 +1417,17 @@ private:
             isValid = false;
         }
         
-        // Log level type validation for 15-minute timeframe
-        if(m_showDebugPrints && Period() == PERIOD_M15)
+        // Log level type validation for all timeframes
+        if(m_showDebugPrints)
         {
             double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
             bool shouldBeResistance = (level.price > currentPrice);
             
             if(level.isResistance != shouldBeResistance)
             {
-                LogError(StringFormat("%s⚠️  Type mismatch: Level %.5f marked as %s but price %.5f suggests %s", 
+                LogInfo(StringFormat("%s💡 Initial classification: Level %.5f marked as %s, will be reclassified to %s later", 
                     prefix, level.price, 
                     level.isResistance ? "RESISTANCE" : "SUPPORT",
-                    currentPrice,
                     shouldBeResistance ? "RESISTANCE" : "SUPPORT"));
             }
             else
@@ -1601,8 +1609,8 @@ private:
         m_keyLevels[m_levelCount] = level;
         m_levelCount++;
         
-        // Log successful addition for 15-minute timeframe debugging
-        if(m_showDebugPrints && Period() == PERIOD_M15)
+        // Log successful addition for all timeframes debugging
+        if(m_showDebugPrints)
         {
             LogInfo(StringFormat("✅ Added %s level: %.5f (Strength: %.3f, First Touch: %s)", 
                 level.isResistance ? "RESISTANCE" : "SUPPORT",
