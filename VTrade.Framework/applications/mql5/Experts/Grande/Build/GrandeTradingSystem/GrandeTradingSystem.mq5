@@ -14,6 +14,7 @@
 #include "GrandeMarketRegimeDetector.mqh"
 #include "GrandeKeyLevelDetector.mqh"
 #include "..\VSol\AdvancedTrendFollower.mqh"
+#include "..\VSol\GrandeRiskManager.mqh"
 #include <Trade\Trade.mqh>
 
 //+------------------------------------------------------------------+
@@ -34,12 +35,31 @@ input int    InpMinTouches = 1;                  // Minimum Touches Required
 
 input group "=== Trading Settings ==="
 input bool   InpEnableTrading = false;           // Enable Live Trading
-input double InpAccountRiskPctTrend = 2.5;       // Account Risk % for Trend Trades
-input double InpAccountRiskPctRange = 1.0;       // Account Risk % for Range Trades
-input double InpAccountRiskPctBreak = 3.0;       // Account Risk % for Breakout Trades
-input double InpMaxAccountDDPct = 25.0;          // Max Account Drawdown %
 input int    InpMagicNumber = 123456;            // Magic Number for Trades
 input int    InpSlippage = 30;                   // Slippage in Points
+
+input group "=== Risk Management Settings ==="
+input double InpRiskPctTrend = 2.5;              // Risk % for Trend Trades
+input double InpRiskPctRange = 1.0;              // Risk % for Range Trades
+input double InpRiskPctBreakout = 3.0;           // Risk % for Breakout Trades
+input double InpMaxRiskPerTrade = 5.0;           // Maximum Risk % per Trade
+input double InpMaxDrawdownPct = 25.0;           // Maximum Account Drawdown %
+input double InpEquityPeakReset = 5.0;           // Reset Peak after X% Recovery
+input int    InpMaxPositions = 3;                // Maximum Concurrent Positions
+
+input group "=== Stop Loss & Take Profit ==="
+input double InpSLATRMultiplier = 1.2;           // Stop Loss ATR Multiplier
+input double InpTPRewardRatio = 3.0;             // Take Profit Reward Ratio (R:R)
+input double InpBreakevenATR = 1.0;              // Move to Breakeven after X ATR
+input double InpPartialCloseATR = 2.0;           // Partial Close after X ATR
+input double InpBreakevenBuffer = 0.5;           // Breakeven Buffer (pips)
+
+input group "=== Position Management ==="
+input bool   InpEnableTrailingStop = true;       // Enable Trailing Stops
+input double InpTrailingATRMultiplier = 0.8;     // Trailing Stop ATR Multiplier
+input bool   InpEnablePartialCloses = true;      // Enable Partial Profit Taking
+input double InpPartialClosePercent = 50.0;      // % of Position to Close
+input bool   InpEnableBreakeven = true;          // Enable Breakeven Stops
 
 input group "=== Signal Settings ==="
 input int    InpEMA50Period = 50;                // 50 EMA Period
@@ -84,17 +104,14 @@ input int    InpKeyLevelUpdateSeconds = 300;     // Key Level Update Interval (s
 CGrandeMarketRegimeDetector*  g_regimeDetector;
 CGrandeKeyLevelDetector*      g_keyLevelDetector;
 CAdvancedTrendFollower*       g_trendFollower;
+CGrandeRiskManager*           g_riskManager;
 CTrade                        g_trade;
 RegimeConfig                  g_regimeConfig;
+RiskConfig                    g_riskConfig;
 datetime                      g_lastRegimeUpdate;
 datetime                      g_lastKeyLevelUpdate;
 datetime                      g_lastDisplayUpdate;
 long                          g_chartID;
-
-// Risk Management
-double                        g_equityPeak;
-datetime                      g_lastEquityPeakTime;
-bool                          g_tradingEnabled = true;
 
 // Chart object names
 const string REGIME_BACKGROUND_NAME = "GrandeRegimeBackground";
@@ -126,6 +143,25 @@ int OnInit()
     g_trade.SetExpertMagicNumber(InpMagicNumber);
     g_trade.SetDeviationInPoints(InpSlippage);
     g_trade.SetTypeFilling(ORDER_FILLING_FOK);
+    
+    // Configure risk management settings
+    g_riskConfig.risk_percent_trend = InpRiskPctTrend;
+    g_riskConfig.risk_percent_range = InpRiskPctRange;
+    g_riskConfig.risk_percent_breakout = InpRiskPctBreakout;
+    g_riskConfig.max_risk_per_trade = InpMaxRiskPerTrade;
+    g_riskConfig.sl_atr_multiplier = InpSLATRMultiplier;
+    g_riskConfig.tp_reward_ratio = InpTPRewardRatio;
+    g_riskConfig.breakeven_atr = InpBreakevenATR;
+    g_riskConfig.partial_close_atr = InpPartialCloseATR;
+    g_riskConfig.max_drawdown_percent = InpMaxDrawdownPct;
+    g_riskConfig.equity_peak_reset = InpEquityPeakReset;
+    g_riskConfig.max_positions = InpMaxPositions;
+    g_riskConfig.enable_trailing_stop = InpEnableTrailingStop;
+    g_riskConfig.trailing_atr_multiplier = InpTrailingATRMultiplier;
+    g_riskConfig.enable_partial_closes = InpEnablePartialCloses;
+    g_riskConfig.partial_close_percent = InpPartialClosePercent;
+    g_riskConfig.enable_breakeven = InpEnableBreakeven;
+    g_riskConfig.breakeven_buffer = InpBreakevenBuffer;
     
     // Configure regime detection settings
     g_regimeConfig.adx_trend_threshold = InpADXTrendThreshold;
@@ -208,9 +244,35 @@ int OnInit()
         Print("[Grande] Advanced Trend Follower initialized and integrated");
     }
     
-    // Initialize risk management
-    g_equityPeak = AccountInfoDouble(ACCOUNT_EQUITY);
-    g_lastEquityPeakTime = TimeCurrent();
+    // Create and initialize risk manager
+    g_riskManager = new CGrandeRiskManager();
+    if(g_riskManager == NULL)
+    {
+        Print("ERROR: Failed to create Risk Manager");
+        delete g_regimeDetector;
+        delete g_keyLevelDetector;
+        if(g_trendFollower != NULL) delete g_trendFollower;
+        g_regimeDetector = NULL;
+        g_keyLevelDetector = NULL;
+        g_trendFollower = NULL;
+        return INIT_FAILED;
+    }
+    
+    if(!g_riskManager.Initialize(_Symbol, g_riskConfig))
+    {
+        Print("ERROR: Failed to initialize Risk Manager");
+        delete g_regimeDetector;
+        delete g_keyLevelDetector;
+        if(g_trendFollower != NULL) delete g_trendFollower;
+        delete g_riskManager;
+        g_regimeDetector = NULL;
+        g_keyLevelDetector = NULL;
+        g_trendFollower = NULL;
+        g_riskManager = NULL;
+        return INIT_FAILED;
+    }
+    
+    Print("[Grande] Risk Manager initialized and integrated");
     
     // Set up chart display - always setup for any visual features
     SetupChartDisplay();
@@ -235,8 +297,8 @@ int OnInit()
         Print("  - Lookback Period: ", InpLookbackPeriod);
         Print("  - Trading Enabled: ", InpEnableTrading ? "YES" : "NO");
         Print("  - Trend Follower: ", InpEnableTrendFollower ? "ENABLED" : "DISABLED");
-        Print("  - Account Risk %: Trend=", InpAccountRiskPctTrend, 
-              " Range=", InpAccountRiskPctRange, " Breakout=", InpAccountRiskPctBreak);
+        Print("  - Risk %: Trend=", DoubleToString(InpRiskPctTrend, 1), 
+              " Range=", DoubleToString(InpRiskPctRange, 1), " Breakout=", DoubleToString(InpRiskPctBreakout, 1));
         Print("  - Display Features: Regime=", InpShowRegimeBackground ? "ON" : "OFF", 
               ", KeyLevels=", InpShowKeyLevels ? "ON" : "OFF",
               ", TrendFollower=", InpShowTrendFollowerPanel ? "ON" : "OFF");
@@ -274,6 +336,12 @@ void OnDeinit(const int reason)
         g_trendFollower = NULL;
     }
     
+    if(g_riskManager != NULL)
+    {
+        delete g_riskManager;
+        g_riskManager = NULL;
+    }
+    
     // Clean up chart objects
     CleanupChartObjects();
     
@@ -286,8 +354,18 @@ void OnDeinit(const int reason)
 void OnTick()
 {
     // Check if trading is allowed
-    if(!MQLInfoInteger(MQL_TRADE_ALLOWED) || !InpEnableTrading || !g_tradingEnabled)
+    if(!MQLInfoInteger(MQL_TRADE_ALLOWED) || !InpEnableTrading)
         return;
+    
+    // Update risk manager
+    if(g_riskManager != NULL)
+    {
+        g_riskManager.OnTick();
+        
+        // Check if trading is still enabled after risk checks
+        if(!g_riskManager.IsTradingEnabled())
+            return;
+    }
     
     // Lightweight tick processing
     if(g_regimeDetector != NULL)
@@ -565,24 +643,37 @@ void UpdateSystemStatusPanel()
     
     // Get trading status
     string tradingStatus = InpEnableTrading ? 
-                          (g_tradingEnabled ? "🟢 ACTIVE" : "🔴 DISABLED") : 
+                          (g_riskManager != NULL && g_riskManager.IsTradingEnabled() ? "🟢 ACTIVE" : "🔴 DISABLED") : 
                           "⚪ DEMO";
     
     // Get current positions info
     string positionsInfo = "None";
-    int totalPositions = PositionsTotal();
-    if(totalPositions > 0)
+    if(g_riskManager != NULL)
     {
-        double totalProfit = 0;
-        for(int i = 0; i < totalPositions; i++)
+        int positionCount = g_riskManager.GetPositionCount();
+        double totalProfit = g_riskManager.GetTotalProfit();
+        if(positionCount > 0)
         {
-            if(PositionSelectByTicket(PositionGetTicket(i)))
-            {
-                if(PositionGetString(POSITION_SYMBOL) == _Symbol)
-                    totalProfit += PositionGetDouble(POSITION_PROFIT);
-            }
+            positionsInfo = StringFormat("%d pos, %.2f USD", positionCount, totalProfit);
         }
-        positionsInfo = StringFormat("%d pos, %.2f USD", totalPositions, totalProfit);
+    }
+    else
+    {
+        // Fallback to old method
+        int totalPositions = PositionsTotal();
+        if(totalPositions > 0)
+        {
+            double totalProfit = 0;
+            for(int i = 0; i < totalPositions; i++)
+            {
+                if(PositionSelectByTicket(PositionGetTicket(i)))
+                {
+                    if(PositionGetString(POSITION_SYMBOL) == _Symbol)
+                        totalProfit += PositionGetDouble(POSITION_PROFIT);
+                }
+            }
+            positionsInfo = StringFormat("%d pos, %.2f USD", totalPositions, totalProfit);
+        }
     }
     
     // Get trend follower status
@@ -599,9 +690,12 @@ void UpdateSystemStatusPanel()
     }
     
     // Get drawdown info
-    double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-    double drawdown = 100.0 * (g_equityPeak - currentEquity) / g_equityPeak;
-    string drawdownInfo = StringFormat("%.2f%%", drawdown);
+    string drawdownInfo = "0.00%";
+    if(g_riskManager != NULL)
+    {
+        double drawdown = g_riskManager.GetCurrentDrawdown();
+        drawdownInfo = StringFormat("%.2f%%", drawdown);
+    }
     
     // Create status text
     string statusText = StringFormat(
@@ -769,10 +863,11 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
         }
         else if(lparam == 'E' || lparam == 'e') // Press 'E' to enable/disable trading
         {
-            if(InpEnableTrading)
+            if(InpEnableTrading && g_riskManager != NULL)
             {
-                g_tradingEnabled = !g_tradingEnabled;
-                Print("[Grande] Trading ", g_tradingEnabled ? "ENABLED" : "DISABLED");
+                bool currentState = g_riskManager.IsTradingEnabled();
+                g_riskManager.EnableTrading(!currentState);
+                Print("[Grande] Trading ", !currentState ? "ENABLED" : "DISABLED");
                 UpdateDisplayElements();
             }
             else
@@ -782,10 +877,10 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
         }
         else if(lparam == 'X' || lparam == 'x') // Press 'X' to close all positions
         {
-            if(InpEnableTrading && g_tradingEnabled)
+            if(InpEnableTrading && g_riskManager != NULL)
             {
                 Print("[Grande] CLOSING ALL POSITIONS");
-                CloseAllPositions();
+                g_riskManager.CloseAllPositions();
             }
         }
         else if(lparam == 'F' || lparam == 'f') // Press 'F' to toggle trend follower panel
@@ -821,6 +916,17 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
             else
             {
                 Print("[Grande] Trend Follower is not enabled");
+            }
+        }
+        else if(lparam == 'R' || lparam == 'r') // Press 'R' to show risk manager status
+        {
+            if(g_riskManager != NULL)
+            {
+                g_riskManager.LogStatus();
+            }
+            else
+            {
+                Print("[Grande] Risk Manager is not available");
             }
         }
     }
@@ -1023,8 +1129,14 @@ void CreateTestVisuals()
 void ExecuteTradeLogic(const RegimeSnapshot &rs)
 {
     // Check risk management first
-    if(!CheckMaxDrawdown())
-        return;
+    if(g_riskManager != NULL)
+    {
+        if(!g_riskManager.CheckDrawdown())
+            return;
+            
+        if(!g_riskManager.CheckMaxPositions())
+            return;
+    }
     
     // Check if we already have positions
     if(PositionsTotal() > 0)
@@ -1048,12 +1160,35 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     if(!Signal_TREND(bullish, rs)) 
         return;
     
-    double lot = CalcLot(rs.regime);
+    // Calculate position size using risk manager
+    double stopDistancePips = rs.atr_current * 1.2 / _Point;
+    double lot = 0.0;
+    
+    if(g_riskManager != NULL)
+    {
+        lot = g_riskManager.CalculateLotSize(stopDistancePips, rs.regime);
+    }
+    else
+    {
+        lot = CalcLot(rs.regime); // Fallback to old method
+    }
+    
     if(lot <= 0) return;
     
     double price = bullish ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double sl = StopLoss_TREND(bullish, rs);
-    double tp = TakeProfit_TREND(bullish, rs);
+    double sl = 0.0, tp = 0.0;
+    
+    // Calculate SL/TP using risk manager
+    if(g_riskManager != NULL)
+    {
+        sl = g_riskManager.CalculateStopLoss(bullish, price, rs.atr_current);
+        tp = g_riskManager.CalculateTakeProfit(bullish, price, sl);
+    }
+    else
+    {
+        sl = StopLoss_TREND(bullish, rs); // Fallback to old method
+        tp = TakeProfit_TREND(bullish, rs);
+    }
     
     string comment = StringFormat("Trend-%s", bullish ? "BULL" : "BEAR");
     
@@ -1071,9 +1206,6 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     if(!Signal_BREAKOUT(rs)) 
         return;
     
-    double lot = CalcLot(rs.regime);
-    if(lot <= 0) return;
-    
     // Get strongest key level for breakout
     SKeyLevel strongestLevel;
     if(!g_keyLevelDetector.GetStrongestLevel(strongestLevel))
@@ -1081,12 +1213,40 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double breakoutLevel = strongestLevel.price;
-    double breakoutSL = strongestLevel.isResistance ? 
-                       breakoutLevel + rs.atr_current * 1.2 : 
-                       breakoutLevel - rs.atr_current * 1.2;
-    double breakoutTP = strongestLevel.isResistance ? 
-                       breakoutLevel - rs.atr_current * 3.0 : 
-                       breakoutLevel + rs.atr_current * 3.0;
+    double stopDistancePips = rs.atr_current * 1.2 / _Point;
+    double lot = 0.0;
+    
+    // Calculate position size using risk manager
+    if(g_riskManager != NULL)
+    {
+        lot = g_riskManager.CalculateLotSize(stopDistancePips, rs.regime);
+    }
+    else
+    {
+        lot = CalcLot(rs.regime); // Fallback to old method
+    }
+    
+    if(lot <= 0) return;
+    
+    // Calculate SL/TP using risk manager
+    double breakoutSL = 0.0, breakoutTP = 0.0;
+    
+    if(g_riskManager != NULL)
+    {
+        bool isBuy = strongestLevel.isResistance;
+        breakoutSL = g_riskManager.CalculateStopLoss(isBuy, breakoutLevel, rs.atr_current);
+        breakoutTP = g_riskManager.CalculateTakeProfit(isBuy, breakoutLevel, breakoutSL);
+    }
+    else
+    {
+        // Fallback to old method
+        breakoutSL = strongestLevel.isResistance ? 
+                    breakoutLevel + rs.atr_current * 1.2 : 
+                    breakoutLevel - rs.atr_current * 1.2;
+        breakoutTP = strongestLevel.isResistance ? 
+                    breakoutLevel - rs.atr_current * 3.0 : 
+                    breakoutLevel + rs.atr_current * 3.0;
+    }
     
     // Place stop order
     if(strongestLevel.isResistance)
@@ -1103,9 +1263,6 @@ void RangeTrade(const RegimeSnapshot &rs)
     if(!Signal_RANGE(rs)) 
         return;
     
-    double lot = CalcLot(rs.regime);
-    if(lot <= 0) return;
-    
     // Get range boundaries from key levels
     SKeyLevel resistanceLevel, supportLevel;
     if(!GetRangeBoundaries(resistanceLevel, supportLevel))
@@ -1113,18 +1270,54 @@ void RangeTrade(const RegimeSnapshot &rs)
     
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double midRange = (resistanceLevel.price + supportLevel.price) / 2.0;
+    double stopDistancePips = rs.atr_current * 0.5 / _Point;
+    double lot = 0.0;
+    
+    // Calculate position size using risk manager
+    if(g_riskManager != NULL)
+    {
+        lot = g_riskManager.CalculateLotSize(stopDistancePips, rs.regime);
+    }
+    else
+    {
+        lot = CalcLot(rs.regime); // Fallback to old method
+    }
+    
+    if(lot <= 0) return;
     
     // Fade touches of top/bottom 80% of range
     if(currentPrice >= resistanceLevel.price * 0.998) // Near resistance
     {
-        double sl = resistanceLevel.price + rs.atr_current * 0.5;
-        double tp = midRange;
+        double sl = 0.0, tp = 0.0;
+        
+        if(g_riskManager != NULL)
+        {
+            sl = g_riskManager.CalculateStopLoss(false, currentPrice, rs.atr_current * 0.5);
+            tp = midRange;
+        }
+        else
+        {
+            sl = resistanceLevel.price + rs.atr_current * 0.5;
+            tp = midRange;
+        }
+        
         g_trade.Sell(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_BID), sl, tp, "Range-Sell");
     }
     else if(currentPrice <= supportLevel.price * 1.002) // Near support
     {
-        double sl = supportLevel.price - rs.atr_current * 0.5;
-        double tp = midRange;
+        double sl = 0.0, tp = 0.0;
+        
+        if(g_riskManager != NULL)
+        {
+            sl = g_riskManager.CalculateStopLoss(true, currentPrice, rs.atr_current * 0.5);
+            tp = midRange;
+        }
+        else
+        {
+            sl = supportLevel.price - rs.atr_current * 0.5;
+            tp = midRange;
+        }
+        
         g_trade.Buy(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_ASK), sl, tp, "Range-Buy");
     }
 }
@@ -1330,13 +1523,14 @@ bool Signal_RANGE(const RegimeSnapshot &rs)
 }
 
 //+------------------------------------------------------------------+
-//| Risk Management Functions                                        |
+//| Legacy Risk Management Functions (Fallback)                     |
 //+------------------------------------------------------------------+
 double CalcLot(MARKET_REGIME regime)
 {
-    double riskPct = (regime == REGIME_BREAKOUT_SETUP) ? InpAccountRiskPctBreak :
-                     (regime == REGIME_RANGING)        ? InpAccountRiskPctRange :
-                                                         InpAccountRiskPctTrend;
+    // Fallback method when risk manager is not available
+    double riskPct = (regime == REGIME_BREAKOUT_SETUP) ? InpRiskPctBreakout :
+                     (regime == REGIME_RANGING)        ? InpRiskPctRange :
+                                                         InpRiskPctTrend;
     
     double slPips = CurrentSLDistancePips(regime);
     if(slPips <= 0) return 0;
@@ -1353,34 +1547,6 @@ double CalcLot(MARKET_REGIME regime)
     lot = NormalizeDouble(lot / lotStep, 0) * lotStep;
     
     return lot;
-}
-
-//+------------------------------------------------------------------+
-//| Check maximum drawdown                                           |
-//+------------------------------------------------------------------+
-bool CheckMaxDrawdown()
-{
-    double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-    
-    if(currentEquity > g_equityPeak)
-    {
-        g_equityPeak = currentEquity;
-        g_lastEquityPeakTime = TimeCurrent();
-    }
-    
-    double dd = 100.0 * (g_equityPeak - currentEquity) / g_equityPeak;
-    
-    if(dd > InpMaxAccountDDPct)
-    {
-        if(g_tradingEnabled)
-        {
-            Print("WARNING: Maximum drawdown reached (", DoubleToString(dd, 2), "%). Trading disabled.");
-            g_tradingEnabled = false;
-        }
-        return false;
-    }
-    
-    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -1533,28 +1699,28 @@ bool ValidateInputParameters()
     }
     
     // Trading Settings - CRITICAL VALIDATION
-    if(InpAccountRiskPctTrend < 0.5 || InpAccountRiskPctTrend > 5.0)
+    if(InpRiskPctTrend < 0.5 || InpRiskPctTrend > 5.0)
     {
-        Print("ERROR: InpAccountRiskPctTrend must be between 0.5 and 5.0. Current: ", InpAccountRiskPctTrend);
+        Print("ERROR: InpRiskPctTrend must be between 0.5 and 5.0. Current: ", InpRiskPctTrend);
         Print("WARNING: High risk percentages can lead to account blowup!");
         isValid = false;
     }
     
-    if(InpAccountRiskPctRange < 0.25 || InpAccountRiskPctRange > 3.0)
+    if(InpRiskPctRange < 0.25 || InpRiskPctRange > 3.0)
     {
-        Print("ERROR: InpAccountRiskPctRange must be between 0.25 and 3.0. Current: ", InpAccountRiskPctRange);
+        Print("ERROR: InpRiskPctRange must be between 0.25 and 3.0. Current: ", InpRiskPctRange);
         isValid = false;
     }
     
-    if(InpAccountRiskPctBreak < 0.5 || InpAccountRiskPctBreak > 6.0)
+    if(InpRiskPctBreakout < 0.5 || InpRiskPctBreakout > 6.0)
     {
-        Print("ERROR: InpAccountRiskPctBreak must be between 0.5 and 6.0. Current: ", InpAccountRiskPctBreak);
+        Print("ERROR: InpRiskPctBreakout must be between 0.5 and 6.0. Current: ", InpRiskPctBreakout);
         isValid = false;
     }
     
-    if(InpMaxAccountDDPct < 10.0 || InpMaxAccountDDPct > 40.0)
+    if(InpMaxDrawdownPct < 10.0 || InpMaxDrawdownPct > 40.0)
     {
-        Print("ERROR: InpMaxAccountDDPct must be between 10.0 and 40.0. Current: ", InpMaxAccountDDPct);
+        Print("ERROR: InpMaxDrawdownPct must be between 10.0 and 40.0. Current: ", InpMaxDrawdownPct);
         Print("WARNING: High drawdown limits are dangerous!");
         isValid = false;
     }
@@ -1674,10 +1840,11 @@ bool ValidateInputParameters()
 }
 
 //+------------------------------------------------------------------+
-//| Close all positions for current symbol                           |
+//| Legacy Close All Positions (Fallback)                            |
 //+------------------------------------------------------------------+
 void CloseAllPositions()
 {
+    // Fallback method when risk manager is not available
     int totalPositions = PositionsTotal();
     int closedCount = 0;
     
