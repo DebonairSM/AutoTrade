@@ -140,7 +140,7 @@ public:
     //+------------------------------------------------------------------+
     //| Initialization Method                                            |
     //+------------------------------------------------------------------+
-    bool Initialize(string symbol, const RegimeConfig &config)
+    bool Initialize(string symbol, const RegimeConfig &config, bool debugMode = false)
     {
         m_symbol = symbol;
         m_config = config;
@@ -172,7 +172,10 @@ public:
         Sleep(100);
         
         m_initialized = true;
-        Print("[Grande] Market Regime Detector initialized successfully for ", m_symbol);
+        
+        // Only show success message in debug mode
+        if(debugMode)
+            Print("[Grande] Market Regime Detector initialized successfully for ", m_symbol);
         
         return true;
     }

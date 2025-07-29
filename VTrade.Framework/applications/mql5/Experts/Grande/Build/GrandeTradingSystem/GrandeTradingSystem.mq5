@@ -92,7 +92,7 @@ input bool   InpShowSystemStatus = true;         // Show System Status Panel
 input bool   InpShowRegimeTrendArrows = true;    // Show Regime Trend Arrows
 input bool   InpShowADXStrengthMeter = true;     // Show ADX Strength Meter
 input bool   InpShowRegimeAlerts = true;         // Show Regime Change Alerts
-input bool   InpLogDetailedInfo = false;         // Log Detailed Information
+input bool   InpLogDetailedInfo = false;         // Log Detailed Trade Information
 
 input group "=== Update Settings ==="
 input int    InpRegimeUpdateSeconds = 5;         // Regime Update Interval (seconds)
@@ -126,8 +126,12 @@ const string REGIME_ALERT_NAME = "GrandeRegimeAlert";
 //+------------------------------------------------------------------+
 int OnInit()
 {
-    Print("=== Grande Tech Advanced Trading System ===");
-    Print("Initializing for symbol: ", _Symbol);
+    // Only show debug initialization info if specifically requested
+    if(InpLogDebugInfo)
+    {
+        Print("=== Grande Tech Advanced Trading System ===");
+        Print("Initializing for symbol: ", _Symbol);
+    }
     
     // Validate input parameters
     if(!ValidateInputParameters())
@@ -182,7 +186,7 @@ int OnInit()
         return INIT_FAILED;
     }
     
-    if(!g_regimeDetector.Initialize(_Symbol, g_regimeConfig))
+    if(!g_regimeDetector.Initialize(_Symbol, g_regimeConfig, InpLogDebugInfo))
     {
         Print("ERROR: Failed to initialize Market Regime Detector");
         delete g_regimeDetector;
@@ -201,7 +205,7 @@ int OnInit()
     }
     
     if(!g_keyLevelDetector.Initialize(InpLookbackPeriod, InpMinStrength, InpTouchZone, 
-                                      InpMinTouches, InpLogDetailedInfo))
+                                      InpMinTouches, InpLogDebugInfo)) // Pass debug flag to detector
     {
         Print("ERROR: Failed to initialize Key Level Detector");
         delete g_regimeDetector;
@@ -241,7 +245,8 @@ int OnInit()
         // Configure trend follower display
         g_trendFollower.ShowDiagnosticPanel(InpShowTrendFollowerPanel);
         
-        Print("[Grande] Advanced Trend Follower initialized and integrated");
+        if(InpLogDebugInfo)
+            Print("[Grande] Advanced Trend Follower initialized and integrated");
     }
     
     // Create and initialize risk manager
@@ -272,7 +277,8 @@ int OnInit()
         return INIT_FAILED;
     }
     
-    Print("[Grande] Risk Manager initialized and integrated");
+    if(InpLogDebugInfo)
+        Print("[Grande] Risk Manager initialized and integrated");
     
     // Set up chart display - always setup for any visual features
     SetupChartDisplay();
@@ -288,9 +294,10 @@ int OnInit()
     // Initial analysis
     PerformInitialAnalysis();
     
-    Print("Grande Trading System initialized successfully");
-    if(InpLogDetailedInfo)
+    // Only show success message and config in debug mode
+    if(InpLogDebugInfo)
     {
+        Print("Grande Trading System initialized successfully");
         Print("Configuration Summary:");
         Print("  - ADX Trend Threshold: ", InpADXTrendThreshold);
         Print("  - Key Level Min Strength: ", InpMinStrength);
@@ -312,7 +319,8 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-    Print("Deinitializing Grande Trading System. Reason: ", reason);
+    if(InpLogDebugInfo)
+        Print("Deinitializing Grande Trading System. Reason: ", reason);
     
     // Clean up timer
     EventKillTimer();
@@ -345,7 +353,8 @@ void OnDeinit(const int reason)
     // Clean up chart objects
     CleanupChartObjects();
     
-    Print("Grande Trading System deinitialized");
+    if(InpLogDebugInfo)
+        Print("Grande Trading System deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -745,20 +754,17 @@ void UpdateSystemStatusPanel()
 //+------------------------------------------------------------------+
 void LogRegimeChange(const RegimeSnapshot &snapshot)
 {
+    // Always show brief regime change (actionable information)
+    Print("📊 REGIME: ", g_regimeDetector.RegimeToString(snapshot.regime), 
+          " (Confidence: ", DoubleToString(snapshot.confidence, 2), ")");
+    
+    // Show detailed information only if requested
     if(InpLogDetailedInfo)
     {
-        Print("=== GRANDE REGIME CHANGE DETECTED ===");
-        Print("New Regime: ", g_regimeDetector.RegimeToString(snapshot.regime));
-        Print("Confidence: ", DoubleToString(snapshot.confidence, 3));
         Print("Time: ", TimeToString(snapshot.timestamp, TIME_DATE|TIME_MINUTES));
         Print("ADX Values - H1:", DoubleToString(snapshot.adx_h1, 1), 
               " H4:", DoubleToString(snapshot.adx_h4, 1), 
               " D1:", DoubleToString(snapshot.adx_d1, 1));
-    }
-    else
-    {
-        Print("[Grande] Regime: ", g_regimeDetector.RegimeToString(snapshot.regime), 
-              " (", DoubleToString(snapshot.confidence, 2), ")");
     }
     
     // Show visual alert for regime change
@@ -851,13 +857,13 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
         }
         else if(lparam == 'T' || lparam == 't') // Press 'T' to test visuals
         {
-            if(InpLogDetailedInfo)
+            if(InpLogDebugInfo)
                 Print("[Grande] TESTING VISUALS - Creating test elements");
             CreateTestVisuals();
         }
         else if(lparam == 'C' || lparam == 'c') // Press 'C' to clear all objects
         {
-            if(InpLogDetailedInfo)
+            if(InpLogDebugInfo)
                 Print("[Grande] CLEARING ALL OBJECTS");
             CleanupChartObjects();
         }
@@ -890,11 +896,13 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
                 static bool panelVisible = InpShowTrendFollowerPanel;
                 panelVisible = !panelVisible;
                 g_trendFollower.ShowDiagnosticPanel(panelVisible);
-                Print("[Grande] Trend Follower panel ", panelVisible ? "SHOWN" : "HIDDEN");
+                if(InpLogDebugInfo)
+                    Print("[Grande] Trend Follower panel ", panelVisible ? "SHOWN" : "HIDDEN");
             }
             else
             {
-                Print("[Grande] Trend Follower is not enabled");
+                if(InpLogDebugInfo)
+                    Print("[Grande] Trend Follower is not enabled");
             }
         }
         else if(lparam == 'S' || lparam == 's') // Press 'S' to show trend follower status
@@ -915,7 +923,8 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
             }
             else
             {
-                Print("[Grande] Trend Follower is not enabled");
+                if(InpLogDebugInfo)
+                    Print("[Grande] Trend Follower is not enabled");
             }
         }
         else if(lparam == 'R' || lparam == 'r') // Press 'R' to show risk manager status
@@ -1109,12 +1118,12 @@ void CreateTestVisuals()
         ObjectSetString(g_chartID, testName, OBJPROP_FONT, "Arial Bold");
         ObjectSetInteger(g_chartID, testName, OBJPROP_SELECTABLE, false);
         
-        if(InpLogDetailedInfo)
+        if(InpLogDebugInfo)
             Print("[Grande] Visual test label created successfully");
     }
     else
     {
-        if(InpLogDetailedInfo)
+        if(InpLogDebugInfo)
             Print("[Grande] Failed to create test label. Error: ", GetLastError());
     }
     
@@ -1128,28 +1137,81 @@ void CreateTestVisuals()
 //+------------------------------------------------------------------+
 void ExecuteTradeLogic(const RegimeSnapshot &rs)
 {
+    string logPrefix = "[TRADE DECISION] ";
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "=== ANALYZING TRADE OPPORTUNITY ===");
+        Print(logPrefix + "Timestamp: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES));
+        Print(logPrefix + "Symbol: ", _Symbol);
+        Print(logPrefix + "Current Price: ", DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits));
+        Print(logPrefix + "Spread: ", SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), " points");
+    }
+    
     // Check risk management first
     if(g_riskManager != NULL)
     {
         if(!g_riskManager.CheckDrawdown())
+        {
+            if(InpLogDetailedInfo)
+                Print(logPrefix + "❌ BLOCKED: Maximum drawdown limit reached (", 
+                      DoubleToString(InpMaxDrawdownPct, 1), "%)");
             return;
+        }
             
         if(!g_riskManager.CheckMaxPositions())
+        {
+            if(InpLogDetailedInfo)
+                Print(logPrefix + "❌ BLOCKED: Maximum positions limit reached (", 
+                      InpMaxPositions, " positions)");
             return;
+        }
     }
     
     // Check if we already have positions
     if(PositionsTotal() > 0)
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ BLOCKED: Already have ", PositionsTotal(), " open position(s)");
         return;
+    }
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "✅ Risk checks passed - proceeding with signal analysis");
+        Print(logPrefix + "Market Regime: ", g_regimeDetector.RegimeToString(rs.regime));
+        Print(logPrefix + "Regime Confidence: ", DoubleToString(rs.confidence, 3));
+        Print(logPrefix + "ADX H1: ", DoubleToString(rs.adx_h1, 2));
+        Print(logPrefix + "ADX H4: ", DoubleToString(rs.adx_h4, 2));
+        Print(logPrefix + "ATR Current: ", DoubleToString(rs.atr_current, _Digits));
+        Print(logPrefix + "ATR Average: ", DoubleToString(rs.atr_avg, _Digits));
+    }
     
     switch(rs.regime)
     {
-        case REGIME_TREND_BULL:   TrendTrade(true, rs);   break;
-        case REGIME_TREND_BEAR:   TrendTrade(false, rs);  break;
-        case REGIME_BREAKOUT_SETUP: BreakoutTrade(rs);    break;
-        case REGIME_RANGING:      RangeTrade(rs);         break;
-        default: /*HIGH_VOL*/ return;
+        case REGIME_TREND_BULL:   
+            if(InpLogDetailedInfo) Print(logPrefix + "→ Analyzing BULLISH TREND opportunity...");
+            TrendTrade(true, rs);   
+            break;
+        case REGIME_TREND_BEAR:   
+            if(InpLogDetailedInfo) Print(logPrefix + "→ Analyzing BEARISH TREND opportunity...");
+            TrendTrade(false, rs);  
+            break;
+        case REGIME_BREAKOUT_SETUP: 
+            if(InpLogDetailedInfo) Print(logPrefix + "→ Analyzing BREAKOUT opportunity...");
+            BreakoutTrade(rs);    
+            break;
+        case REGIME_RANGING:      
+            if(InpLogDetailedInfo) Print(logPrefix + "→ Analyzing RANGE TRADING opportunity...");
+            RangeTrade(rs);         
+            break;
+        default: 
+            if(InpLogDetailedInfo) Print(logPrefix + "❌ BLOCKED: High volatility regime - no trading");
+            return;
     }
+    
+    if(InpLogDetailedInfo)
+        Print(logPrefix + "=== TRADE ANALYSIS COMPLETE ===\n");
 }
 
 //+------------------------------------------------------------------+
@@ -1157,23 +1219,55 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
 //+------------------------------------------------------------------+
 void TrendTrade(bool bullish, const RegimeSnapshot &rs)
 {
+    string logPrefix = "[TREND SIGNAL] ";
+    string direction = bullish ? "BULLISH" : "BEARISH";
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "Analyzing ", direction, " trend signal...");
+        Print(logPrefix + "Required Risk %: ", DoubleToString(InpRiskPctTrend, 1), "%");
+    }
+    
     if(!Signal_TREND(bullish, rs)) 
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ ", direction, " trend signal REJECTED - signal criteria not met");
         return;
+    }
+    
+    if(InpLogDetailedInfo)
+        Print(logPrefix + "✅ ", direction, " trend signal CONFIRMED - proceeding with trade execution");
     
     // Calculate position size using risk manager
     double stopDistancePips = rs.atr_current * 1.2 / _Point;
     double lot = 0.0;
     
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "Risk Calculation:");
+        Print(logPrefix + "  Stop Distance: ", DoubleToString(stopDistancePips, 1), " pips (1.2 × ATR)");
+        Print(logPrefix + "  ATR: ", DoubleToString(rs.atr_current, _Digits));
+    }
+    
     if(g_riskManager != NULL)
     {
         lot = g_riskManager.CalculateLotSize(stopDistancePips, rs.regime);
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "  Lot Size (Risk Manager): ", DoubleToString(lot, 2));
     }
     else
     {
         lot = CalcLot(rs.regime); // Fallback to old method
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "  Lot Size (Fallback): ", DoubleToString(lot, 2));
     }
     
-    if(lot <= 0) return;
+    if(lot <= 0) 
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ TRADE BLOCKED: Invalid lot size (", DoubleToString(lot, 2), ")");
+        return;
+    }
     
     double price = bullish ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double sl = 0.0, tp = 0.0;
@@ -1192,10 +1286,41 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     
     string comment = StringFormat("Trend-%s", bullish ? "BULL" : "BEAR");
     
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "Trade Parameters:");
+        Print(logPrefix + "  Direction: ", direction);
+        Print(logPrefix + "  Entry Price: ", DoubleToString(price, _Digits));
+        Print(logPrefix + "  Stop Loss: ", DoubleToString(sl, _Digits), " (", DoubleToString(MathAbs(price - sl) / _Point, 1), " pips)");
+        Print(logPrefix + "  Take Profit: ", DoubleToString(tp, _Digits), " (", DoubleToString(MathAbs(tp - price) / _Point, 1), " pips)");
+        Print(logPrefix + "  Risk/Reward: 1:", DoubleToString(MathAbs(tp - price) / MathAbs(price - sl), 2));
+        Print(logPrefix + "  Position Size: ", DoubleToString(lot, 2), " lots");
+        Print(logPrefix + "  Comment: ", comment);
+        Print(logPrefix + "→ EXECUTING ", direction, " TREND TRADE...");
+    }
+    
+    bool tradeResult = false;
     if(bullish)
-        g_trade.Buy(lot, _Symbol, price, sl, tp, comment);
+        tradeResult = g_trade.Buy(lot, _Symbol, price, sl, tp, comment);
     else
-        g_trade.Sell(lot, _Symbol, price, sl, tp, comment);
+        tradeResult = g_trade.Sell(lot, _Symbol, price, sl, tp, comment);
+    
+    if(InpLogDetailedInfo)
+    {
+        if(tradeResult)
+        {
+            Print(logPrefix + "🎯 TRADE EXECUTED SUCCESSFULLY!");
+            Print(logPrefix + "  Ticket: ", g_trade.ResultOrder());
+            Print(logPrefix + "  Execution Price: ", DoubleToString(g_trade.ResultPrice(), _Digits));
+            Print(logPrefix + "  Slippage: ", DoubleToString(MathAbs(g_trade.ResultPrice() - price) / _Point, 1), " pips");
+        }
+        else
+        {
+            Print(logPrefix + "❌ TRADE EXECUTION FAILED!");
+            Print(logPrefix + "  Error Code: ", g_trade.ResultRetcode());
+            Print(logPrefix + "  Error Description: ", g_trade.ResultRetcodeDescription());
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -1203,30 +1328,73 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
 //+------------------------------------------------------------------+
 void BreakoutTrade(const RegimeSnapshot &rs)
 {
+    string logPrefix = "[BREAKOUT SIGNAL] ";
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "Analyzing breakout opportunity...");
+        Print(logPrefix + "Required Risk %: ", DoubleToString(InpRiskPctBreakout, 1), "%");
+    }
+    
     if(!Signal_BREAKOUT(rs)) 
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ Breakout signal REJECTED - signal criteria not met");
         return;
+    }
+    
+    if(InpLogDetailedInfo)
+        Print(logPrefix + "✅ Breakout signal CONFIRMED - proceeding with trade setup");
     
     // Get strongest key level for breakout
     SKeyLevel strongestLevel;
     if(!g_keyLevelDetector.GetStrongestLevel(strongestLevel))
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ TRADE BLOCKED: No strong key levels found");
         return;
+    }
     
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double breakoutLevel = strongestLevel.price;
     double stopDistancePips = rs.atr_current * 1.2 / _Point;
     double lot = 0.0;
     
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "Key Level Analysis:");
+        Print(logPrefix + "  Strongest Level: ", DoubleToString(strongestLevel.price, _Digits));
+        Print(logPrefix + "  Level Type: ", strongestLevel.isResistance ? "RESISTANCE" : "SUPPORT");
+        Print(logPrefix + "  Level Strength: ", DoubleToString(strongestLevel.strength, 3));
+        Print(logPrefix + "  Level Touches: ", strongestLevel.touchCount);
+        Print(logPrefix + "  Current Price: ", DoubleToString(currentPrice, _Digits));
+        Print(logPrefix + "  Distance to Level: ", DoubleToString(MathAbs(currentPrice - breakoutLevel), _Digits), " (", DoubleToString(MathAbs(currentPrice - breakoutLevel) / _Point, 1), " pips)");
+    }
+    
     // Calculate position size using risk manager
     if(g_riskManager != NULL)
     {
         lot = g_riskManager.CalculateLotSize(stopDistancePips, rs.regime);
+        if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "Risk Calculation:");
+            Print(logPrefix + "  Stop Distance: ", DoubleToString(stopDistancePips, 1), " pips (1.2 × ATR)");
+            Print(logPrefix + "  Lot Size (Risk Manager): ", DoubleToString(lot, 2));
+        }
     }
     else
     {
         lot = CalcLot(rs.regime); // Fallback to old method
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "  Lot Size (Fallback): ", DoubleToString(lot, 2));
     }
     
-    if(lot <= 0) return;
+    if(lot <= 0) 
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ TRADE BLOCKED: Invalid lot size (", DoubleToString(lot, 2), ")");
+        return;
+    }
     
     // Calculate SL/TP using risk manager
     double breakoutSL = 0.0, breakoutTP = 0.0;
@@ -1248,11 +1416,44 @@ void BreakoutTrade(const RegimeSnapshot &rs)
                     breakoutLevel + rs.atr_current * 3.0;
     }
     
+    string comment = StringFormat("BO-%s", strongestLevel.isResistance ? "RESISTANCE" : "SUPPORT");
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "Trade Parameters:");
+        Print(logPrefix + "  Direction: ", strongestLevel.isResistance ? "BUY (breakout above resistance)" : "SELL (breakout below support)");
+        Print(logPrefix + "  Entry Level: ", DoubleToString(breakoutLevel, _Digits));
+        Print(logPrefix + "  Stop Loss: ", DoubleToString(breakoutSL, _Digits), " (", DoubleToString(MathAbs(breakoutLevel - breakoutSL) / _Point, 1), " pips)");
+        Print(logPrefix + "  Take Profit: ", DoubleToString(breakoutTP, _Digits), " (", DoubleToString(MathAbs(breakoutTP - breakoutLevel) / _Point, 1), " pips)");
+        Print(logPrefix + "  Risk/Reward: 1:", DoubleToString(MathAbs(breakoutTP - breakoutLevel) / MathAbs(breakoutLevel - breakoutSL), 2));
+        Print(logPrefix + "  Position Size: ", DoubleToString(lot, 2), " lots");
+        Print(logPrefix + "  Comment: ", comment);
+        Print(logPrefix + "→ PLACING STOP ORDER...");
+    }
+    
     // Place stop order
+    bool tradeResult = false;
     if(strongestLevel.isResistance)
-        g_trade.BuyStop(lot, breakoutLevel, breakoutSL, breakoutTP, "BO-RESISTANCE");
+        tradeResult = g_trade.BuyStop(lot, breakoutLevel, breakoutSL, breakoutTP, comment);
     else
-        g_trade.SellStop(lot, breakoutLevel, breakoutSL, breakoutTP, "BO-SUPPORT");
+        tradeResult = g_trade.SellStop(lot, breakoutLevel, breakoutSL, breakoutTP, comment);
+    
+    if(InpLogDetailedInfo)
+    {
+        if(tradeResult)
+        {
+            Print(logPrefix + "🎯 STOP ORDER PLACED SUCCESSFULLY!");
+            Print(logPrefix + "  Ticket: ", g_trade.ResultOrder());
+            Print(logPrefix + "  Order Type: ", strongestLevel.isResistance ? "BUY STOP" : "SELL STOP");
+            Print(logPrefix + "  Trigger Price: ", DoubleToString(breakoutLevel, _Digits));
+        }
+        else
+        {
+            Print(logPrefix + "❌ STOP ORDER PLACEMENT FAILED!");
+            Print(logPrefix + "  Error Code: ", g_trade.ResultRetcode());
+            Print(logPrefix + "  Error Description: ", g_trade.ResultRetcodeDescription());
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -1260,30 +1461,74 @@ void BreakoutTrade(const RegimeSnapshot &rs)
 //+------------------------------------------------------------------+
 void RangeTrade(const RegimeSnapshot &rs)
 {
+    string logPrefix = "[RANGE SIGNAL] ";
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "Analyzing range trading opportunity...");
+        Print(logPrefix + "Required Risk %: ", DoubleToString(InpRiskPctRange, 1), "%");
+    }
+    
     if(!Signal_RANGE(rs)) 
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ Range signal REJECTED - signal criteria not met");
         return;
+    }
+    
+    if(InpLogDetailedInfo)
+        Print(logPrefix + "✅ Range signal CONFIRMED - proceeding with trade setup");
     
     // Get range boundaries from key levels
     SKeyLevel resistanceLevel, supportLevel;
     if(!GetRangeBoundaries(resistanceLevel, supportLevel))
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ TRADE BLOCKED: Unable to identify range boundaries");
         return;
+    }
     
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double midRange = (resistanceLevel.price + supportLevel.price) / 2.0;
+    double rangeWidth = resistanceLevel.price - supportLevel.price;
     double stopDistancePips = rs.atr_current * 0.5 / _Point;
     double lot = 0.0;
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "Range Analysis:");
+        Print(logPrefix + "  Resistance Level: ", DoubleToString(resistanceLevel.price, _Digits));
+        Print(logPrefix + "  Support Level: ", DoubleToString(supportLevel.price, _Digits));
+        Print(logPrefix + "  Range Width: ", DoubleToString(rangeWidth, _Digits), " (", DoubleToString(rangeWidth / _Point, 1), " pips)");
+        Print(logPrefix + "  Mid Range: ", DoubleToString(midRange, _Digits));
+        Print(logPrefix + "  Current Price: ", DoubleToString(currentPrice, _Digits));
+        Print(logPrefix + "  Position in Range: ", DoubleToString((currentPrice - supportLevel.price) / rangeWidth * 100, 1), "%");
+    }
     
     // Calculate position size using risk manager
     if(g_riskManager != NULL)
     {
         lot = g_riskManager.CalculateLotSize(stopDistancePips, rs.regime);
+        if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "Risk Calculation:");
+            Print(logPrefix + "  Stop Distance: ", DoubleToString(stopDistancePips, 1), " pips (0.5 × ATR)");
+            Print(logPrefix + "  Lot Size (Risk Manager): ", DoubleToString(lot, 2));
+        }
     }
     else
     {
         lot = CalcLot(rs.regime); // Fallback to old method
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "  Lot Size (Fallback): ", DoubleToString(lot, 2));
     }
     
-    if(lot <= 0) return;
+    if(lot <= 0) 
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ TRADE BLOCKED: Invalid lot size (", DoubleToString(lot, 2), ")");
+        return;
+    }
     
     // Fade touches of top/bottom 80% of range
     if(currentPrice >= resistanceLevel.price * 0.998) // Near resistance
@@ -1301,7 +1546,35 @@ void RangeTrade(const RegimeSnapshot &rs)
             tp = midRange;
         }
         
-        g_trade.Sell(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_BID), sl, tp, "Range-Sell");
+        if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "🔻 FADE RESISTANCE SETUP:");
+            Print(logPrefix + "  Trade Type: SELL at resistance");
+            Print(logPrefix + "  Entry Price: ", DoubleToString(currentPrice, _Digits));
+            Print(logPrefix + "  Stop Loss: ", DoubleToString(sl, _Digits), " (", DoubleToString(MathAbs(currentPrice - sl) / _Point, 1), " pips)");
+            Print(logPrefix + "  Take Profit: ", DoubleToString(tp, _Digits), " (", DoubleToString(MathAbs(tp - currentPrice) / _Point, 1), " pips)");
+            Print(logPrefix + "  Target: Mid-range (", DoubleToString(midRange, _Digits), ")");
+            Print(logPrefix + "  Position Size: ", DoubleToString(lot, 2), " lots");
+            Print(logPrefix + "→ EXECUTING RANGE SELL...");
+        }
+        
+        bool tradeResult = g_trade.Sell(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_BID), sl, tp, "Range-Sell");
+        
+        if(InpLogDetailedInfo)
+        {
+            if(tradeResult)
+            {
+                Print(logPrefix + "🎯 RANGE SELL EXECUTED SUCCESSFULLY!");
+                Print(logPrefix + "  Ticket: ", g_trade.ResultOrder());
+                Print(logPrefix + "  Execution Price: ", DoubleToString(g_trade.ResultPrice(), _Digits));
+            }
+            else
+            {
+                Print(logPrefix + "❌ RANGE SELL EXECUTION FAILED!");
+                Print(logPrefix + "  Error Code: ", g_trade.ResultRetcode());
+                Print(logPrefix + "  Error Description: ", g_trade.ResultRetcodeDescription());
+            }
+        }
     }
     else if(currentPrice <= supportLevel.price * 1.002) // Near support
     {
@@ -1318,7 +1591,44 @@ void RangeTrade(const RegimeSnapshot &rs)
             tp = midRange;
         }
         
-        g_trade.Buy(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_ASK), sl, tp, "Range-Buy");
+        if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "🔺 FADE SUPPORT SETUP:");
+            Print(logPrefix + "  Trade Type: BUY at support");
+            Print(logPrefix + "  Entry Price: ", DoubleToString(currentPrice, _Digits));
+            Print(logPrefix + "  Stop Loss: ", DoubleToString(sl, _Digits), " (", DoubleToString(MathAbs(currentPrice - sl) / _Point, 1), " pips)");
+            Print(logPrefix + "  Take Profit: ", DoubleToString(tp, _Digits), " (", DoubleToString(MathAbs(tp - currentPrice) / _Point, 1), " pips)");
+            Print(logPrefix + "  Target: Mid-range (", DoubleToString(midRange, _Digits), ")");
+            Print(logPrefix + "  Position Size: ", DoubleToString(lot, 2), " lots");
+            Print(logPrefix + "→ EXECUTING RANGE BUY...");
+        }
+        
+        bool tradeResult = g_trade.Buy(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_ASK), sl, tp, "Range-Buy");
+        
+        if(InpLogDetailedInfo)
+        {
+            if(tradeResult)
+            {
+                Print(logPrefix + "🎯 RANGE BUY EXECUTED SUCCESSFULLY!");
+                Print(logPrefix + "  Ticket: ", g_trade.ResultOrder());
+                Print(logPrefix + "  Execution Price: ", DoubleToString(g_trade.ResultPrice(), _Digits));
+            }
+            else
+            {
+                Print(logPrefix + "❌ RANGE BUY EXECUTION FAILED!");
+                Print(logPrefix + "  Error Code: ", g_trade.ResultRetcode());
+                Print(logPrefix + "  Error Description: ", g_trade.ResultRetcodeDescription());
+            }
+        }
+    }
+    else
+    {
+        if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "ℹ️ Price not at range boundaries - waiting for better entry");
+            Print(logPrefix + "  Current price is ", DoubleToString((currentPrice - supportLevel.price) / rangeWidth * 100, 1), "% through the range");
+            Print(logPrefix + "  Need price near resistance (>99.8%) or support (<0.2%) for entry");
+        }
     }
 }
 
@@ -1327,28 +1637,35 @@ void RangeTrade(const RegimeSnapshot &rs)
 //+------------------------------------------------------------------+
 bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
 {
+    string logPrefix = "[SIGNAL ANALYSIS] ";
+    string direction = bullish ? "BULLISH" : "BEARISH";
+    
+    if(InpLogDetailedInfo)
+        Print(logPrefix + "Evaluating ", direction, " trend signal criteria...");
+    
     // === ADVANCED TREND FOLLOWER CONFIRMATION ===
     if(g_trendFollower != NULL && InpEnableTrendFollower)
     {
         bool trendFollowerSignal = bullish ? g_trendFollower.IsBullish() : g_trendFollower.IsBearish();
         
+        if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "1. Trend Follower Analysis:");
+            Print(logPrefix + "  Multi-timeframe signal: ", trendFollowerSignal ? "✅ CONFIRMED" : "❌ REJECTED");
+            Print(logPrefix + "  TF Strength: ", DoubleToString(g_trendFollower.TrendStrength(), 2));
+            Print(logPrefix + "  TF Pullback Price (EMA20): ", DoubleToString(g_trendFollower.EntryPricePullback(), _Digits));
+        }
+        
         if(!trendFollowerSignal)
         {
             if(InpLogDetailedInfo)
-            {
-                Print("[Grande] Trend Follower BLOCKED ", bullish ? "BULLISH" : "BEARISH", 
-                      " signal - Multi-timeframe conditions not met");
-                Print("  - TF Strength: ", DoubleToString(g_trendFollower.TrendStrength(), 2));
-                Print("  - TF Pullback Price: ", DoubleToString(g_trendFollower.EntryPricePullback(), _Digits));
-            }
+                Print(logPrefix + "❌ SIGNAL BLOCKED: Trend Follower rejected ", direction, " signal");
             return false;
         }
-        
-        if(InpLogDetailedInfo)
-        {
-            Print("[Grande] ✅ Trend Follower CONFIRMED ", bullish ? "BULLISH" : "BEARISH", 
-                  " signal (Strength: ", DoubleToString(g_trendFollower.TrendStrength(), 2), ")");
-        }
+    }
+    else if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "1. Trend Follower: DISABLED (proceeding with original logic)");
     }
     
     // === ORIGINAL GRANDE EMA ALIGNMENT LOGIC ===
@@ -1400,7 +1717,24 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
                        (ema50_h1 > ema200_h1 && ema50_h4 > ema200_h4) :
                        (ema50_h1 < ema200_h1 && ema50_h4 < ema200_h4);
     
-    if(!emaAlignment) return false;
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "2. EMA Alignment Analysis:");
+        Print(logPrefix + "  H1 EMA50: ", DoubleToString(ema50_h1, _Digits));
+        Print(logPrefix + "  H1 EMA200: ", DoubleToString(ema200_h1, _Digits));
+        Print(logPrefix + "  H4 EMA50: ", DoubleToString(ema50_h4, _Digits));
+        Print(logPrefix + "  H4 EMA200: ", DoubleToString(ema200_h4, _Digits));
+        Print(logPrefix + "  H1 Alignment: ", (bullish ? ema50_h1 > ema200_h1 : ema50_h1 < ema200_h1) ? "✅" : "❌");
+        Print(logPrefix + "  H4 Alignment: ", (bullish ? ema50_h4 > ema200_h4 : ema50_h4 < ema200_h4) ? "✅" : "❌");
+        Print(logPrefix + "  Overall EMA Alignment: ", emaAlignment ? "✅ CONFIRMED" : "❌ REJECTED");
+    }
+    
+    if(!emaAlignment) 
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ SIGNAL BLOCKED: EMA alignment not suitable for ", direction, " trend");
+        return false;
+    }
     
     // Price pull-back ≤ 1 × ATR(14) to 20 EMA
     int ema20_handle = iMA(_Symbol, PERIOD_CURRENT, InpEMA20Period, 0, MODE_EMA, PRICE_CLOSE);
@@ -1416,8 +1750,24 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     }
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double pullbackDistance = MathAbs(currentPrice - ema20);
+    bool pullbackValid = (pullbackDistance <= rs.atr_current);
     
-    if(pullbackDistance > rs.atr_current) return false;
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "3. Pullback Analysis:");
+        Print(logPrefix + "  Current Price: ", DoubleToString(currentPrice, _Digits));
+        Print(logPrefix + "  EMA20: ", DoubleToString(ema20, _Digits));
+        Print(logPrefix + "  Distance to EMA20: ", DoubleToString(pullbackDistance, _Digits), " (", DoubleToString(pullbackDistance / _Point, 1), " pips)");
+        Print(logPrefix + "  ATR Limit: ", DoubleToString(rs.atr_current, _Digits), " (", DoubleToString(rs.atr_current / _Point, 1), " pips)");
+        Print(logPrefix + "  Pullback Valid: ", pullbackValid ? "✅ WITHIN LIMIT" : "❌ TOO FAR");
+    }
+    
+    if(!pullbackValid)
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ SIGNAL BLOCKED: Price too far from EMA20 (pullback > 1×ATR)");
+        return false;
+    }
     
     // RSI(14) 40-60 reset, then hook with price continuation
     int rsi_handle = iRSI(_Symbol, PERIOD_CURRENT, InpRSIPeriod, PRICE_CLOSE);
@@ -1439,7 +1789,34 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
                        (rsi > 40 && rsi < 60 && rsi > rsi_prev) :
                        (rsi > 40 && rsi < 60 && rsi < rsi_prev);
     
-    return rsiCondition;
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "4. RSI Momentum Analysis:");
+        Print(logPrefix + "  RSI Current: ", DoubleToString(rsi, 2));
+        Print(logPrefix + "  RSI Previous: ", DoubleToString(rsi_prev, 2));
+        Print(logPrefix + "  RSI in Range (40-60): ", (rsi > 40 && rsi < 60) ? "✅" : "❌");
+        Print(logPrefix + "  RSI Direction: ", bullish ? (rsi > rsi_prev ? "✅ RISING" : "❌ FALLING") : 
+                                                        (rsi < rsi_prev ? "✅ FALLING" : "❌ RISING"));
+        Print(logPrefix + "  RSI Condition: ", rsiCondition ? "✅ CONFIRMED" : "❌ REJECTED");
+    }
+    
+    if(!rsiCondition)
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ SIGNAL BLOCKED: RSI momentum not aligned with ", direction, " trend");
+        return false;
+    }
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "🎯 ALL CRITERIA PASSED - ", direction, " TREND SIGNAL CONFIRMED!");
+        Print(logPrefix + "  ✅ Trend Follower (if enabled)");
+        Print(logPrefix + "  ✅ EMA Alignment (H1 & H4)");
+        Print(logPrefix + "  ✅ Price Pullback (≤ 1×ATR from EMA20)");
+        Print(logPrefix + "  ✅ RSI Momentum (40-60 range with correct direction)");
+    }
+    
+    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -1447,6 +1824,11 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
 //+------------------------------------------------------------------+
 bool Signal_BREAKOUT(const RegimeSnapshot &rs)
 {
+    string logPrefix = "[BREAKOUT CRITERIA] ";
+    
+    if(InpLogDetailedInfo)
+        Print(logPrefix + "Evaluating breakout signal criteria...");
+    
     // Inside-bar or NR7 formation at strong key level
     double high1 = iHigh(_Symbol, PERIOD_CURRENT, 1);
     double low1 = iLow(_Symbol, PERIOD_CURRENT, 1);
@@ -1456,23 +1838,85 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     bool insideBar = (high1 <= high2 && low1 >= low2);
     bool nr7 = IsNR7(); // Need to implement this
     
-    if(!insideBar && !nr7) return false;
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "1. Pattern Analysis:");
+        Print(logPrefix + "  Previous Bar: H=", DoubleToString(high2, _Digits), " L=", DoubleToString(low2, _Digits), " Range=", DoubleToString((high2-low2)/_Point, 1), " pips");
+        Print(logPrefix + "  Current Bar: H=", DoubleToString(high1, _Digits), " L=", DoubleToString(low1, _Digits), " Range=", DoubleToString((high1-low1)/_Point, 1), " pips");
+        Print(logPrefix + "  Inside Bar: ", insideBar ? "✅ CONFIRMED" : "❌ NOT PRESENT");
+        Print(logPrefix + "  NR7 Pattern: ", nr7 ? "✅ CONFIRMED" : "❌ NOT PRESENT");
+    }
+    
+    if(!insideBar && !nr7) 
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ CRITERIA FAILED: No inside bar or NR7 pattern detected");
+        return false;
+    }
     
     // Check if near strong key level
     SKeyLevel strongestLevel;
     if(!g_keyLevelDetector.GetStrongestLevel(strongestLevel))
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ CRITERIA FAILED: No strong key levels available");
         return false;
+    }
     
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double distanceToLevel = MathAbs(currentPrice - strongestLevel.price);
+    double maxDistance = rs.atr_current * 0.2;
+    bool nearKeyLevel = (distanceToLevel <= maxDistance);
     
-    if(distanceToLevel > rs.atr_current * 0.2) return false;
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "2. Key Level Proximity:");
+        Print(logPrefix + "  Strongest Level: ", DoubleToString(strongestLevel.price, _Digits), " (", strongestLevel.isResistance ? "RESISTANCE" : "SUPPORT", ")");
+        Print(logPrefix + "  Level Strength: ", DoubleToString(strongestLevel.strength, 3));
+        Print(logPrefix + "  Current Price: ", DoubleToString(currentPrice, _Digits));
+        Print(logPrefix + "  Distance: ", DoubleToString(distanceToLevel, _Digits), " (", DoubleToString(distanceToLevel / _Point, 1), " pips)");
+        Print(logPrefix + "  Max Allowed: ", DoubleToString(maxDistance, _Digits), " (", DoubleToString(maxDistance / _Point, 1), " pips)");
+        Print(logPrefix + "  Near Key Level: ", nearKeyLevel ? "✅ WITHIN RANGE" : "❌ TOO FAR");
+    }
+    
+    if(!nearKeyLevel)
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ CRITERIA FAILED: Price not close enough to key level (>0.2×ATR)");
+        return false;
+    }
     
     // Volume spike ≥ 1.5 × 20-bar MA (simplified check)
     long volume = iTickVolume(_Symbol, PERIOD_CURRENT, 0);
     long avgVolume = GetAverageVolume(20);
+    double volumeRatio = (double)volume / avgVolume;
+    bool volumeSpike = (volume >= avgVolume * 1.5);
     
-    return (volume >= avgVolume * 1.5);
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "3. Volume Analysis:");
+        Print(logPrefix + "  Current Volume: ", volume);
+        Print(logPrefix + "  20-Bar Average: ", avgVolume);
+        Print(logPrefix + "  Volume Ratio: ", DoubleToString(volumeRatio, 2), "x");
+        Print(logPrefix + "  Volume Spike (≥1.5x): ", volumeSpike ? "✅ CONFIRMED" : "❌ INSUFFICIENT");
+    }
+    
+    if(!volumeSpike)
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ CRITERIA FAILED: Insufficient volume spike (need ≥1.5x average)");
+        return false;
+    }
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "🎯 ALL BREAKOUT CRITERIA PASSED!");
+        Print(logPrefix + "  ✅ Inside Bar or NR7 pattern");
+        Print(logPrefix + "  ✅ Near strong key level (≤0.2×ATR)");
+        Print(logPrefix + "  ✅ Volume spike (≥1.5x average)");
+    }
+    
+    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -1480,18 +1924,60 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
 //+------------------------------------------------------------------+
 bool Signal_RANGE(const RegimeSnapshot &rs)
 {
+    string logPrefix = "[RANGE CRITERIA] ";
+    
+    if(InpLogDetailedInfo)
+        Print(logPrefix + "Evaluating range signal criteria...");
+    
     // Range width ≥ 1.5 × spread
     SKeyLevel resistanceLevel, supportLevel;
     if(!GetRangeBoundaries(resistanceLevel, supportLevel))
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ CRITERIA FAILED: Cannot identify range boundaries");
         return false;
+    }
     
     double rangeWidth = resistanceLevel.price - supportLevel.price;
     double spread = (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * _Point;
+    double minRangeWidth = spread * 1.5;
+    bool rangeWidthOK = (rangeWidth >= minRangeWidth);
     
-    if(rangeWidth < spread * 1.5) return false;
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "1. Range Width Analysis:");
+        Print(logPrefix + "  Resistance: ", DoubleToString(resistanceLevel.price, _Digits));
+        Print(logPrefix + "  Support: ", DoubleToString(supportLevel.price, _Digits));
+        Print(logPrefix + "  Range Width: ", DoubleToString(rangeWidth, _Digits), " (", DoubleToString(rangeWidth / _Point, 1), " pips)");
+        Print(logPrefix + "  Current Spread: ", SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), " points (", DoubleToString(spread / _Point, 1), " pips)");
+        Print(logPrefix + "  Min Required: ", DoubleToString(minRangeWidth, _Digits), " (", DoubleToString(minRangeWidth / _Point, 1), " pips)");
+        Print(logPrefix + "  Range Width OK: ", rangeWidthOK ? "✅ SUFFICIENT" : "❌ TOO NARROW");
+    }
+    
+    if(!rangeWidthOK)
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ CRITERIA FAILED: Range too narrow (need ≥1.5×spread)");
+        return false;
+    }
     
     // ADX < 20
-    if(rs.adx_h1 >= 20) return false;
+    bool adxOK = (rs.adx_h1 < 20);
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "2. Trend Strength Analysis:");
+        Print(logPrefix + "  ADX H1: ", DoubleToString(rs.adx_h1, 2));
+        Print(logPrefix + "  ADX Threshold: 20.0");
+        Print(logPrefix + "  Low Trend Strength: ", adxOK ? "✅ CONFIRMED (ADX < 20)" : "❌ TOO STRONG (ADX ≥ 20)");
+    }
+    
+    if(!adxOK)
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ CRITERIA FAILED: Market trending too strongly (ADX ≥ 20)");
+        return false;
+    }
     
     // Confirm with Stoch(14,3,3) crossing 80/20
     int stoch_handle = iStochastic(_Symbol, PERIOD_CURRENT, InpStochPeriod, InpStochK, InpStochD, MODE_SMA, STO_LOWHIGH);
@@ -1513,13 +1999,55 @@ bool Signal_RANGE(const RegimeSnapshot &rs)
     double midRange = (resistanceLevel.price + supportLevel.price) / 2.0;
     
     // Fade touches of top/bottom 80% of range
-    if(currentPrice >= resistanceLevel.price * 0.998 && stochK > 80 && stochK < stochK_prev)
-        return true;
+    bool nearResistance = (currentPrice >= resistanceLevel.price * 0.998);
+    bool nearSupport = (currentPrice <= supportLevel.price * 1.002);
+    bool stochOverbought = (stochK > 80 && stochK < stochK_prev);
+    bool stochOversold = (stochK < 20 && stochK > stochK_prev);
     
-    if(currentPrice <= supportLevel.price * 1.002 && stochK < 20 && stochK > stochK_prev)
-        return true;
+    bool validRangeEntry = false;
+    string entryReason = "";
     
-    return false;
+    if(nearResistance && stochOverbought)
+    {
+        validRangeEntry = true;
+        entryReason = "SELL at resistance (Stoch overbought & turning down)";
+    }
+    else if(nearSupport && stochOversold)
+    {
+        validRangeEntry = true;
+        entryReason = "BUY at support (Stoch oversold & turning up)";
+    }
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "3. Entry Opportunity Analysis:");
+        Print(logPrefix + "  Current Price: ", DoubleToString(currentPrice, _Digits));
+        Print(logPrefix + "  Position in Range: ", DoubleToString((currentPrice - supportLevel.price) / rangeWidth * 100, 1), "%");
+        Print(logPrefix + "  Near Resistance (>99.8%): ", nearResistance ? "✅" : "❌");
+        Print(logPrefix + "  Near Support (<0.2%): ", nearSupport ? "✅" : "❌");
+        Print(logPrefix + "  Stochastic Current: ", DoubleToString(stochK, 2));
+        Print(logPrefix + "  Stochastic Previous: ", DoubleToString(stochK_prev, 2));
+        Print(logPrefix + "  Stoch Overbought (>80 & turning down): ", stochOverbought ? "✅" : "❌");
+        Print(logPrefix + "  Stoch Oversold (<20 & turning up): ", stochOversold ? "✅" : "❌");
+        Print(logPrefix + "  Valid Entry: ", validRangeEntry ? "✅ " + entryReason : "❌ NO ENTRY SIGNAL");
+    }
+    
+    if(!validRangeEntry)
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "❌ CRITERIA FAILED: No valid range entry signal");
+        return false;
+    }
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "🎯 ALL RANGE CRITERIA PASSED!");
+        Print(logPrefix + "  ✅ Range width sufficient (≥1.5×spread)");
+        Print(logPrefix + "  ✅ Low trend strength (ADX < 20)");
+        Print(logPrefix + "  ✅ Valid entry signal: ", entryReason);
+    }
+    
+    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -1827,7 +2355,7 @@ bool ValidateInputParameters()
         isValid = false;
     }
     
-    if(isValid)
+    if(isValid && InpLogDebugInfo)
     {
         Print("✅ All input parameters validated successfully");
     }

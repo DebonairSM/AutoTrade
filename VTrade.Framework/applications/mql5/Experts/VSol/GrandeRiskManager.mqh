@@ -99,8 +99,9 @@ private:
     double CalculateATR();
     double GetPipValue();
     void UpdatePositionInfo();
-    bool IsPositionValid(const PositionInfo pos);
-    void LogRiskEvent(const string &event, const string &details = "");
+    bool IsPositionValid(const PositionInfo &pos);
+    void LogRiskEvent(const string &event, const string &details);
+    void LogRiskEvent(const string &event);
     
 public:
     // === Constructor/Destructor ===
@@ -805,6 +806,12 @@ void CGrandeRiskManager::LogRiskEvent(const string &event, const string &details
         logMessage += ": " + details;
     
     Print(logMessage);
+}
+
+//+------------------------------------------------------------------+
+void CGrandeRiskManager::LogRiskEvent(const string &event)
+{
+    LogRiskEvent(event, "");
 }
 
 //+------------------------------------------------------------------+
