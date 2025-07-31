@@ -362,28 +362,57 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
+    // Comprehensive error handling for OnTick
+    ResetLastError();
+    
     // Check if trading is allowed
     if(!MQLInfoInteger(MQL_TRADE_ALLOWED) || !InpEnableTrading)
         return;
     
-    // Update risk manager
+    // Update risk manager with error handling
     if(g_riskManager != NULL)
     {
+        ResetLastError();
         g_riskManager.OnTick();
+        
+        int error = GetLastError();
+        if(error != 0)
+        {
+            Print("[Grande] ERROR: Risk manager OnTick failed. Error: ", error);
+            Print("[Grande] CRITICAL: Risk manager error, stopping trading for this tick");
+            return;
+        }
         
         // Check if trading is still enabled after risk checks
         if(!g_riskManager.IsTradingEnabled())
             return;
     }
     
-    // Lightweight tick processing
+    // Lightweight tick processing with error handling
     if(g_regimeDetector != NULL)
     {
+        ResetLastError();
         g_regimeDetector.UpdateRegime();
         
-        // Execute trading logic based on current regime
+        int error = GetLastError();
+        if(error != 0)
+        {
+            Print("[Grande] ERROR: Regime detection failed. Error: ", error);
+            Print("[Grande] WARNING: Skipping trading logic for this tick due to regime detection error");
+            return;
+        }
+        
+        // Execute trading logic based on current regime with error handling
+        ResetLastError();
         RegimeSnapshot currentRegime = g_regimeDetector.GetLastSnapshot();
         ExecuteTradeLogic(currentRegime);
+        
+        error = GetLastError();
+        if(error != 0)
+        {
+            Print("[Grande] ERROR: Trade logic execution failed. Error: ", error);
+            Print("[Grande] WARNING: Trade logic error occurred but continuing");
+        }
     }
 }
 
@@ -1187,6 +1216,9 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         Print(logPrefix + "ATR Average: ", DoubleToString(rs.atr_avg, _Digits));
     }
     
+    // Execute trading strategy with comprehensive error handling
+    ResetLastError();
+    
     switch(rs.regime)
     {
         case REGIME_TREND_BULL:   
@@ -1208,6 +1240,14 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         default: 
             if(InpLogDetailedInfo) Print(logPrefix + "❌ BLOCKED: High volatility regime - no trading");
             return;
+    }
+    
+    // Check for errors after trade execution
+    int error = GetLastError();
+    if(error != 0)
+    {
+        Print("[Grande] ERROR: Trade execution function failed. Error: ", error);
+        Print("[Grande] INFO: System will continue monitoring for next opportunity");
     }
     
     if(InpLogDetailedInfo)
@@ -1434,9 +1474,9 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     // Place stop order
     bool tradeResult = false;
     if(strongestLevel.isResistance)
-        tradeResult = g_trade.BuyStop(lot, breakoutLevel, breakoutSL, breakoutTP, comment);
+        tradeResult = g_trade.BuyStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), (string)comment);
     else
-        tradeResult = g_trade.SellStop(lot, breakoutLevel, breakoutSL, breakoutTP, comment);
+        tradeResult = g_trade.SellStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), (string)comment);
     
     if(InpLogDetailedInfo)
     {
@@ -1681,36 +1721,92 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     {
         double ema50_h1_buffer[];
         ArraySetAsSeries(ema50_h1_buffer, true);
-        if(CopyBuffer(ema50_h1_handle, 0, 0, 1, ema50_h1_buffer) > 0)
+        int copied = CopyBuffer(ema50_h1_handle, 0, 0, 1, ema50_h1_buffer);
+        if(copied > 0)
+        {
             ema50_h1 = ema50_h1_buffer[0];
+        }
+        else
+        {
+            Print("[Grande] WARNING: Failed to copy EMA50-H1 data. Error: ", GetLastError());
+            IndicatorRelease(ema50_h1_handle);
+            return false; // Exit early if critical data fails
+        }
         IndicatorRelease(ema50_h1_handle);
+    }
+    else
+    {
+        Print("[Grande] ERROR: Invalid EMA50-H1 handle");
+        return false;
     }
     
     if(ema200_h1_handle != INVALID_HANDLE)
     {
         double ema200_h1_buffer[];
         ArraySetAsSeries(ema200_h1_buffer, true);
-        if(CopyBuffer(ema200_h1_handle, 0, 0, 1, ema200_h1_buffer) > 0)
+        int copied = CopyBuffer(ema200_h1_handle, 0, 0, 1, ema200_h1_buffer);
+        if(copied > 0)
+        {
             ema200_h1 = ema200_h1_buffer[0];
+        }
+        else
+        {
+            Print("[Grande] WARNING: Failed to copy EMA200-H1 data. Error: ", GetLastError());
+            IndicatorRelease(ema200_h1_handle);
+            return false; // Exit early if critical data fails
+        }
         IndicatorRelease(ema200_h1_handle);
+    }
+    else
+    {
+        Print("[Grande] ERROR: Invalid EMA200-H1 handle");
+        return false;
     }
     
     if(ema50_h4_handle != INVALID_HANDLE)
     {
         double ema50_h4_buffer[];
         ArraySetAsSeries(ema50_h4_buffer, true);
-        if(CopyBuffer(ema50_h4_handle, 0, 0, 1, ema50_h4_buffer) > 0)
+        int copied = CopyBuffer(ema50_h4_handle, 0, 0, 1, ema50_h4_buffer);
+        if(copied > 0)
+        {
             ema50_h4 = ema50_h4_buffer[0];
+        }
+        else
+        {
+            Print("[Grande] WARNING: Failed to copy EMA50-H4 data. Error: ", GetLastError());
+            IndicatorRelease(ema50_h4_handle);
+            return false; // Exit early if critical data fails
+        }
         IndicatorRelease(ema50_h4_handle);
+    }
+    else
+    {
+        Print("[Grande] ERROR: Invalid EMA50-H4 handle");
+        return false;
     }
     
     if(ema200_h4_handle != INVALID_HANDLE)
     {
         double ema200_h4_buffer[];
         ArraySetAsSeries(ema200_h4_buffer, true);
-        if(CopyBuffer(ema200_h4_handle, 0, 0, 1, ema200_h4_buffer) > 0)
+        int copied = CopyBuffer(ema200_h4_handle, 0, 0, 1, ema200_h4_buffer);
+        if(copied > 0)
+        {
             ema200_h4 = ema200_h4_buffer[0];
+        }
+        else
+        {
+            Print("[Grande] WARNING: Failed to copy EMA200-H4 data. Error: ", GetLastError());
+            IndicatorRelease(ema200_h4_handle);
+            return false; // Exit early if critical data fails
+        }
         IndicatorRelease(ema200_h4_handle);
+    }
+    else
+    {
+        Print("[Grande] ERROR: Invalid EMA200-H4 handle");
+        return false;
     }
     
     bool emaAlignment = bullish ? 
@@ -1744,9 +1840,23 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     {
         double ema20_buffer[];
         ArraySetAsSeries(ema20_buffer, true);
-        if(CopyBuffer(ema20_handle, 0, 0, 1, ema20_buffer) > 0)
+        int copied = CopyBuffer(ema20_handle, 0, 0, 1, ema20_buffer);
+        if(copied > 0)
+        {
             ema20 = ema20_buffer[0];
+        }
+        else
+        {
+            Print("[Grande] WARNING: Failed to copy EMA20 data. Error: ", GetLastError());
+            IndicatorRelease(ema20_handle);
+            return false; // Exit early if critical data fails
+        }
         IndicatorRelease(ema20_handle);
+    }
+    else
+    {
+        Print("[Grande] ERROR: Invalid EMA20 handle");
+        return false;
     }
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double pullbackDistance = MathAbs(currentPrice - ema20);
@@ -1777,12 +1887,24 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     {
         double rsi_buffer[];
         ArraySetAsSeries(rsi_buffer, true);
-        if(CopyBuffer(rsi_handle, 0, 0, 2, rsi_buffer) > 1)
+        int copied = CopyBuffer(rsi_handle, 0, 0, 2, rsi_buffer);
+        if(copied > 1)
         {
             rsi = rsi_buffer[0];
             rsi_prev = rsi_buffer[1];
         }
+        else
+        {
+            Print("[Grande] WARNING: Failed to copy RSI data. Error: ", GetLastError());
+            IndicatorRelease(rsi_handle);
+            return false; // Exit early if critical data fails
+        }
         IndicatorRelease(rsi_handle);
+    }
+    else
+    {
+        Print("[Grande] ERROR: Invalid RSI handle");
+        return false;
     }
     
     bool rsiCondition = bullish ? 
@@ -1830,13 +1952,21 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
         Print(logPrefix + "Evaluating breakout signal criteria...");
     
     // Inside-bar or NR7 formation at strong key level
-    double high1 = iHigh(_Symbol, PERIOD_CURRENT, 1);
-    double low1 = iLow(_Symbol, PERIOD_CURRENT, 1);
-    double high2 = iHigh(_Symbol, PERIOD_CURRENT, 2);
-    double low2 = iLow(_Symbol, PERIOD_CURRENT, 2);
+    double high1 = SafeGetHigh(_Symbol, PERIOD_CURRENT, 1);
+    double low1 = SafeGetLow(_Symbol, PERIOD_CURRENT, 1);
+    double high2 = SafeGetHigh(_Symbol, PERIOD_CURRENT, 2);
+    double low2 = SafeGetLow(_Symbol, PERIOD_CURRENT, 2);
+    
+    // Validate market data before proceeding
+    if(high1 <= 0 || low1 <= 0 || high2 <= 0 || low2 <= 0)
+    {
+        Print("[Grande] ERROR: Invalid market data in breakout analysis");
+        return false;
+    }
     
     bool insideBar = (high1 <= high2 && low1 >= low2);
-    bool nr7 = IsNR7(); // Need to implement this
+    bool nr7 = IsNR7();
+    bool atrExpanding = IsATRExpanding(); // New momentum detection
     
     if(InpLogDetailedInfo)
     {
@@ -1845,12 +1975,14 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
         Print(logPrefix + "  Current Bar: H=", DoubleToString(high1, _Digits), " L=", DoubleToString(low1, _Digits), " Range=", DoubleToString((high1-low1)/_Point, 1), " pips");
         Print(logPrefix + "  Inside Bar: ", insideBar ? "✅ CONFIRMED" : "❌ NOT PRESENT");
         Print(logPrefix + "  NR7 Pattern: ", nr7 ? "✅ CONFIRMED" : "❌ NOT PRESENT");
+        Print(logPrefix + "  ATR Expansion: ", atrExpanding ? "✅ MOMENTUM BUILDING" : "❌ NO MOMENTUM");
     }
     
-    if(!insideBar && !nr7) 
+    // Accept breakout if ANY of these conditions are met: Inside Bar, NR7, or ATR Expansion
+    if(!insideBar && !nr7 && !atrExpanding) 
     {
         if(InpLogDetailedInfo)
-            Print(logPrefix + "❌ CRITERIA FAILED: No inside bar or NR7 pattern detected");
+            Print(logPrefix + "❌ CRITERIA FAILED: No inside bar, NR7 pattern, or ATR expansion detected");
         return false;
     }
     
@@ -1865,7 +1997,7 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double distanceToLevel = MathAbs(currentPrice - strongestLevel.price);
-    double maxDistance = rs.atr_current * 0.2;
+    double maxDistance = rs.atr_current * 0.5;  // Expanded from 0.2 to catch more breakouts
     bool nearKeyLevel = (distanceToLevel <= maxDistance);
     
     if(InpLogDetailedInfo)
@@ -1882,15 +2014,15 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     if(!nearKeyLevel)
     {
         if(InpLogDetailedInfo)
-            Print(logPrefix + "❌ CRITERIA FAILED: Price not close enough to key level (>0.2×ATR)");
+            Print(logPrefix + "❌ CRITERIA FAILED: Price not close enough to key level (>0.5×ATR)");
         return false;
     }
     
-    // Volume spike ≥ 1.5 × 20-bar MA (simplified check)
+    // Volume spike ≥ 1.2 × 20-bar MA (relaxed for more opportunities)
     long volume = iTickVolume(_Symbol, PERIOD_CURRENT, 0);
     long avgVolume = GetAverageVolume(20);
     double volumeRatio = (double)volume / avgVolume;
-    bool volumeSpike = (volume >= avgVolume * 1.5);
+    bool volumeSpike = (volume >= avgVolume * 1.2);  // Reduced from 1.5x to 1.2x
     
     if(InpLogDetailedInfo)
     {
@@ -1898,22 +2030,22 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
         Print(logPrefix + "  Current Volume: ", volume);
         Print(logPrefix + "  20-Bar Average: ", avgVolume);
         Print(logPrefix + "  Volume Ratio: ", DoubleToString(volumeRatio, 2), "x");
-        Print(logPrefix + "  Volume Spike (≥1.5x): ", volumeSpike ? "✅ CONFIRMED" : "❌ INSUFFICIENT");
+        Print(logPrefix + "  Volume Spike (≥1.2x): ", volumeSpike ? "✅ CONFIRMED" : "❌ INSUFFICIENT");
     }
     
     if(!volumeSpike)
     {
         if(InpLogDetailedInfo)
-            Print(logPrefix + "❌ CRITERIA FAILED: Insufficient volume spike (need ≥1.5x average)");
+            Print(logPrefix + "❌ CRITERIA FAILED: Insufficient volume spike (need ≥1.2x average)");
         return false;
     }
     
     if(InpLogDetailedInfo)
     {
         Print(logPrefix + "🎯 ALL BREAKOUT CRITERIA PASSED!");
-        Print(logPrefix + "  ✅ Inside Bar or NR7 pattern");
-        Print(logPrefix + "  ✅ Near strong key level (≤0.2×ATR)");
-        Print(logPrefix + "  ✅ Volume spike (≥1.5x average)");
+        Print(logPrefix + "  ✅ Pattern confirmed (Inside Bar, NR7, or ATR expansion)");
+        Print(logPrefix + "  ✅ Near strong key level (≤0.5×ATR)");
+        Print(logPrefix + "  ✅ Volume spike (≥1.2x average)");
     }
     
     return true;
@@ -1987,12 +2119,24 @@ bool Signal_RANGE(const RegimeSnapshot &rs)
     {
         double stoch_buffer[];
         ArraySetAsSeries(stoch_buffer, true);
-        if(CopyBuffer(stoch_handle, 0, 0, 2, stoch_buffer) > 1)
+        int copied = CopyBuffer(stoch_handle, 0, 0, 2, stoch_buffer);
+        if(copied > 1)
         {
             stochK = stoch_buffer[0];
             stochK_prev = stoch_buffer[1];
         }
+        else
+        {
+            Print("[Grande] WARNING: Failed to copy Stochastic data. Error: ", GetLastError());
+            IndicatorRelease(stoch_handle);
+            return false; // Exit early if critical data fails
+        }
         IndicatorRelease(stoch_handle);
+    }
+    else
+    {
+        Print("[Grande] ERROR: Invalid Stochastic handle");
+        return false;
     }
     
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -2139,24 +2283,147 @@ bool GetRangeBoundaries(SKeyLevel &resistance, SKeyLevel &support)
     return true;
 }
 
+//+------------------------------------------------------------------+
+//| Safe market data access helper functions                         |
+//+------------------------------------------------------------------+
+double SafeGetHigh(string symbol, ENUM_TIMEFRAMES timeframe, int index)
+{
+    double value = iHigh(symbol, timeframe, index);
+    if(value <= 0 || value == EMPTY_VALUE)
+    {
+        Print("[Grande] ERROR: Failed to get High price for bar ", index, ". Error: ", GetLastError());
+        return -1; // Invalid value indicator
+    }
+    return value;
+}
+
+double SafeGetLow(string symbol, ENUM_TIMEFRAMES timeframe, int index)
+{
+    double value = iLow(symbol, timeframe, index);
+    if(value <= 0 || value == EMPTY_VALUE)
+    {
+        Print("[Grande] ERROR: Failed to get Low price for bar ", index, ". Error: ", GetLastError());
+        return -1; // Invalid value indicator
+    }
+    return value;
+}
+
+long SafeGetTickVolume(string symbol, ENUM_TIMEFRAMES timeframe, int index)
+{
+    long value = iTickVolume(symbol, timeframe, index);
+    if(value <= 0)
+    {
+        Print("[Grande] ERROR: Failed to get Tick Volume for bar ", index, ". Error: ", GetLastError());
+        return -1; // Invalid value indicator
+    }
+    return value;
+}
+
 long GetAverageVolume(int period)
 {
     long totalVolume = 0;
+    int validBars = 0;
+    
     for(int i = 1; i <= period; i++)
     {
-        totalVolume += iTickVolume(_Symbol, PERIOD_CURRENT, i);
+        long volume = SafeGetTickVolume(_Symbol, PERIOD_CURRENT, i);
+        if(volume > 0) // Only count valid volumes
+        {
+            totalVolume += volume;
+            validBars++;
+        }
     }
-    return totalVolume / period;
+    
+    if(validBars == 0)
+    {
+        Print("[Grande] ERROR: No valid volume data found for average calculation");
+        return -1;
+    }
+    
+    return totalVolume / validBars;
+}
+
+//+------------------------------------------------------------------+
+//| ATR Momentum Detection - Catches expanding volatility            |
+//+------------------------------------------------------------------+
+bool IsATRExpanding()
+{
+    // Check if current ATR is significantly higher than recent average
+    // This catches momentum moves as they accelerate
+    
+    int atrHandle = iATR(_Symbol, PERIOD_CURRENT, 14);
+    if(atrHandle == INVALID_HANDLE)
+    {
+        Print("[Grande] ERROR: Failed to create ATR handle for momentum detection");
+        return false;
+    }
+    
+    double atrBuffer[];
+    ArraySetAsSeries(atrBuffer, true);
+    
+    // Get current ATR and 10-period average
+    int copied = CopyBuffer(atrHandle, 0, 0, 11, atrBuffer);
+    IndicatorRelease(atrHandle);
+    
+    if(copied < 11)
+    {
+        Print("[Grande] WARNING: Insufficient ATR data for momentum detection");
+        return false;
+    }
+    
+    double currentATR = atrBuffer[0];
+    double averageATR = 0.0;
+    
+    // Calculate 10-period ATR average (excluding current)
+    for(int i = 1; i < 11; i++)
+    {
+        averageATR += atrBuffer[i];
+    }
+    averageATR /= 10.0;
+    
+    // Check if current ATR is 50% higher than average (momentum building)
+    double expansionRatio = currentATR / averageATR;
+    bool isExpanding = (expansionRatio >= 1.5);
+    
+    if(InpLogDetailedInfo)
+    {
+        Print("[ATR MOMENTUM] Current ATR: ", DoubleToString(currentATR, _Digits));
+        Print("[ATR MOMENTUM] 10-Period Avg: ", DoubleToString(averageATR, _Digits));
+        Print("[ATR MOMENTUM] Expansion Ratio: ", DoubleToString(expansionRatio, 2), "x");
+        Print("[ATR MOMENTUM] Momentum Building: ", isExpanding ? "✅ YES (≥1.5x)" : "❌ NO (<1.5x)");
+    }
+    
+    return isExpanding;
 }
 
 bool IsNR7()
 {
     // Simplified NR7 check - narrowest range in last 7 bars
-    double currentRange = iHigh(_Symbol, PERIOD_CURRENT, 0) - iLow(_Symbol, PERIOD_CURRENT, 0);
+    double currentHigh = SafeGetHigh(_Symbol, PERIOD_CURRENT, 0);
+    double currentLow = SafeGetLow(_Symbol, PERIOD_CURRENT, 0);
+    
+    // Validate current bar data
+    if(currentHigh <= 0 || currentLow <= 0)
+    {
+        Print("[Grande] ERROR: Invalid current bar data in NR7 calculation");
+        return false;
+    }
+    
+    double currentRange = currentHigh - currentLow;
     
     for(int i = 1; i < 7; i++)
     {
-        double barRange = iHigh(_Symbol, PERIOD_CURRENT, i) - iLow(_Symbol, PERIOD_CURRENT, i);
+        double barHigh = SafeGetHigh(_Symbol, PERIOD_CURRENT, i);
+        double barLow = SafeGetLow(_Symbol, PERIOD_CURRENT, i);
+        
+        // Validate bar data
+        if(barHigh <= 0 || barLow <= 0)
+        {
+            Print("[Grande] WARNING: Invalid bar data at index ", i, " in NR7 calculation, skipping");
+            continue; // Skip invalid bars rather than failing completely
+        }
+        
+        double barRange = barHigh - barLow;
         if(barRange < currentRange) return false;
     }
     
