@@ -263,7 +263,7 @@ int OnInit()
         return INIT_FAILED;
     }
     
-    if(!g_riskManager.Initialize(_Symbol, g_riskConfig))
+    if(!g_riskManager.Initialize(_Symbol, g_riskConfig, InpLogDebugInfo))
     {
         Print("ERROR: Failed to initialize Risk Manager");
         delete g_regimeDetector;
@@ -2214,9 +2214,9 @@ bool ValidateInputParameters()
         isValid = false;
     }
     
-    if(InpTouchZone < 0.0001 || InpTouchZone > 0.0050)
+    if(InpTouchZone != 0.0 && (InpTouchZone < 0.0001 || InpTouchZone > 0.0050))
     {
-        Print("ERROR: InpTouchZone must be between 0.0001 and 0.0050. Current: ", InpTouchZone);
+        Print("ERROR: InpTouchZone must be 0 (auto) or between 0.0001 and 0.0050. Current: ", InpTouchZone);
         isValid = false;
     }
     
@@ -2359,7 +2359,7 @@ bool ValidateInputParameters()
     {
         Print("✅ All input parameters validated successfully");
     }
-    else
+    else if(!isValid)
     {
         Print("❌ Parameter validation failed. Please correct the errors above.");
     }

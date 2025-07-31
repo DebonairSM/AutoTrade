@@ -109,7 +109,7 @@ public:
     ~CGrandeRiskManager();
     
     // === Initialization ===
-    bool Initialize(const string &symbol, const RiskConfig &config);
+    bool Initialize(const string &symbol, const RiskConfig &config, bool debugMode = false);
     void Deinitialize();
     
     // === Position Sizing ===
@@ -199,7 +199,7 @@ CGrandeRiskManager::~CGrandeRiskManager()
 //+------------------------------------------------------------------+
 //| Initialize Risk Manager                                           |
 //+------------------------------------------------------------------+
-bool CGrandeRiskManager::Initialize(const string &symbol, const RiskConfig &config)
+bool CGrandeRiskManager::Initialize(const string &symbol, const RiskConfig &config, bool debugMode)
 {
     if(m_isInitialized)
     {
@@ -241,10 +241,13 @@ bool CGrandeRiskManager::Initialize(const string &symbol, const RiskConfig &conf
     m_isInitialized = true;
     m_tradingEnabled = true;
     
-    Print("[GrandeRisk] Initialized successfully for ", m_symbol);
-    Print("[GrandeRisk] Risk Config: Trend=", m_config.risk_percent_trend, 
-          "%, Range=", m_config.risk_percent_range, 
-          "%, Breakout=", m_config.risk_percent_breakout, "%");
+    if(debugMode)
+    {
+        Print("[GrandeRisk] Initialized successfully for ", m_symbol);
+        Print("[GrandeRisk] Risk Config: Trend=", m_config.risk_percent_trend, 
+              "%, Range=", m_config.risk_percent_range, 
+              "%, Breakout=", m_config.risk_percent_breakout, "%");
+    }
     
     return true;
 }
