@@ -12,31 +12,25 @@
 #property description "Advanced multi-timeframe trend following system with diagnostic UI"
 
 //+------------------------------------------------------------------+
-//| Input Parameters                                                 |
+//| Input Parameters (using TF-prefixed parameters from main EA)    |
 //+------------------------------------------------------------------+
-input group "=== EMA Settings ==="
-input int InpEmaFastPeriod = 50;        // Fast EMA Period
-input int InpEmaSlowPeriod = 200;       // Slow EMA Period  
-input int InpEmaPullbackPeriod = 20;    // Pullback EMA Period
+// Note: These parameters are defined in the main EA with TF prefixes
+// We create aliases here to maintain compatibility with existing code
 
-input group "=== MACD Settings ==="
-input int InpMacdFastPeriod = 12;       // MACD Fast Period
-input int InpMacdSlowPeriod = 26;       // MACD Slow Period
-input int InpMacdSignalPeriod = 9;      // MACD Signal Period
-
-input group "=== RSI Settings ==="
-input int InpRsiPeriod = 14;            // RSI Period
-input double InpRsiThreshold = 50.0;    // RSI Threshold
-
-input group "=== ADX Settings ==="
-input int InpAdxPeriod = 14;            // ADX Period
-input double InpAdxThreshold = 25.0;    // ADX Minimum Threshold
-
-input group "=== UI Settings ==="
-input bool InpShowDiagnosticPanel = true;  // Show Diagnostic Panel
-input int InpPanelXOffset = 10;             // Panel X Offset
-input int InpPanelYOffset = 280;            // Panel Y Offset (moved below Grande header)
-input bool InpLogDebugInfo = false;         // Log Debug Information
+#define InpEmaFastPeriod        InpTFEmaFastPeriod
+#define InpEmaSlowPeriod        InpTFEmaSlowPeriod  
+#define InpEmaPullbackPeriod    InpTFEmaPullbackPeriod
+#define InpMacdFastPeriod       InpTFMacdFastPeriod
+#define InpMacdSlowPeriod       InpTFMacdSlowPeriod
+#define InpMacdSignalPeriod     InpTFMacdSignalPeriod
+#define InpRsiPeriod            InpTFRsiPeriod
+#define InpRsiThreshold         InpTFRsiThreshold
+#define InpAdxPeriod            InpTFAdxPeriod
+#define InpAdxThreshold         InpTFAdxThreshold
+#define InpShowDiagnosticPanel  InpShowTrendFollowerPanel
+#define InpPanelXOffset         10             // Panel X Offset
+#define InpPanelYOffset         280            // Panel Y Offset (moved below Grande header)
+#define InpLogDebugInfo         InpLogDetailedInfo  // Log Debug Information
 
 //+------------------------------------------------------------------+
 //| MCP Logging Constants                                            |
@@ -632,9 +626,25 @@ void CAdvancedTrendFollower::UpdateDiagnosticUI()
 {
     if(!m_showDiagnosticPanel) return;
     
-    string trendMode = "None";
-    if(IsBullish()) trendMode = "Bullish";
-    else if(IsBearish()) trendMode = "Bearish";
+    string trendMode = "NEUTRAL";
+    if(IsBullish()) 
+        trendMode = "🟢 STRONG BULL";
+    else if(IsBearish()) 
+        trendMode = "🔴 STRONG BEAR";
+    else
+    {
+        // Show primary trend direction based on majority timeframes
+        bool h1Aligned = (ArraySize(m_emaFastH1) > 0) ? (m_emaFastH1[0] > m_emaSlowH1[0]) : false;
+        bool h4Aligned = (ArraySize(m_emaFastH4) > 0) ? (m_emaFastH4[0] > m_emaSlowH4[0]) : false;
+        bool d1Aligned = (ArraySize(m_emaFastD1) > 0) ? (m_emaFastD1[0] > m_emaSlowD1[0]) : false;
+        
+        int bullishCount = (h1Aligned ? 1 : 0) + (h4Aligned ? 1 : 0) + (d1Aligned ? 1 : 0);
+        
+        if(bullishCount >= 2)
+            trendMode = "⚡ WEAK BULL";
+        else if(bullishCount <= 1)
+            trendMode = "⚡ WEAK BEAR";
+    }
     
     bool h1Aligned = (ArraySize(m_emaFastH1) > 0) ? (m_emaFastH1[0] > m_emaSlowH1[0]) : false;
     bool h4Aligned = (ArraySize(m_emaFastH4) > 0) ? (m_emaFastH4[0] > m_emaSlowH4[0]) : false;
@@ -674,9 +684,25 @@ void CAdvancedTrendFollower::MCP_UI_CreatePanel()
 //+------------------------------------------------------------------+
 void CAdvancedTrendFollower::MCP_UI_UpdatePanel()
 {
-    string trendMode = "None";
-    if(IsBullish()) trendMode = "Bullish";
-    else if(IsBearish()) trendMode = "Bearish";
+    string trendMode = "NEUTRAL";
+    if(IsBullish()) 
+        trendMode = "🟢 STRONG BULL";
+    else if(IsBearish()) 
+        trendMode = "🔴 STRONG BEAR";
+    else
+    {
+        // Show primary trend direction based on majority timeframes
+        bool h1Aligned = (ArraySize(m_emaFastH1) > 0) ? (m_emaFastH1[0] > m_emaSlowH1[0]) : false;
+        bool h4Aligned = (ArraySize(m_emaFastH4) > 0) ? (m_emaFastH4[0] > m_emaSlowH4[0]) : false;
+        bool d1Aligned = (ArraySize(m_emaFastD1) > 0) ? (m_emaFastD1[0] > m_emaSlowD1[0]) : false;
+        
+        int bullishCount = (h1Aligned ? 1 : 0) + (h4Aligned ? 1 : 0) + (d1Aligned ? 1 : 0);
+        
+        if(bullishCount >= 2)
+            trendMode = "⚡ WEAK BULL";
+        else if(bullishCount <= 1)
+            trendMode = "⚡ WEAK BEAR";
+    }
     
     bool h1Aligned = (ArraySize(m_emaFastH1) > 0) ? (m_emaFastH1[0] > m_emaSlowH1[0]) : false;
     bool h4Aligned = (ArraySize(m_emaFastH4) > 0) ? (m_emaFastH4[0] > m_emaSlowH4[0]) : false;

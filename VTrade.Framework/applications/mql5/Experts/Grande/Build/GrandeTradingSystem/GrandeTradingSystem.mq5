@@ -34,7 +34,7 @@ input double InpTouchZone = 0.0010;              // Touch Zone (0 = auto)
 input int    InpMinTouches = 1;                  // Minimum Touches Required
 
 input group "=== Trading Settings ==="
-input bool   InpEnableTrading = false;           // Enable Live Trading
+input bool   InpEnableTrading = true;           // Enable Live Trading
 input int    InpMagicNumber = 123456;            // Magic Number for Trades
 input int    InpSlippage = 30;                   // Slippage in Points
 
@@ -716,15 +716,21 @@ void UpdateSystemStatusPanel()
     
     // Get trend follower status
     string trendFollowerInfo = "Disabled";
-    if(g_trendFollower != NULL && InpEnableTrendFollower)
+    if(InpEnableTrendFollower)
     {
-        string trendMode = "None";
-        if(g_trendFollower.IsBullish()) trendMode = "🟢 BULL";
-        else if(g_trendFollower.IsBearish()) trendMode = "🔴 BEAR";
-        else trendMode = "⚪ NEUTRAL";
-        
-        double tfStrength = g_trendFollower.TrendStrength();
-        trendFollowerInfo = StringFormat("%s (ADX:%.1f)", trendMode, tfStrength);
+        if(g_trendFollower != NULL)
+        {
+            string trendMode = "⚪ NEUTRAL";  // Default to NEUTRAL instead of None
+            if(g_trendFollower.IsBullish()) trendMode = "🟢 BULL";
+            else if(g_trendFollower.IsBearish()) trendMode = "🔴 BEAR";
+            
+            double tfStrength = g_trendFollower.TrendStrength();
+            trendFollowerInfo = StringFormat("%s (ADX:%.1f)", trendMode, tfStrength);
+        }
+        else
+        {
+            trendFollowerInfo = "🔴 FAILED";  // Show failed status when enabled but NULL
+        }
     }
     
     // Get drawdown info
