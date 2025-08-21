@@ -1047,19 +1047,22 @@ void UpdateADXStrengthMeter(const RegimeSnapshot &snapshot)
     ObjectDelete(g_chartID, ADX_STRENGTH_METER_NAME);
     
     // Create ADX strength visualization
+    double tfStrength = (g_trendFollower != NULL) ? g_trendFollower.TrendStrength() : 0.0;
     string meterText = StringFormat(
-        "ADX STRENGTH METER\n" +
+        "\n\nADX STRENGTH METER\n" +
         "══════════════════\n" +
         "Current TF: %.1f %s\n" +
-        "H4: %.1f %s\n" +
-        "D1: %.1f %s\n" +
+        "H1 ADX: %.1f %s\n" +
+        "H4 ADX: %.1f %s\n" +
+        "D1 ADX: %.1f %s\n" +
         "══════════════════\n" +
         "Trend Strength:\n" +
         "%s",
+        tfStrength, GetADXStrengthBar(tfStrength),
         snapshot.adx_h1, GetADXStrengthBar(snapshot.adx_h1),
         snapshot.adx_h4, GetADXStrengthBar(snapshot.adx_h4),
         snapshot.adx_d1, GetADXStrengthBar(snapshot.adx_d1),
-        GetTrendStrengthDescription(snapshot.adx_h1)
+        GetTrendStrengthDescription(tfStrength)
     );
     
     // Create meter label
@@ -1067,7 +1070,7 @@ void UpdateADXStrengthMeter(const RegimeSnapshot &snapshot)
     ObjectSetString(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_TEXT, meterText);
     ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_CORNER, CORNER_LEFT_LOWER);
     ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_XDISTANCE, 10);
-    ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_YDISTANCE, 150);
+    ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_YDISTANCE, 200);
     ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_COLOR, clrCyan);
     ObjectSetInteger(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_FONTSIZE, 8);
     ObjectSetString(g_chartID, ADX_STRENGTH_METER_NAME, OBJPROP_FONT, "Consolas");

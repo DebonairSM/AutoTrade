@@ -291,10 +291,14 @@ bool CAdvancedTrendFollower::IsBullish()
     if(!m_isInitialized || ArraySize(m_emaFastH1) < 1)
         return false;
     
-    // Fast EMA > Slow EMA on H1, H4, D1
+    // Fast EMA > Slow EMA on H1 (always required)
     bool h1EmaAlignment = (m_emaFastH1[0] > m_emaSlowH1[0]);
-    bool h4EmaAlignment = (m_emaFastH4[0] > m_emaSlowH4[0]);
-    bool d1EmaAlignment = (m_emaFastD1[0] > m_emaSlowD1[0]);
+    
+    // H4 and D1 alignment (optional - use true if data unavailable)
+    bool h4EmaAlignment = (ArraySize(m_emaFastH4) > 0 && ArraySize(m_emaSlowH4) > 0) ? 
+                         (m_emaFastH4[0] > m_emaSlowH4[0]) : true;
+    bool d1EmaAlignment = (ArraySize(m_emaFastD1) > 0 && ArraySize(m_emaSlowD1) > 0) ? 
+                         (m_emaFastD1[0] > m_emaSlowD1[0]) : true;
     
     // ADX (H1) >= threshold
     bool adxCondition = (m_adxH1[0] >= InpAdxThreshold);
@@ -317,10 +321,14 @@ bool CAdvancedTrendFollower::IsBearish()
     if(!m_isInitialized || ArraySize(m_emaFastH1) < 1)
         return false;
     
-    // Fast EMA < Slow EMA on H1, H4, D1
+    // Fast EMA < Slow EMA on H1 (always required)
     bool h1EmaAlignment = (m_emaFastH1[0] < m_emaSlowH1[0]);
-    bool h4EmaAlignment = (m_emaFastH4[0] < m_emaSlowH4[0]);
-    bool d1EmaAlignment = (m_emaFastD1[0] < m_emaSlowD1[0]);
+    
+    // H4 and D1 alignment (optional - use true if data unavailable)
+    bool h4EmaAlignment = (ArraySize(m_emaFastH4) > 0 && ArraySize(m_emaSlowH4) > 0) ? 
+                         (m_emaFastH4[0] < m_emaSlowH4[0]) : true;
+    bool d1EmaAlignment = (ArraySize(m_emaFastD1) > 0 && ArraySize(m_emaSlowD1) > 0) ? 
+                         (m_emaFastD1[0] < m_emaSlowD1[0]) : true;
     
     // ADX (H1) >= threshold
     bool adxCondition = (m_adxH1[0] >= InpAdxThreshold);
@@ -512,78 +520,102 @@ void CAdvancedTrendFollower::ReleaseIndicatorHandles()
 //+------------------------------------------------------------------+
 bool CAdvancedTrendFollower::CopyIndicatorData()
 {
-    // Copy H1 data
+    ResetLastError();
+    
+    // Copy H1 data (critical - always required)
     if(CopyBuffer(m_emaFastH1Handle, 0, 0, 2, m_emaFastH1) <= 0)
     {
-        MCP_LogError("Failed to copy EMA Fast H1 buffer");
+        int error = GetLastError();
+        MCP_LogError("Failed to copy EMA Fast H1 buffer. Error: " + IntegerToString(error));
         return false;
     }
     if(CopyBuffer(m_emaSlowH1Handle, 0, 0, 2, m_emaSlowH1) <= 0)
     {
-        MCP_LogError("Failed to copy EMA Slow H1 buffer");
+        int error = GetLastError();
+        MCP_LogError("Failed to copy EMA Slow H1 buffer. Error: " + IntegerToString(error));
         return false;
     }
     if(CopyBuffer(m_emaPullbackH1Handle, 0, 0, 2, m_emaPullbackH1) <= 0)
     {
-        MCP_LogError("Failed to copy EMA Pullback H1 buffer");
+        int error = GetLastError();
+        MCP_LogError("Failed to copy EMA Pullback H1 buffer. Error: " + IntegerToString(error));
         return false;
     }
     if(CopyBuffer(m_macdH1Handle, MAIN_LINE, 0, 2, m_macdMainH1) <= 0)
     {
-        MCP_LogError("Failed to copy MACD Main H1 buffer");
+        int error = GetLastError();
+        MCP_LogError("Failed to copy MACD Main H1 buffer. Error: " + IntegerToString(error));
         return false;
     }
     if(CopyBuffer(m_macdH1Handle, SIGNAL_LINE, 0, 2, m_macdSignalH1) <= 0)
     {
-        MCP_LogError("Failed to copy MACD Signal H1 buffer");
+        int error = GetLastError();
+        MCP_LogError("Failed to copy MACD Signal H1 buffer. Error: " + IntegerToString(error));
         return false;
     }
     if(CopyBuffer(m_rsiH1Handle, 0, 0, 2, m_rsiH1) <= 0)
     {
-        MCP_LogError("Failed to copy RSI H1 buffer");
+        int error = GetLastError();
+        MCP_LogError("Failed to copy RSI H1 buffer. Error: " + IntegerToString(error));
         return false;
     }
     if(CopyBuffer(m_adxH1Handle, MAIN_LINE, 0, 2, m_adxH1) <= 0)
     {
-        MCP_LogError("Failed to copy ADX H1 buffer");
+        int error = GetLastError();
+        MCP_LogError("Failed to copy ADX H1 buffer. Error: " + IntegerToString(error));
         return false;
     }
     
-    // Copy H4 data
+    // Copy H4 data (important but can continue if fails)
+    bool h4DataOk = true;
     if(CopyBuffer(m_emaFastH4Handle, 0, 0, 2, m_emaFastH4) <= 0)
     {
-        MCP_LogError("Failed to copy EMA Fast H4 buffer");
-        return false;
+        int error = GetLastError();
+        MCP_LogError("Failed to copy EMA Fast H4 buffer. Error: " + IntegerToString(error));
+        h4DataOk = false;
     }
     if(CopyBuffer(m_emaSlowH4Handle, 0, 0, 2, m_emaSlowH4) <= 0)
     {
-        MCP_LogError("Failed to copy EMA Slow H4 buffer");
-        return false;
+        int error = GetLastError();
+        MCP_LogError("Failed to copy EMA Slow H4 buffer. Error: " + IntegerToString(error));
+        h4DataOk = false;
     }
     if(CopyBuffer(m_adxH4Handle, MAIN_LINE, 0, 2, m_adxH4) <= 0)
     {
-        MCP_LogError("Failed to copy ADX H4 buffer");
-        return false;
+        int error = GetLastError();
+        MCP_LogError("Failed to copy ADX H4 buffer. Error: " + IntegerToString(error));
+        h4DataOk = false;
     }
     
-    // Copy D1 data
+    // Copy D1 data (optional - can continue if fails)
+    bool d1DataOk = true;
     if(CopyBuffer(m_emaFastD1Handle, 0, 0, 2, m_emaFastD1) <= 0)
     {
-        MCP_LogError("Failed to copy EMA Fast D1 buffer");
-        return false;
+        int error = GetLastError();
+        MCP_LogError("Failed to copy EMA Fast D1 buffer. Error: " + IntegerToString(error));
+        d1DataOk = false;
     }
     if(CopyBuffer(m_emaSlowD1Handle, 0, 0, 2, m_emaSlowD1) <= 0)
     {
-        MCP_LogError("Failed to copy EMA Slow D1 buffer");
-        return false;
+        int error = GetLastError();
+        MCP_LogError("Failed to copy EMA Slow D1 buffer. Error: " + IntegerToString(error));
+        d1DataOk = false;
     }
     if(CopyBuffer(m_adxD1Handle, MAIN_LINE, 0, 2, m_adxD1) <= 0)
     {
-        MCP_LogError("Failed to copy ADX D1 buffer");
-        return false;
+        int error = GetLastError();
+        MCP_LogError("Failed to copy ADX D1 buffer. Error: " + IntegerToString(error));
+        d1DataOk = false;
     }
     
-    return true;
+    // Log data availability status
+    if(!h4DataOk || !d1DataOk)
+    {
+        MCP_LogError("Some timeframe data unavailable - H4: " + (h4DataOk ? "OK" : "FAIL") + 
+                    ", D1: " + (d1DataOk ? "OK" : "FAIL"));
+    }
+    
+    return true; // Continue even if H4/D1 data fails
 }
 
 //+------------------------------------------------------------------+

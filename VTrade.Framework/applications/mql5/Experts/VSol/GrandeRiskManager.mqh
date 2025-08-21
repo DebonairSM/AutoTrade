@@ -90,13 +90,23 @@ private:
     int m_atrHandle;
     double m_atrBuffer[];
     
+    // === Handle Recreation Control ===
+    datetime m_lastRecreationTime;
+    int m_recreationAttempts;
+    int m_rapidFailures;
+    bool m_circuitBreakerActive;
+    double m_lastValidATR;
+    datetime m_lastValidATRTime;
+    
     // === Trade Object ===
     CTrade m_trade;
     
     // === Helper Methods ===
     bool InitializeATR();
+    bool EnsureATRHandle(int maxRetries, int delayMs);
     void UpdateEquityPeak();
     double CalculateATR();
+    double CalculateATRFallback();
     double GetPipValue();
     void UpdatePositionInfo();
     bool IsPositionValid(const PositionInfo &pos);
@@ -162,6 +172,14 @@ CGrandeRiskManager::CGrandeRiskManager()
     m_tradingEnabled = true;
     m_positionCount = 0;
     m_atrHandle = INVALID_HANDLE;
+    
+    // Initialize circuit breaker variables
+    m_lastRecreationTime = 0;
+    m_recreationAttempts = 0;
+    m_rapidFailures = 0;
+    m_circuitBreakerActive = false;
+    m_lastValidATR = 0.0;
+    m_lastValidATRTime = 0;
     
     // Initialize trade object
     m_trade.SetExpertMagicNumber(123456);
@@ -277,17 +295,76 @@ void CGrandeRiskManager::Deinitialize()
 //+------------------------------------------------------------------+
 //| Initialize ATR Indicator                                          |
 //+------------------------------------------------------------------+
-bool CGrandeRiskManager::InitializeATR()
+//| Ensure ATR Handle is Ready (MetaQuotes Pattern)                 |
+//+------------------------------------------------------------------+
+bool CGrandeRiskManager::EnsureATRHandle(int maxRetries, int delayMs)
 {
-    m_atrHandle = iATR(m_symbol, PERIOD_CURRENT, 14);
-    if(m_atrHandle == INVALID_HANDLE)
+    // Pattern from: MetaQuotes Official Documentation
+    // Reference: Proper indicator handle creation and validation
+    
+    // If no handle yet, or BarsCalculated shows it's invalid, create a new one
+    if(m_atrHandle == INVALID_HANDLE || BarsCalculated(m_atrHandle) <= 0)
     {
-        Print("[GrandeRisk] ERROR: Failed to create ATR handle");
+        // Release any existing handle
+        if(m_atrHandle != INVALID_HANDLE)
+        {
+            IndicatorRelease(m_atrHandle);
+            m_atrHandle = INVALID_HANDLE;
+        }
+        
+        // Validate symbol
+        if(!SymbolSelect(m_symbol, true))
+        {
+            LogRiskEvent("ERROR", StringFormat("Symbol not available: %s", m_symbol));
+            return false;
+        }
+        
+        // Create new ATR handle
+        ResetLastError();
+        m_atrHandle = iATR(m_symbol, PERIOD_CURRENT, 14);
+        int error = GetLastError();
+        
+        if(m_atrHandle == INVALID_HANDLE)
+        {
+            LogRiskEvent("ERROR", StringFormat("Failed to create ATR handle. Error: %d, Symbol: %s", error, m_symbol));
+            return false;
+        }
+        
+        // Wait until the indicator has calculated bars
+        for(int i = 0; i < maxRetries; i++)
+        {
+            int bars = BarsCalculated(m_atrHandle);
+            if(bars > 0)
+            {
+                ArraySetAsSeries(m_atrBuffer, true);
+                if(InpLogDebugInfo)
+                    Print("[GrandeRisk] ATR handle ready. Calculated bars: ", bars, ", Symbol: ", m_symbol);
+                return true;
+            }
+            
+            if(InpLogDebugInfo && i == 0)
+                Print("[GrandeRisk] Waiting for ATR to calculate. Attempt ", (i+1), "/", maxRetries, ", Bars: ", bars);
+            
+            Sleep(delayMs);
+        }
+        
+        // Still not ready; release and mark invalid
+        LogRiskEvent("ERROR", StringFormat("ATR handle invalid after %d retries. Symbol: %s", maxRetries, m_symbol));
+        IndicatorRelease(m_atrHandle);
+        m_atrHandle = INVALID_HANDLE;
         return false;
     }
     
-    ArraySetAsSeries(m_atrBuffer, true);
-    return true;
+    return true; // Handle already exists and is valid
+}
+
+//+------------------------------------------------------------------+
+//| Initialize ATR (Simplified)                                      |
+//+------------------------------------------------------------------+
+bool CGrandeRiskManager::InitializeATR()
+{
+    // Simply ensure the ATR handle is ready
+    return EnsureATRHandle(10, 200); // More retries and longer delay during initialization
 }
 
 //+------------------------------------------------------------------+
@@ -483,23 +560,89 @@ void CGrandeRiskManager::OnTick()
 {
     if(!m_isInitialized) return;
     
+    ResetLastError();
+    
     // Update position information
     UpdatePositionInfo();
+    
+    int error = GetLastError();
+    if(error != 0)
+    {
+        Print("[GrandeRisk] ERROR: UpdatePositionInfo failed. Error: ", error);
+        return;
+    }
     
     // Check drawdown
     CheckDrawdown();
     
+    error = GetLastError();
+    if(error != 0)
+    {
+        Print("[GrandeRisk] ERROR: CheckDrawdown failed. Error: ", error);
+        return;
+    }
+    
     // Update position management features
     if(m_tradingEnabled)
     {
-        if(m_config.enable_breakeven)
-            UpdateBreakevenStops();
-            
-        if(m_config.enable_trailing_stop)
-            UpdateTrailingStops();
-            
-        if(m_config.enable_partial_closes)
-            ExecutePartialCloses();
+        // Check if ATR is available before attempting position management
+        double atrValue = CalculateATR();
+        if(atrValue <= 0)
+        {
+            if(InpLogDebugInfo)
+                Print("[GrandeRisk] WARNING: ATR unavailable, skipping position management features");
+            return; // Skip position management but don't fail completely
+        }
+        
+        // Only proceed with position management if we have a valid ATR value
+        if(atrValue > 0)
+        {
+            if(m_config.enable_breakeven)
+            {
+                // Rate limiting: only attempt breakeven updates every 5 seconds
+                static datetime lastBreakevenAttempt = 0;
+                if(TimeCurrent() - lastBreakevenAttempt >= 5)
+                {
+                    ResetLastError();
+                    UpdateBreakevenStops();
+                    error = GetLastError();
+                    if(error != 0)
+                        Print("[GrandeRisk] WARNING: UpdateBreakevenStops failed. Error: ", error);
+                    
+                    lastBreakevenAttempt = TimeCurrent();
+                }
+            }
+                
+            if(m_config.enable_trailing_stop)
+            {
+                // Rate limiting: only attempt trailing stop updates every 3 seconds
+                static datetime lastTrailingAttempt = 0;
+                if(TimeCurrent() - lastTrailingAttempt >= 3)
+                {
+                    ResetLastError();
+                    UpdateTrailingStops();
+                    error = GetLastError();
+                    if(error != 0)
+                        Print("[GrandeRisk] WARNING: UpdateTrailingStops failed. Error: ", error);
+                    
+                    lastTrailingAttempt = TimeCurrent();
+                }
+            }
+                
+            if(m_config.enable_partial_closes)
+            {
+                ResetLastError();
+                ExecutePartialCloses();
+                error = GetLastError();
+                if(error != 0)
+                    Print("[GrandeRisk] WARNING: ExecutePartialCloses failed. Error: ", error);
+            }
+        }
+        else
+        {
+            if(InpLogDebugInfo)
+                Print("[GrandeRisk] INFO: ATR value is 0, skipping position management");
+        }
     }
 }
 
@@ -552,6 +695,27 @@ void CGrandeRiskManager::UpdatePositionInfo()
                     pos.atr_at_open = CalculateATR();
                 }
                 
+                // CRITICAL FIX: Check if position is already at breakeven by comparing stop loss
+                // This prevents the oscillation between breakeven and trailing updates
+                if(!pos.breakeven_set && pos.stop_loss > 0)
+                {
+                    double breakevenThreshold = pos.price_open + (pos.type == POSITION_TYPE_BUY ? 
+                                              m_config.breakeven_buffer * _Point : 
+                                              -m_config.breakeven_buffer * _Point);
+                    
+                    // If stop loss is at or beyond breakeven level, mark as breakeven_set
+                    if(pos.type == POSITION_TYPE_BUY)
+                    {
+                        if(pos.stop_loss >= breakevenThreshold)
+                            pos.breakeven_set = true;
+                    }
+                    else
+                    {
+                        if(pos.stop_loss <= breakevenThreshold)
+                            pos.breakeven_set = true;
+                    }
+                }
+                
                 m_positions[m_positionCount] = pos;
                 m_positionCount++;
             }
@@ -569,11 +733,49 @@ bool CGrandeRiskManager::UpdateBreakevenStops()
     double atrValue = CalculateATR();
     bool updated = false;
     
+    // Get broker stop level requirements
+    long stopLevel = SymbolInfoInteger(m_symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    double minStopDistance = stopLevel * _Point;
+    
+    // Rate limiting: prevent excessive operations on the same position
+    static datetime lastBreakevenLog = 0;
+    static ulong lastBreakevenTicket = 0;
+    
     for(int i = 0; i < m_positionCount; i++)
     {
         PositionInfo pos = m_positions[i];
         
+        // Skip if already at breakeven or if stop loss is already at breakeven level
         if(pos.breakeven_set) continue;
+        
+        // Additional check: if stop loss is already at breakeven level, mark as set
+        if(pos.stop_loss > 0)
+        {
+            double breakevenThreshold = pos.price_open + (pos.type == POSITION_TYPE_BUY ? 
+                                      m_config.breakeven_buffer * _Point : 
+                                      -m_config.breakeven_buffer * _Point);
+            
+            bool alreadyAtBreakeven = false;
+            if(pos.type == POSITION_TYPE_BUY)
+                alreadyAtBreakeven = (pos.stop_loss >= breakevenThreshold);
+            else
+                alreadyAtBreakeven = (pos.stop_loss <= breakevenThreshold);
+                
+            if(alreadyAtBreakeven)
+            {
+                pos.breakeven_set = true;
+                m_positions[i] = pos;
+                
+                // Rate limit logging to prevent spam
+                if(TimeCurrent() - lastBreakevenLog >= 10 || lastBreakevenTicket != pos.ticket)
+                {
+                    LogRiskEvent("INFO", StringFormat("Ticket %d already at breakeven level %.5f", pos.ticket, pos.stop_loss));
+                    lastBreakevenLog = TimeCurrent();
+                    lastBreakevenTicket = pos.ticket;
+                }
+                continue;
+            }
+        }
         
         double profitDistance = MathAbs(pos.price_current - pos.price_open);
         double breakevenDistance = atrValue * m_config.breakeven_atr;
@@ -584,16 +786,74 @@ bool CGrandeRiskManager::UpdateBreakevenStops()
                               m_config.breakeven_buffer * _Point : 
                               -m_config.breakeven_buffer * _Point);
             
+            // Validate stop level before attempting modification
+            double currentBid = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+            double currentAsk = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
+            double currentPrice = (pos.type == POSITION_TYPE_BUY) ? currentBid : currentAsk;
+            
+            // Check if stop level meets minimum distance requirement
+            double stopDistance = MathAbs(currentPrice - newStopLoss);
+            if(stopDistance < minStopDistance)
+            {
+                // Rate limit warning logs
+                if(TimeCurrent() - lastBreakevenLog >= 30 || lastBreakevenTicket != pos.ticket)
+                {
+                    LogRiskEvent("WARNING", StringFormat("Stop level too close for ticket %d. Required: %.5f, Actual: %.5f", 
+                                  pos.ticket, minStopDistance, stopDistance));
+                    lastBreakevenLog = TimeCurrent();
+                    lastBreakevenTicket = pos.ticket;
+                }
+                continue; // Skip this position, try again later
+            }
+            
+            // Additional validation: ensure stop is in the right direction
+            bool validStop = false;
+            if(pos.type == POSITION_TYPE_BUY)
+            {
+                validStop = (newStopLoss < currentBid && newStopLoss > 0);
+            }
+            else
+            {
+                validStop = (newStopLoss > currentAsk && newStopLoss > 0);
+            }
+            
+            if(!validStop)
+            {
+                // Rate limit warning logs
+                if(TimeCurrent() - lastBreakevenLog >= 30 || lastBreakevenTicket != pos.ticket)
+                {
+                    LogRiskEvent("WARNING", StringFormat("Invalid stop direction for ticket %d. Stop: %.5f, Price: %.5f", 
+                                  pos.ticket, newStopLoss, currentPrice));
+                    lastBreakevenLog = TimeCurrent();
+                    lastBreakevenTicket = pos.ticket;
+                }
+                continue; // Skip this position, try again later
+            }
+            
+            // Attempt to modify position with validated stop level
             if(m_trade.PositionModify(pos.ticket, newStopLoss, pos.take_profit))
             {
                 pos.stop_loss = newStopLoss;
                 pos.breakeven_set = true;
                 updated = true;
                 
-                LogRiskEvent("BREAKEVEN_SET", StringFormat("Ticket %d moved to breakeven", pos.ticket));
+                LogRiskEvent("BREAKEVEN_SET", StringFormat("Ticket %d moved to breakeven at %.5f", pos.ticket, newStopLoss));
                 
                 // Update the position in the array
                 m_positions[i] = pos;
+            }
+            else
+            {
+                int error = m_trade.ResultRetcode();
+                LogRiskEvent("ERROR", StringFormat("Failed to modify ticket %d. Error: %d", pos.ticket, error));
+                
+                // If it's an invalid stops error, mark as breakeven_set to prevent infinite retries
+                if(error == 4756) // ERR_TRADE_INVALID_STOPS
+                {
+                    pos.breakeven_set = true; // Prevent further attempts
+                    m_positions[i] = pos;
+                    LogRiskEvent("WARNING", StringFormat("Marked ticket %d as breakeven_set to prevent retries", pos.ticket));
+                }
             }
         }
     }
@@ -611,11 +871,22 @@ bool CGrandeRiskManager::UpdateTrailingStops()
     double atrValue = CalculateATR();
     bool updated = false;
     
+    // Get broker stop level requirements
+    long stopLevel = SymbolInfoInteger(m_symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    double minStopDistance = stopLevel * _Point;
+    
+    // Rate limiting: prevent excessive operations on the same position
+    static datetime lastTrailingLog = 0;
+    static ulong lastTrailingTicket = 0;
+    
     for(int i = 0; i < m_positionCount; i++)
     {
         PositionInfo pos = m_positions[i];
         
         if(!pos.breakeven_set) continue; // Only trail after breakeven
+        
+        // Skip if no stop loss is set
+        if(pos.stop_loss <= 0) continue;
         
         double trailingDistance = atrValue * m_config.trailing_atr_multiplier;
         double newStopLoss = 0.0;
@@ -624,25 +895,83 @@ bool CGrandeRiskManager::UpdateTrailingStops()
         if(pos.type == POSITION_TYPE_BUY)
         {
             newStopLoss = pos.price_current - trailingDistance;
-            shouldUpdate = (newStopLoss > pos.stop_loss);
+            // Only update if new stop is significantly better (at least 1 pip improvement)
+            shouldUpdate = (newStopLoss > pos.stop_loss + _Point);
         }
         else
         {
             newStopLoss = pos.price_current + trailingDistance;
-            shouldUpdate = (newStopLoss < pos.stop_loss);
+            // Only update if new stop is significantly better (at least 1 pip improvement)
+            shouldUpdate = (newStopLoss < pos.stop_loss - _Point);
         }
         
         if(shouldUpdate)
         {
+            // Validate stop level before attempting modification
+            double currentBid = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+            double currentAsk = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
+            double currentPrice = (pos.type == POSITION_TYPE_BUY) ? currentBid : currentAsk;
+            
+            // Check if stop level meets minimum distance requirement
+            double stopDistance = MathAbs(currentPrice - newStopLoss);
+            if(stopDistance < minStopDistance)
+            {
+                // Rate limit warning logs
+                if(TimeCurrent() - lastTrailingLog >= 30 || lastTrailingTicket != pos.ticket)
+                {
+                    LogRiskEvent("WARNING", StringFormat("Trailing stop too close for ticket %d. Required: %.5f, Actual: %.5f", 
+                                  pos.ticket, minStopDistance, stopDistance));
+                    lastTrailingLog = TimeCurrent();
+                    lastTrailingTicket = pos.ticket;
+                }
+                continue; // Skip this position, try again later
+            }
+            
+            // Additional validation: ensure stop is in the right direction
+            bool validStop = false;
+            if(pos.type == POSITION_TYPE_BUY)
+            {
+                validStop = (newStopLoss < currentBid && newStopLoss > 0);
+            }
+            else
+            {
+                validStop = (newStopLoss > currentAsk && newStopLoss > 0);
+            }
+            
+            if(!validStop)
+            {
+                // Rate limit warning logs
+                if(TimeCurrent() - lastTrailingLog >= 30 || lastTrailingTicket != pos.ticket)
+                {
+                    LogRiskEvent("WARNING", StringFormat("Invalid trailing stop direction for ticket %d. Stop: %.5f, Price: %.5f", 
+                                  pos.ticket, newStopLoss, currentPrice));
+                    lastTrailingLog = TimeCurrent();
+                    lastTrailingTicket = pos.ticket;
+                }
+                continue; // Skip this position, try again later
+            }
+            
+            // Attempt to modify position with validated stop level
             if(m_trade.PositionModify(pos.ticket, newStopLoss, pos.take_profit))
             {
                 pos.stop_loss = newStopLoss;
                 updated = true;
                 
-                LogRiskEvent("TRAILING_UPDATE", StringFormat("Ticket %d trailing stop updated", pos.ticket));
+                LogRiskEvent("TRAILING_UPDATE", StringFormat("Ticket %d trailing stop updated to %.5f", pos.ticket, newStopLoss));
                 
                 // Update the position in the array
                 m_positions[i] = pos;
+            }
+            else
+            {
+                int error = m_trade.ResultRetcode();
+                LogRiskEvent("ERROR", StringFormat("Failed to modify trailing stop for ticket %d. Error: %d", pos.ticket, error));
+                
+                // If it's an invalid stops error, log but don't prevent future attempts
+                if(error == 4756) // ERR_TRADE_INVALID_STOPS
+                {
+                    LogRiskEvent("WARNING", StringFormat("Invalid trailing stop for ticket %d, will retry later", pos.ticket));
+                }
             }
         }
     }
@@ -778,10 +1107,66 @@ void CGrandeRiskManager::UpdateConfig(const RiskConfig &config)
 //+------------------------------------------------------------------+
 double CGrandeRiskManager::CalculateATR()
 {
-    if(m_atrHandle == INVALID_HANDLE) return 0.0;
+    static int totalFailures = 0;
+    static bool useFallbackMode = false;
     
-    if(CopyBuffer(m_atrHandle, 0, 0, 1, m_atrBuffer) <= 0)
+    // If we're in fallback mode, just use the fallback calculation
+    if(useFallbackMode)
+    {
+        double fallbackATR = CalculateATRFallback();
+        if(fallbackATR > 0)
+        {
+            return fallbackATR;
+        }
+        else
+        {
+            Print("[GrandeRisk] ERROR: Fallback ATR failed, returning 0");
+            return 0.0;
+        }
+    }
+    
+    // Pattern from: MetaQuotes Official Documentation
+    // Reference: Ensure handle is ready before using CopyBuffer
+    
+    // First ensure the ATR handle is valid and ready
+    if(!EnsureATRHandle(5, 100))
+    {
+        totalFailures++;
+        Print("[GrandeRisk] ERROR: ATR handle not available. Total failures: ", totalFailures);
+        
+        if(totalFailures >= 5)
+        {
+            Print("[GrandeRisk] WARNING: Switching to fallback mode due to persistent ATR failures");
+            useFallbackMode = true;
+            return CalculateATRFallback();
+        }
+        
         return 0.0;
+    }
+    
+    // Now the handle is guaranteed to be ready, safe to call CopyBuffer
+    ResetLastError();
+    int copied = CopyBuffer(m_atrHandle, 0, 0, 1, m_atrBuffer);
+    int error = GetLastError();
+    
+    if(copied <= 0 || error != 0)
+    {
+        totalFailures++;
+        Print("[GrandeRisk] ERROR: Failed to copy ATR buffer. Error: ", error, ", Copied: ", copied);
+        
+        // Handle still failed even after EnsureATRHandle - this shouldn't happen often
+        if(totalFailures >= 5)
+        {
+            Print("[GrandeRisk] WARNING: Switching to fallback mode due to persistent copy failures");
+            useFallbackMode = true;
+            return CalculateATRFallback();
+        }
+        
+        return 0.0;
+    }
+    
+    // Success - reset failure counter and return ATR value
+    if(totalFailures > 0) totalFailures--; // Gradually reduce failure count on success
     
     return m_atrBuffer[0];
 }
@@ -797,6 +1182,66 @@ double CGrandeRiskManager::GetPipValue()
     if(tickSize <= 0) return 0.0;
     
     return tickValue / tickSize * _Point;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate ATR Fallback (Manual Calculation)                      |
+//+------------------------------------------------------------------+
+double CGrandeRiskManager::CalculateATRFallback()
+{
+    // Manual ATR calculation using high/low/close data
+    double high[], low[], close[];
+    ArraySetAsSeries(high, true);
+    ArraySetAsSeries(low, true);
+    ArraySetAsSeries(close, true);
+    
+    // Get last 15 bars (14 for ATR + 1 for current)
+    int copied = CopyHigh(m_symbol, PERIOD_CURRENT, 0, 15, high);
+    if(copied <= 0)
+    {
+        Print("[GrandeRisk] ERROR: Failed to copy high data for fallback ATR");
+        return 0.0;
+    }
+    
+    copied = CopyLow(m_symbol, PERIOD_CURRENT, 0, 15, low);
+    if(copied <= 0)
+    {
+        Print("[GrandeRisk] ERROR: Failed to copy low data for fallback ATR");
+        return 0.0;
+    }
+    
+    copied = CopyClose(m_symbol, PERIOD_CURRENT, 0, 15, close);
+    if(copied <= 0)
+    {
+        Print("[GrandeRisk] ERROR: Failed to copy close data for fallback ATR");
+        return 0.0;
+    }
+    
+    // Calculate True Range for each bar
+    double tr[];
+    ArrayResize(tr, 14);
+    
+    for(int i = 0; i < 14; i++)
+    {
+        double high_low = high[i] - low[i];
+        double high_close = MathAbs(high[i] - close[i+1]);
+        double low_close = MathAbs(low[i] - close[i+1]);
+        
+        tr[i] = MathMax(high_low, MathMax(high_close, low_close));
+    }
+    
+    // Calculate ATR as simple average of True Range
+    double atr = 0.0;
+    for(int i = 0; i < 14; i++)
+    {
+        atr += tr[i];
+    }
+    atr /= 14.0;
+    
+    if(InpLogDebugInfo)
+        Print("[GrandeRisk] Fallback ATR calculated: ", DoubleToString(atr, 5));
+    
+    return atr;
 }
 
 //+------------------------------------------------------------------+

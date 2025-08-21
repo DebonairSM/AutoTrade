@@ -96,6 +96,9 @@ private:
     int                 m_adx_d1_handle;
     int                 m_atr_handle;
     
+    // ATR Handle Management
+    bool                EnsureATRHandle(int maxRetries, int delayMs);
+    
     // Internal buffers
     double              m_adx_buffer[];
     double              m_plus_di_buffer[];
@@ -168,14 +171,57 @@ public:
             return false;
         }
         
-        // Wait for indicators to calculate
-        Sleep(100);
+        // Pattern from: MQL5 Official Documentation
+        // Reference: Proper indicator initialization and readiness validation
+        
+        // Ensure ATR buffer is properly sized
+        ArrayResize(m_atr_buffer, 100);
+        ArraySetAsSeries(m_atr_buffer, true);
+        
+        // Wait for all indicators to be ready with proper validation
+        int attempts = 0;
+        const int maxAttempts = 100;
+        
+        while(attempts < maxAttempts)
+        {
+            bool allReady = true;
+            
+            // Check if all indicators have calculated data
+            if(BarsCalculated(m_adx_h1_handle) <= 0) allReady = false;
+            if(BarsCalculated(m_adx_h4_handle) <= 0) allReady = false;
+            if(BarsCalculated(m_adx_d1_handle) <= 0) allReady = false;
+            if(BarsCalculated(m_atr_handle) <= 0) allReady = false;
+            
+            if(allReady)
+            {
+                // Test ATR buffer copying to ensure it works
+                ResetLastError();
+                if(CopyBuffer(m_atr_handle, 0, 0, 1, m_atr_buffer) > 0 && GetLastError() == 0)
+                {
+                    break; // All indicators ready and working
+                }
+            }
+            
+            attempts++;
+            Sleep(50);
+        }
+        
+        if(attempts >= maxAttempts)
+        {
+            Print("[Grande] WARNING: Some indicators may not be fully ready after initialization");
+        }
         
         m_initialized = true;
         
         // Only show success message in debug mode
         if(debugMode)
+        {
             Print("[Grande] Market Regime Detector initialized successfully for ", m_symbol);
+            Print("[Grande] ADX H1 calculated: ", BarsCalculated(m_adx_h1_handle));
+            Print("[Grande] ADX H4 calculated: ", BarsCalculated(m_adx_h4_handle));
+            Print("[Grande] ADX D1 calculated: ", BarsCalculated(m_adx_d1_handle));
+            Print("[Grande] ATR calculated: ", BarsCalculated(m_atr_handle));
+        }
         
         return true;
     }
@@ -351,23 +397,61 @@ private:
     
     double GetATRValue()
     {
-        if(m_atr_handle == INVALID_HANDLE) return 0.0;
+        // Pattern from: MetaQuotes Official Documentation
+        // Reference: Ensure handle is ready before using CopyBuffer
         
-        if(CopyBuffer(m_atr_handle, 0, 0, 1, m_atr_buffer) <= 0)
+        if(!EnsureATRHandle(5, 100))
+        {
+            Print("[GrandeRegime] ATR handle not available");
             return 0.0;
+        }
+        
+        // Now the handle is guaranteed to be ready, safe to call CopyBuffer
+        ResetLastError();
+        int copied = CopyBuffer(m_atr_handle, 0, 0, 1, m_atr_buffer);
+        int error = GetLastError();
+        
+        if(copied <= 0 || error != 0)
+        {
+            Print("[GrandeRegime] Failed to copy ATR buffer. Error: ", error, ", Copied: ", copied);
+            return 0.0;
+        }
             
         return m_atr_buffer[0];
     }
     
     double GetATRAverage()
     {
-        if(m_atr_handle == INVALID_HANDLE) return 0.0;
+        // Pattern from: MetaQuotes Official Documentation
+        // Reference: Ensure handle is ready before using CopyBuffer
+        
+        if(!EnsureATRHandle(5, 100))
+        {
+            Print("[GrandeRegime] ATR handle not available for average calculation");
+            return 0.0;
+        }
+        
+        // Check if we have enough calculated bars
+        int calculated = BarsCalculated(m_atr_handle);
+        if(calculated < m_config.atr_avg_period)
+        {
+            Print("[GrandeRegime] Insufficient ATR data. Calculated: ", calculated, ", Required: ", m_config.atr_avg_period);
+            return 0.0;
+        }
         
         double atr_values[];
+        ArrayResize(atr_values, m_config.atr_avg_period);
         ArraySetAsSeries(atr_values, true);
         
-        if(CopyBuffer(m_atr_handle, 0, 0, m_config.atr_avg_period, atr_values) <= 0)
+        ResetLastError();
+        int copied = CopyBuffer(m_atr_handle, 0, 0, m_config.atr_avg_period, atr_values);
+        int error = GetLastError();
+        
+        if(copied < m_config.atr_avg_period || error != 0)
+        {
+            Print("[GrandeRegime] Failed to copy ATR average data. Error: ", error, ", Copied: ", copied, ", Required: ", m_config.atr_avg_period);
             return 0.0;
+        }
         
         double sum = 0.0;
         for(int i = 0; i < m_config.atr_avg_period; i++)
@@ -516,4 +600,66 @@ private:
         
         return MathMin(MathMax(confidence, 0.0), 1.0);
     }
+    
 }; 
+
+//+------------------------------------------------------------------+
+//| Ensure ATR Handle is Ready (MetaQuotes Pattern)                 |
+//+------------------------------------------------------------------+
+bool CGrandeMarketRegimeDetector::EnsureATRHandle(int maxRetries, int delayMs)
+{
+    // Pattern from: MetaQuotes Official Documentation
+    // Reference: Proper indicator handle creation and validation
+    
+    // If no handle yet, or BarsCalculated shows it's invalid, create a new one
+    if(m_atr_handle == INVALID_HANDLE || BarsCalculated(m_atr_handle) <= 0)
+    {
+        // Release any existing handle
+        if(m_atr_handle != INVALID_HANDLE)
+        {
+            IndicatorRelease(m_atr_handle);
+            m_atr_handle = INVALID_HANDLE;
+        }
+        
+        // Validate symbol
+        if(!SymbolSelect(m_symbol, true))
+        {
+            Print("[GrandeRegime] ERROR: Symbol not available: ", m_symbol);
+            return false;
+        }
+        
+        // Create new ATR handle
+        ResetLastError();
+        m_atr_handle = iATR(m_symbol, Period(), m_config.atr_period);
+        int error = GetLastError();
+        
+        if(m_atr_handle == INVALID_HANDLE)
+        {
+            Print("[GrandeRegime] ERROR: Failed to create ATR handle. Error: ", error, ", Symbol: ", m_symbol);
+            return false;
+        }
+        
+        // Wait until the indicator has calculated bars
+        for(int i = 0; i < maxRetries; i++)
+        {
+            int bars = BarsCalculated(m_atr_handle);
+            if(bars > 0)
+            {
+                ArraySetAsSeries(m_atr_buffer, true);
+                Print("[GrandeRegime] ATR handle ready. Calculated bars: ", bars, ", Symbol: ", m_symbol);
+                return true;
+            }
+            
+            Print("[GrandeRegime] Waiting for ATR to calculate. Attempt ", (i+1), "/", maxRetries, ", Bars: ", bars);
+            Sleep(delayMs);
+        }
+        
+        // Still not ready; release and mark invalid
+        Print("[GrandeRegime] ERROR: ATR handle invalid after ", maxRetries, " retries. Symbol: ", m_symbol);
+        IndicatorRelease(m_atr_handle);
+        m_atr_handle = INVALID_HANDLE;
+        return false;
+    }
+    
+    return true; // Handle already exists and is valid
+}
