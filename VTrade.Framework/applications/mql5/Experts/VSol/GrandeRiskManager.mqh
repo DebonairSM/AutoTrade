@@ -418,14 +418,35 @@ double CGrandeRiskManager::CalculateLotSizeByRisk(double riskAmount, double stop
     // Calculate lot size
     double lotSize = riskAmount / (stopDistancePips * pipValue);
     
-    // Normalize lot size
+    // Get broker volume requirements
     double minLot = SymbolInfoDouble(m_symbol, SYMBOL_VOLUME_MIN);
     double maxLot = SymbolInfoDouble(m_symbol, SYMBOL_VOLUME_MAX);
     double lotStep = SymbolInfoDouble(m_symbol, SYMBOL_VOLUME_STEP);
     
+    // Validate broker requirements
+    if(minLot <= 0 || maxLot <= 0 || lotStep <= 0)
+    {
+        LogRiskEvent("ERROR", StringFormat("Invalid broker volume settings. Min: %.5f, Max: %.5f, Step: %.5f", 
+                      minLot, maxLot, lotStep));
+        return 0.0;
+    }
+    
+    // Normalize lot size
     lotSize = MathMax(lotSize, minLot);
     lotSize = MathMin(lotSize, maxLot);
     lotSize = NormalizeDouble(lotSize / lotStep, 0) * lotStep;
+    
+    // Final validation
+    if(lotSize < minLot || lotSize > maxLot)
+    {
+        LogRiskEvent("ERROR", StringFormat("Lot size %.5f outside valid range [%.5f, %.5f]", 
+                      lotSize, minLot, maxLot));
+        return 0.0;
+    }
+    
+    if(InpLogDebugInfo)
+        LogRiskEvent("INFO", StringFormat("Calculated lot size: %.5f (Risk: %.2f, Stop: %.1f pips)", 
+                      lotSize, riskAmount, stopDistancePips));
     
     return lotSize;
 }
@@ -631,11 +652,30 @@ void CGrandeRiskManager::OnTick()
                 
             if(m_config.enable_partial_closes)
             {
-                ResetLastError();
-                ExecutePartialCloses();
-                error = GetLastError();
-                if(error != 0)
-                    Print("[GrandeRisk] WARNING: ExecutePartialCloses failed. Error: ", error);
+                // Only attempt partial closes if we have positions that could benefit
+                bool shouldAttemptPartial = false;
+                for(int i = 0; i < m_positionCount; i++)
+                {
+                    if(!m_positions[i].partial_closed)
+                    {
+                        double potentialCloseVolume = m_positions[i].volume * m_config.partial_close_percent / 100.0;
+                        double minLot = SymbolInfoDouble(m_symbol, SYMBOL_VOLUME_MIN);
+                        if(potentialCloseVolume >= minLot)
+                        {
+                            shouldAttemptPartial = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if(shouldAttemptPartial)
+                {
+                    ResetLastError();
+                    ExecutePartialCloses();
+                    error = GetLastError();
+                    if(error != 0 && error != 4756) // Don't log ERR_TRADE_INVALID_STOPS as warning
+                        Print("[GrandeRisk] WARNING: ExecutePartialCloses failed. Error: ", error);
+                }
             }
         }
         else
@@ -987,7 +1027,38 @@ bool CGrandeRiskManager::ExecutePartialCloses()
     if(!m_config.enable_partial_closes) return false;
     
     double atrValue = CalculateATR();
+    if(atrValue <= 0) return false; // Skip if ATR not available
+    
     bool executed = false;
+    
+    // Get broker volume requirements
+    double minLot = SymbolInfoDouble(m_symbol, SYMBOL_VOLUME_MIN);
+    double lotStep = SymbolInfoDouble(m_symbol, SYMBOL_VOLUME_STEP);
+    
+    // Check if any positions are large enough for partial closes
+    bool hasPartialCloseablePositions = false;
+    for(int i = 0; i < m_positionCount; i++)
+    {
+        if(!m_positions[i].partial_closed)
+        {
+            double potentialCloseVolume = m_positions[i].volume * m_config.partial_close_percent / 100.0;
+            if(potentialCloseVolume >= minLot)
+            {
+                hasPartialCloseablePositions = true;
+                break;
+            }
+        }
+    }
+    
+    // If no positions can be partially closed, exit early
+    if(!hasPartialCloseablePositions)
+    {
+        return false;
+    }
+    
+    // Rate limiting: prevent excessive operations on the same position
+    static datetime lastPartialLog = 0;
+    static ulong lastPartialTicket = 0;
     
     for(int i = 0; i < m_positionCount; i++)
     {
@@ -1002,16 +1073,67 @@ bool CGrandeRiskManager::ExecutePartialCloses()
         {
             double closeVolume = pos.volume * m_config.partial_close_percent / 100.0;
             
+            // Validate volume before attempting partial close
+            if(closeVolume < minLot)
+            {
+                // Only log warning once per position and reduce frequency
+                static datetime lastPartialLog = 0;
+                static ulong lastPartialTicket = 0;
+                
+                if(TimeCurrent() - lastPartialLog >= 300 || lastPartialTicket != pos.ticket) // 5 minutes instead of 30 seconds
+                {
+                    if(InpLogDebugInfo) // Only log if debug is enabled
+                    {
+                        LogRiskEvent("INFO", StringFormat("Partial close volume too small for ticket %d. Required: %.5f, Actual: %.5f - This is normal for small positions", 
+                                      pos.ticket, minLot, closeVolume));
+                    }
+                    lastPartialLog = TimeCurrent();
+                    lastPartialTicket = pos.ticket;
+                }
+                
+                // Mark as partial_closed to prevent repeated attempts on this position
+                pos.partial_closed = true;
+                m_positions[i] = pos;
+                continue;
+            }
+            
+            // Normalize volume to lot step
+            closeVolume = NormalizeDouble(closeVolume / lotStep, 0) * lotStep;
+            
+            // Additional validation: ensure we're not closing the entire position
+            if(closeVolume >= pos.volume)
+            {
+                LogRiskEvent("WARNING", StringFormat("Partial close volume %.5f >= total volume %.5f for ticket %d, skipping", 
+                              closeVolume, pos.volume, pos.ticket));
+                continue;
+            }
+            
+            // Attempt partial close with validated volume
+            ResetLastError();
             if(m_trade.PositionClosePartial(pos.ticket, closeVolume))
             {
                 pos.partial_closed = true;
                 executed = true;
                 
-                LogRiskEvent("PARTIAL_CLOSE", StringFormat("Ticket %d partial close %.2f lots", 
+                LogRiskEvent("PARTIAL_CLOSE", StringFormat("Ticket %d partial close %.5f lots", 
                            pos.ticket, closeVolume));
                 
                 // Update the position in the array
                 m_positions[i] = pos;
+            }
+            else
+            {
+                int error = m_trade.ResultRetcode();
+                LogRiskEvent("ERROR", StringFormat("Failed partial close for ticket %d. Error: %d, Volume: %.5f", 
+                              pos.ticket, error, closeVolume));
+                
+                // If it's an invalid stops error, mark as partial_closed to prevent infinite retries
+                if(error == 4756) // ERR_TRADE_INVALID_STOPS
+                {
+                    pos.partial_closed = true; // Prevent further attempts
+                    m_positions[i] = pos;
+                    LogRiskEvent("WARNING", StringFormat("Marked ticket %d as partial_closed to prevent retries", pos.ticket));
+                }
             }
         }
     }

@@ -30,7 +30,7 @@
 #define InpShowDiagnosticPanel  InpShowTrendFollowerPanel
 #define InpPanelXOffset         10             // Panel X Offset
 #define InpPanelYOffset         280            // Panel Y Offset (moved below Grande header)
-#define InpLogDebugInfo         InpLogDetailedInfo  // Log Debug Information
+// #define InpLogDebugInfo         InpLogDetailedInfo  // Log Debug Information - REMOVED to prevent conflict
 
 //+------------------------------------------------------------------+
 //| MCP Logging Constants                                            |
@@ -130,6 +130,13 @@ public:
     //+------------------------------------------------------------------+
     void ShowDiagnosticPanel(const bool show);
     void UpdateDiagnosticUI();
+    
+    //+------------------------------------------------------------------+
+    //| Data Availability Methods                                         |
+    //+------------------------------------------------------------------+
+    bool IsH1DataAvailable();
+    bool IsH4DataAvailable();
+    bool IsD1DataAvailable();
 };
 
 //+------------------------------------------------------------------+
@@ -421,12 +428,12 @@ bool CAdvancedTrendFollower::CreateIndicatorHandles()
     m_emaSlowH4Handle = iMA(_Symbol, PERIOD_H4, InpEmaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
     m_adxH4Handle = iADX(_Symbol, PERIOD_H4, InpAdxPeriod);
     
-    // D1 Indicators
+    // D1 Indicators (try to create, but don't fail if unavailable)
     m_emaFastD1Handle = iMA(_Symbol, PERIOD_D1, InpEmaFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
     m_emaSlowD1Handle = iMA(_Symbol, PERIOD_D1, InpEmaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
     m_adxD1Handle = iADX(_Symbol, PERIOD_D1, InpAdxPeriod);
     
-    // Check all handles
+    // Check critical H1 handles (required)
     if(m_emaFastH1Handle == INVALID_HANDLE)
     {
         MCP_LogError("Failed to create EMA Fast H1 handle");
@@ -457,6 +464,8 @@ bool CAdvancedTrendFollower::CreateIndicatorHandles()
         MCP_LogError("Failed to create ADX H1 handle");
         return false;
     }
+    
+    // Check H4 handles (important but can continue if fails)
     if(m_emaFastH4Handle == INVALID_HANDLE)
     {
         MCP_LogError("Failed to create EMA Fast H4 handle");
@@ -472,24 +481,27 @@ bool CAdvancedTrendFollower::CreateIndicatorHandles()
         MCP_LogError("Failed to create ADX H4 handle");
         return false;
     }
+    
+    // Check D1 handles (optional - log warning but don't fail)
     if(m_emaFastD1Handle == INVALID_HANDLE)
     {
-        MCP_LogError("Failed to create EMA Fast D1 handle");
-        return false;
+        if(InpLogDebugInfo)
+            MCP_LogInfo("D1 EMA Fast handle not available - this is normal for some symbols on H1 charts");
     }
     if(m_emaSlowD1Handle == INVALID_HANDLE)
     {
-        MCP_LogError("Failed to create EMA Slow D1 handle");
-        return false;
+        if(InpLogDebugInfo)
+            MCP_LogInfo("D1 EMA Slow handle not available - this is normal for some symbols on H1 charts");
     }
     if(m_adxD1Handle == INVALID_HANDLE)
     {
-        MCP_LogError("Failed to create ADX D1 handle");
-        return false;
+        if(InpLogDebugInfo)
+            MCP_LogInfo("D1 ADX handle not available - this is normal for some symbols on H1 charts");
     }
     
     if(InpLogDebugInfo)
-        MCP_LogInfo("All indicator handles created successfully");
+        MCP_LogInfo("Indicator handles created - H1: OK, H4: OK, D1: " + 
+                    ((m_emaFastD1Handle != INVALID_HANDLE && m_emaSlowD1Handle != INVALID_HANDLE && m_adxD1Handle != INVALID_HANDLE) ? "OK" : "Limited"));
     return true;
 }
 
@@ -589,29 +601,78 @@ bool CAdvancedTrendFollower::CopyIndicatorData()
     
     // Copy D1 data (optional - can continue if fails)
     bool d1DataOk = true;
-    if(CopyBuffer(m_emaFastD1Handle, 0, 0, 2, m_emaFastD1) <= 0)
+    
+    // Check if D1 handles are valid before attempting to copy
+    if(m_emaFastD1Handle != INVALID_HANDLE)
     {
-        int error = GetLastError();
-        MCP_LogError("Failed to copy EMA Fast D1 buffer. Error: " + IntegerToString(error));
-        d1DataOk = false;
+        if(CopyBuffer(m_emaFastD1Handle, 0, 0, 2, m_emaFastD1) <= 0)
+        {
+            int error = GetLastError();
+            if(error == 4806) // ERR_INDICATOR_DATA_NOT_FOUND - common for D1 on H1 charts
+            {
+                if(InpLogDebugInfo)
+                    MCP_LogInfo("D1 data not available on H1 chart - this is normal for some symbols");
+            }
+            else
+            {
+                MCP_LogError("Failed to copy EMA Fast D1 buffer. Error: " + IntegerToString(error));
+            }
+            d1DataOk = false;
+        }
     }
-    if(CopyBuffer(m_emaSlowD1Handle, 0, 0, 2, m_emaSlowD1) <= 0)
+    else
     {
-        int error = GetLastError();
-        MCP_LogError("Failed to copy EMA Slow D1 buffer. Error: " + IntegerToString(error));
-        d1DataOk = false;
-    }
-    if(CopyBuffer(m_adxD1Handle, MAIN_LINE, 0, 2, m_adxD1) <= 0)
-    {
-        int error = GetLastError();
-        MCP_LogError("Failed to copy ADX D1 buffer. Error: " + IntegerToString(error));
         d1DataOk = false;
     }
     
-    // Log data availability status
-    if(!h4DataOk || !d1DataOk)
+    if(m_emaSlowD1Handle != INVALID_HANDLE)
     {
-        MCP_LogError("Some timeframe data unavailable - H4: " + (h4DataOk ? "OK" : "FAIL") + 
+        if(CopyBuffer(m_emaSlowD1Handle, 0, 0, 2, m_emaSlowD1) <= 0)
+        {
+            int error = GetLastError();
+            if(error == 4806) // ERR_INDICATOR_DATA_NOT_FOUND
+            {
+                if(InpLogDebugInfo)
+                    MCP_LogInfo("D1 data not available on H1 chart - this is normal for some symbols");
+            }
+            else
+            {
+                MCP_LogError("Failed to copy EMA Slow D1 buffer. Error: " + IntegerToString(error));
+            }
+            d1DataOk = false;
+        }
+    }
+    else
+    {
+        d1DataOk = false;
+    }
+    
+    if(m_adxD1Handle != INVALID_HANDLE)
+    {
+        if(CopyBuffer(m_adxD1Handle, MAIN_LINE, 0, 2, m_adxD1) <= 0)
+        {
+            int error = GetLastError();
+            if(error == 4806) // ERR_INDICATOR_DATA_NOT_FOUND
+            {
+                if(InpLogDebugInfo)
+                    MCP_LogInfo("D1 data not available on H1 chart - this is normal for some symbols");
+            }
+            else
+            {
+                MCP_LogError("Failed to copy ADX D1 buffer. Error: " + IntegerToString(error));
+            }
+            d1DataOk = false;
+        }
+    }
+    else
+    {
+        d1DataOk = false;
+    }
+    
+    // Log data availability status only if debug is enabled
+    if(InpLogDebugInfo && (!h4DataOk || !d1DataOk))
+    {
+        MCP_LogInfo("Timeframe data status - H4: " + (h4DataOk ? "OK" : "FAIL") + 
                     ", D1: " + (d1DataOk ? "OK" : "FAIL"));
     }
     
@@ -768,7 +829,16 @@ void CAdvancedTrendFollower::UpdatePanelText(const string trendMode, const doubl
     lines[4] = "===============";
     lines[5] = StringFormat("H1 EMA: %s", h1Aligned ? "BULL" : "BEAR");
     lines[6] = StringFormat("H4 EMA: %s", h4Aligned ? "BULL" : "BEAR");
-    lines[7] = StringFormat("D1 EMA: %s", d1Aligned ? "BULL" : "BEAR");
+    
+    // Show D1 status with availability indicator
+    if(IsD1DataAvailable())
+    {
+        lines[7] = StringFormat("D1 EMA: %s", d1Aligned ? "BULL" : "BEAR");
+    }
+    else
+    {
+        lines[7] = "D1 EMA: N/A (Limited)";
+    }
     
     bool allCreated = true;
     
@@ -818,4 +888,22 @@ void CAdvancedTrendFollower::MCP_LogError(const string message)
 void CAdvancedTrendFollower::MCP_LogInfo(const string message)
 {
     Print(MCP_LOG_PREFIX + "INFO: " + message);
+}
+
+//+------------------------------------------------------------------+
+//| Data Availability Methods                                         |
+//+------------------------------------------------------------------+
+bool CAdvancedTrendFollower::IsH1DataAvailable()
+{
+    return (m_isInitialized && ArraySize(m_emaFastH1) > 0 && ArraySize(m_emaSlowH1) > 0);
+}
+
+bool CAdvancedTrendFollower::IsH4DataAvailable()
+{
+    return (m_isInitialized && ArraySize(m_emaFastH4) > 0 && ArraySize(m_emaSlowH4) > 0);
+}
+
+bool CAdvancedTrendFollower::IsD1DataAvailable()
+{
+    return (m_isInitialized && ArraySize(m_emaFastD1) > 0 && ArraySize(m_emaSlowD1) > 0);
 } 

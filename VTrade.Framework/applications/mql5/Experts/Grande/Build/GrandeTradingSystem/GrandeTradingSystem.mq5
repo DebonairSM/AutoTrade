@@ -93,6 +93,7 @@ input bool   InpShowRegimeTrendArrows = true;    // Show Regime Trend Arrows
 input bool   InpShowADXStrengthMeter = true;     // Show ADX Strength Meter
 input bool   InpShowRegimeAlerts = true;         // Show Regime Change Alerts
 input bool   InpLogDetailedInfo = false;         // Log Detailed Trade Information
+input bool   InpLogDebugInfo = false;            // Log Debug Information (Risk Manager)
 
 input group "=== Update Settings ==="
 input int    InpRegimeUpdateSeconds = 5;         // Regime Update Interval (seconds)

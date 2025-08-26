@@ -95,9 +95,18 @@ private:
     int                 m_adx_h4_handle;
     int                 m_adx_d1_handle;
     int                 m_atr_handle;
+    ENUM_TIMEFRAMES     m_atr_timeframe;
+    ulong               m_lastAtrWaitLogTick;
+    bool                m_atr_ready_logged;
+    bool                m_atr_wait_logged;
+    ulong               m_lastAtrEnsureTick;
+    ulong               m_lastAtrErrorTick;
     
     // ATR Handle Management
     bool                EnsureATRHandle(int maxRetries, int delayMs);
+    bool                EnsureHistoryReady(ENUM_TIMEFRAMES timeframe, int minBars, int retries, int delayMs);
+    bool                TryComputeATRSimple(int period, double &outAtr);
+    bool                TryComputeTRAverage(int barsCount, double &outAvgTR);
     
     // Internal buffers
     double              m_adx_buffer[];
@@ -114,7 +123,13 @@ public:
                                         m_adx_h1_handle(INVALID_HANDLE),
                                         m_adx_h4_handle(INVALID_HANDLE),
                                         m_adx_d1_handle(INVALID_HANDLE),
-                                        m_atr_handle(INVALID_HANDLE)
+                                        m_atr_handle(INVALID_HANDLE),
+                                        m_atr_timeframe(PERIOD_CURRENT),
+                                        m_lastAtrWaitLogTick(0),
+                                        m_atr_ready_logged(false)
+                                        ,m_atr_wait_logged(false)
+                                        ,m_lastAtrEnsureTick(0)
+                                        ,m_lastAtrErrorTick(0)
     {
         ArraySetAsSeries(m_adx_buffer, true);
         ArraySetAsSeries(m_plus_di_buffer, true);
@@ -159,7 +174,10 @@ public:
         m_adx_d1_handle = iADX(m_symbol, PERIOD_D1, 14);
         
         // Create ATR indicator for current timeframe
+        m_atr_timeframe = currentTF;
         m_atr_handle = iATR(m_symbol, currentTF, m_config.atr_period);
+        m_atr_ready_logged = false;
+        m_atr_wait_logged = false;
         
         // Check if all indicators were created successfully
         if(m_adx_h1_handle == INVALID_HANDLE ||
@@ -397,69 +415,30 @@ private:
     
     double GetATRValue()
     {
-        // Pattern from: MetaQuotes Official Documentation
-        // Reference: Ensure handle is ready before using CopyBuffer
-        
-        if(!EnsureATRHandle(5, 100))
+        double atr;
+        if(TryComputeATRSimple(m_config.atr_period, atr))
+            return atr;
+        ulong nowErr = GetTickCount();
+        if(m_lastAtrErrorTick == 0 || (nowErr - m_lastAtrErrorTick) >= 10000)
         {
-            Print("[GrandeRegime] ATR handle not available");
-            return 0.0;
+            Print("[GrandeRegime] ATR data unavailable");
+            m_lastAtrErrorTick = nowErr;
         }
-        
-        // Now the handle is guaranteed to be ready, safe to call CopyBuffer
-        ResetLastError();
-        int copied = CopyBuffer(m_atr_handle, 0, 0, 1, m_atr_buffer);
-        int error = GetLastError();
-        
-        if(copied <= 0 || error != 0)
-        {
-            Print("[GrandeRegime] Failed to copy ATR buffer. Error: ", error, ", Copied: ", copied);
-            return 0.0;
-        }
-            
-        return m_atr_buffer[0];
+        return 0.0;
     }
     
     double GetATRAverage()
     {
-        // Pattern from: MetaQuotes Official Documentation
-        // Reference: Ensure handle is ready before using CopyBuffer
-        
-        if(!EnsureATRHandle(5, 100))
+        double avg;
+        if(TryComputeTRAverage(m_config.atr_avg_period, avg))
+            return avg;
+        ulong nowErr2 = GetTickCount();
+        if(m_lastAtrErrorTick == 0 || (nowErr2 - m_lastAtrErrorTick) >= 10000)
         {
-            Print("[GrandeRegime] ATR handle not available for average calculation");
-            return 0.0;
+            Print("[GrandeRegime] ATR average data unavailable");
+            m_lastAtrErrorTick = nowErr2;
         }
-        
-        // Check if we have enough calculated bars
-        int calculated = BarsCalculated(m_atr_handle);
-        if(calculated < m_config.atr_avg_period)
-        {
-            Print("[GrandeRegime] Insufficient ATR data. Calculated: ", calculated, ", Required: ", m_config.atr_avg_period);
-            return 0.0;
-        }
-        
-        double atr_values[];
-        ArrayResize(atr_values, m_config.atr_avg_period);
-        ArraySetAsSeries(atr_values, true);
-        
-        ResetLastError();
-        int copied = CopyBuffer(m_atr_handle, 0, 0, m_config.atr_avg_period, atr_values);
-        int error = GetLastError();
-        
-        if(copied < m_config.atr_avg_period || error != 0)
-        {
-            Print("[GrandeRegime] Failed to copy ATR average data. Error: ", error, ", Copied: ", copied, ", Required: ", m_config.atr_avg_period);
-            return 0.0;
-        }
-        
-        double sum = 0.0;
-        for(int i = 0; i < m_config.atr_avg_period; i++)
-        {
-            sum += atr_values[i];
-        }
-        
-        return sum / m_config.atr_avg_period;
+        return 0.0;
     }
     
     MARKET_REGIME DetermineRegime(const RegimeSnapshot &snapshot)
@@ -608,58 +587,168 @@ private:
 //+------------------------------------------------------------------+
 bool CGrandeMarketRegimeDetector::EnsureATRHandle(int maxRetries, int delayMs)
 {
-    // Pattern from: MetaQuotes Official Documentation
-    // Reference: Proper indicator handle creation and validation
+    ENUM_TIMEFRAMES currentTF = Period();
     
-    // If no handle yet, or BarsCalculated shows it's invalid, create a new one
-    if(m_atr_handle == INVALID_HANDLE || BarsCalculated(m_atr_handle) <= 0)
+    if(m_atr_handle == INVALID_HANDLE || m_atr_timeframe != currentTF)
     {
-        // Release any existing handle
         if(m_atr_handle != INVALID_HANDLE)
         {
             IndicatorRelease(m_atr_handle);
             m_atr_handle = INVALID_HANDLE;
         }
         
-        // Validate symbol
         if(!SymbolSelect(m_symbol, true))
         {
             Print("[GrandeRegime] ERROR: Symbol not available: ", m_symbol);
             return false;
         }
         
-        // Create new ATR handle
         ResetLastError();
-        m_atr_handle = iATR(m_symbol, Period(), m_config.atr_period);
+        m_atr_handle = iATR(m_symbol, currentTF, m_config.atr_period);
         int error = GetLastError();
+        m_atr_timeframe = currentTF;
+        m_atr_ready_logged = false;
+        m_atr_wait_logged = false;
         
         if(m_atr_handle == INVALID_HANDLE)
         {
             Print("[GrandeRegime] ERROR: Failed to create ATR handle. Error: ", error, ", Symbol: ", m_symbol);
             return false;
         }
-        
-        // Wait until the indicator has calculated bars
-        for(int i = 0; i < maxRetries; i++)
+    }
+    
+    // Preload history to avoid BarsCalculated = -1
+    EnsureHistoryReady(currentTF, MathMax(10, m_config.atr_period), 3, delayMs);
+    
+    for(int i = 0; i < maxRetries; i++)
+    {
+        int bars = BarsCalculated(m_atr_handle);
+        if(bars > 0)
         {
-            int bars = BarsCalculated(m_atr_handle);
+            ArraySetAsSeries(m_atr_buffer, true);
+            if(!m_atr_ready_logged)
+            {
+                Print("[GrandeRegime] ATR handle ready. Calculated bars: ", bars, ", Symbol: ", m_symbol);
+                m_atr_ready_logged = true;
+            }
+            m_atr_wait_logged = false;
+            return true;
+        }
+        
+        if(bars < 0)
+        {
+            // Handle invalid — recreate and retry immediately
+            IndicatorRelease(m_atr_handle);
+            m_atr_handle = INVALID_HANDLE;
+            ResetLastError();
+            m_atr_handle = iATR(m_symbol, currentTF, m_config.atr_period);
+            int recreateErr = GetLastError();
+            if(m_atr_handle == INVALID_HANDLE)
+            {
+                ulong nowErrRe = GetTickCount();
+                if(m_lastAtrErrorTick == 0 || (nowErrRe - m_lastAtrErrorTick) >= 10000)
+                {
+                    Print("[GrandeRegime] ERROR: Recreate ATR failed. Error: ", recreateErr, ", Symbol: ", m_symbol);
+                    m_lastAtrErrorTick = nowErrRe;
+                }
+                Sleep(delayMs);
+                continue;
+            }
+            m_atr_ready_logged = false;
+            m_atr_wait_logged = false;
+            bars = BarsCalculated(m_atr_handle);
             if(bars > 0)
             {
                 ArraySetAsSeries(m_atr_buffer, true);
                 Print("[GrandeRegime] ATR handle ready. Calculated bars: ", bars, ", Symbol: ", m_symbol);
+                m_atr_ready_logged = true;
                 return true;
             }
-            
-            Print("[GrandeRegime] Waiting for ATR to calculate. Attempt ", (i+1), "/", maxRetries, ", Bars: ", bars);
-            Sleep(delayMs);
         }
         
-        // Still not ready; release and mark invalid
-        Print("[GrandeRegime] ERROR: ATR handle invalid after ", maxRetries, " retries. Symbol: ", m_symbol);
-        IndicatorRelease(m_atr_handle);
-        m_atr_handle = INVALID_HANDLE;
-        return false;
+        ulong nowTick = GetTickCount();
+        const ulong minWaitLogMs = 5000;
+        if(!m_atr_wait_logged && (m_lastAtrWaitLogTick == 0 || (nowTick - m_lastAtrWaitLogTick) >= minWaitLogMs))
+        {
+            Print("[GrandeRegime] Waiting for ATR to calculate. Attempt ", (i+1), "/", maxRetries, ", Bars: ", bars);
+            m_lastAtrWaitLogTick = nowTick;
+            m_atr_wait_logged = true;
+        }
+        Sleep(delayMs);
     }
     
-    return true; // Handle already exists and is valid
+    ulong nowErr = GetTickCount();
+    if(m_lastAtrErrorTick == 0 || (nowErr - m_lastAtrErrorTick) >= 10000)
+    {
+        Print("[GrandeRegime] ERROR: ATR handle not ready after ", maxRetries, " retries. Symbol: ", m_symbol);
+        m_lastAtrErrorTick = nowErr;
+    }
+    return false;
+}
+
+bool CGrandeMarketRegimeDetector::EnsureHistoryReady(ENUM_TIMEFRAMES timeframe, int minBars, int retries, int delayMs)
+{
+    MqlRates rates[];
+    for(int i = 0; i < retries; i++)
+    {
+        ResetLastError();
+        int copied = CopyRates(m_symbol, timeframe, 0, minBars, rates);
+        int err = GetLastError();
+        if(copied >= MathMin(minBars, 2) && err == 0)
+            return true;
+        Sleep(delayMs);
+    }
+    return false;
+}
+
+bool CGrandeMarketRegimeDetector::TryComputeATRSimple(int period, double &outAtr)
+{
+    if(period <= 0) return false;
+    MqlRates rates[];
+    ArraySetAsSeries(rates, true);
+    int need = period + 1;
+    ResetLastError();
+    int copied = CopyRates(m_symbol, Period(), 0, need, rates);
+    if(copied < need || GetLastError() != 0)
+        return false;
+    double sumTR = 0.0;
+    for(int i = 0; i < period; i++)
+    {
+        double high = rates[i].high;
+        double low = rates[i].low;
+        double prevClose = rates[i+1].close;
+        double tr1 = high - low;
+        double tr2 = MathAbs(high - prevClose);
+        double tr3 = MathAbs(low - prevClose);
+        double tr = MathMax(tr1, MathMax(tr2, tr3));
+        sumTR += tr;
+    }
+    outAtr = sumTR / period;
+    return true;
+}
+
+bool CGrandeMarketRegimeDetector::TryComputeTRAverage(int barsCount, double &outAvgTR)
+{
+    if(barsCount <= 1) return false;
+    MqlRates rates[];
+    ArraySetAsSeries(rates, true);
+    int need = barsCount + 1;
+    ResetLastError();
+    int copied = CopyRates(m_symbol, Period(), 0, need, rates);
+    if(copied < need || GetLastError() != 0)
+        return false;
+    double sumTR = 0.0;
+    for(int i = 0; i < barsCount; i++)
+    {
+        double high = rates[i].high;
+        double low = rates[i].low;
+        double prevClose = rates[i+1].close;
+        double tr1 = high - low;
+        double tr2 = MathAbs(high - prevClose);
+        double tr3 = MathAbs(low - prevClose);
+        double tr = MathMax(tr1, MathMax(tr2, tr3));
+        sumTR += tr;
+    }
+    outAvgTR = sumTR / barsCount;
+    return true;
 }
