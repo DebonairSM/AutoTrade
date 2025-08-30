@@ -1402,6 +1402,7 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ TRADE BLOCKED: No strong key levels found");
+        Print("[BREAKOUT] BLOCK: no strong key levels");
         return;
     }
     
@@ -1443,6 +1444,7 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ TRADE BLOCKED: Invalid lot size (", DoubleToString(lot, 2), ")");
+        Print(StringFormat("[BREAKOUT] BLOCK: invalid lot size (%.2f)", lot));
         return;
     }
     
@@ -1467,6 +1469,13 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     }
     
     string comment = StringFormat("BO-%s", strongestLevel.isResistance ? "RESISTANCE" : "SUPPORT");
+    // Always-on concise order summary for monitoring
+    Print(StringFormat("[BREAKOUT] ORDER %s @%s SL=%s TP=%s lot=%.2f",
+                       strongestLevel.isResistance ? "BUYSTOP" : "SELLSTOP",
+                       DoubleToString(breakoutLevel, _Digits),
+                       DoubleToString(breakoutSL, _Digits),
+                       DoubleToString(breakoutTP, _Digits),
+                       lot));
     
     if(InpLogDetailedInfo)
     {
@@ -1487,6 +1496,11 @@ void BreakoutTrade(const RegimeSnapshot &rs)
         tradeResult = g_trade.BuyStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), (string)comment);
     else
         tradeResult = g_trade.SellStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), (string)comment);
+    // Always-on concise outcome
+    if(tradeResult)
+        Print(StringFormat("[BREAKOUT] ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
+    else
+        Print(StringFormat("[BREAKOUT] ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
     
     if(InpLogDetailedInfo)
     {
@@ -1993,6 +2007,10 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ CRITERIA FAILED: No inside bar, NR7 pattern, or ATR expansion detected");
+        Print(StringFormat("[BREAKOUT] FAIL pattern (IB:%s NR7:%s ATRexp:%s)",
+                           insideBar ? "Y" : "N",
+                           nr7 ? "Y" : "N",
+                           atrExpanding ? "Y" : "N"));
         return false;
     }
     
@@ -2002,6 +2020,7 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ CRITERIA FAILED: No strong key levels available");
+        Print("[BREAKOUT] FAIL: no strong key levels");
         return false;
     }
     
@@ -2025,6 +2044,9 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ CRITERIA FAILED: Price not close enough to key level (>0.5×ATR)");
+        Print(StringFormat("[BREAKOUT] FAIL proximity dist=%sp max=%sp",
+                           DoubleToString(distanceToLevel / _Point, 1),
+                           DoubleToString(maxDistance / _Point, 1)));
         return false;
     }
     
@@ -2047,6 +2069,8 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ CRITERIA FAILED: Insufficient volume spike (need ≥1.2x average)");
+        Print(StringFormat("[BREAKOUT] FAIL volume ratio=%sx need>=1.20x",
+                           DoubleToString(volumeRatio, 2)));
         return false;
     }
     
@@ -2057,6 +2081,14 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
         Print(logPrefix + "  ✅ Near strong key level (≤0.5×ATR)");
         Print(logPrefix + "  ✅ Volume spike (≥1.2x average)");
     }
+    // Always-on concise PASS summary
+    Print(StringFormat("[BREAKOUT] PASS pattern(IB:%s NR7:%s ATR:%s) dist=%sp/%sp vol=%sx",
+                       insideBar ? "Y" : "N",
+                       nr7 ? "Y" : "N",
+                       atrExpanding ? "Y" : "N",
+                       DoubleToString(distanceToLevel / _Point, 1),
+                       DoubleToString(maxDistance / _Point, 1),
+                       DoubleToString(volumeRatio, 2)));
     
     return true;
 }

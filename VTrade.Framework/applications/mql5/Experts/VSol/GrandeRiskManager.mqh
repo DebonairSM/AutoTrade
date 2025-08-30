@@ -144,6 +144,13 @@ public:
     bool ExecutePartialCloses();
     void CloseAllPositions();
     
+    // === Smart Position Management ===
+    void ManageAllPositions();
+    bool SetIntelligentSLTP(ulong ticket, bool isBuy, double entryPrice);
+    double CalculateSmartStopLoss(bool isBuy, double entryPrice, double atrValue);
+    double CalculateSmartTakeProfit(bool isBuy, double entryPrice, double stopLoss, double atrValue);
+    bool IsPositionManaged(ulong ticket);
+    
     // === Position Information ===
     int GetPositionCount() const { return m_positionCount; }
     PositionInfo GetPosition(int index);
@@ -603,21 +610,35 @@ void CGrandeRiskManager::OnTick()
         return;
     }
     
-    // Update position management features
-    if(m_tradingEnabled)
-    {
-        // Check if ATR is available before attempting position management
-        double atrValue = CalculateATR();
-        if(atrValue <= 0)
+            // Update position management features
+        if(m_tradingEnabled)
         {
-            if(InpLogDebugInfo)
-                Print("[GrandeRisk] WARNING: ATR unavailable, skipping position management features");
-            return; // Skip position management but don't fail completely
-        }
-        
-        // Only proceed with position management if we have a valid ATR value
-        if(atrValue > 0)
-        {
+            // Check if ATR is available before attempting position management
+            double atrValue = CalculateATR();
+            if(atrValue <= 0)
+            {
+                if(InpLogDebugInfo)
+                    Print("[GrandeRisk] WARNING: ATR unavailable, skipping position management features");
+                return; // Skip position management but don't fail completely
+            }
+            
+            // Only proceed with position management if we have a valid ATR value
+            if(atrValue > 0)
+            {
+                // Smart Position Management - Set SL/TP for all open positions
+                // Rate limiting: only attempt position management every 10 seconds
+                static datetime lastPositionManagement = 0;
+                if(TimeCurrent() - lastPositionManagement >= 10)
+                {
+                    ResetLastError();
+                    ManageAllPositions();
+                    error = GetLastError();
+                    if(error != 0)
+                        Print("[GrandeRisk] WARNING: ManageAllPositions failed. Error: ", error);
+                    
+                    lastPositionManagement = TimeCurrent();
+                }
+                
             if(m_config.enable_breakeven)
             {
                 // Rate limiting: only attempt breakeven updates every 5 seconds
@@ -1139,6 +1160,232 @@ bool CGrandeRiskManager::ExecutePartialCloses()
     }
     
     return executed;
+}
+
+//+------------------------------------------------------------------+
+//| Smart Position Management - Set SL/TP for All Open Positions     |
+//+------------------------------------------------------------------+
+void CGrandeRiskManager::ManageAllPositions()
+{
+    if(!m_isInitialized) return;
+    
+    double atrValue = CalculateATR();
+    if(atrValue <= 0) return; // Skip if ATR not available
+    
+    int totalPositions = PositionsTotal();
+    int managedCount = 0;
+    
+    for(int i = 0; i < totalPositions; i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(PositionSelectByTicket(ticket))
+        {
+            string symbol = PositionGetString(POSITION_SYMBOL);
+            if(symbol == m_symbol)
+            {
+                ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+                double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+                double currentSL = PositionGetDouble(POSITION_SL);
+                double currentTP = PositionGetDouble(POSITION_TP);
+                ulong magic = PositionGetInteger(POSITION_MAGIC);
+                
+                // Check if position needs SL/TP management
+                bool needsManagement = false;
+                
+                // Case 1: No SL/TP set (common for manually opened positions)
+                if(currentSL == 0 && currentTP == 0)
+                {
+                    needsManagement = true;
+                    if(InpLogDebugInfo)
+                        LogRiskEvent("INFO", StringFormat("Position %d has no SL/TP - setting intelligent levels", ticket));
+                }
+                // Case 2: SL/TP set but too close (within 1 ATR) - adjust for better risk management
+                else if(currentSL != 0 || currentTP != 0)
+                {
+                    double minDistance = atrValue * 1.0; // Minimum 1 ATR distance
+                    double slDistance = (currentSL != 0) ? MathAbs(entryPrice - currentSL) : 0;
+                    double tpDistance = (currentTP != 0) ? MathAbs(currentTP - entryPrice) : 0;
+                    
+                    if(slDistance < minDistance || tpDistance < minDistance)
+                    {
+                        needsManagement = true;
+                        if(InpLogDebugInfo)
+                            LogRiskEvent("INFO", StringFormat("Position %d SL/TP too close - adjusting for better risk management", ticket));
+                    }
+                }
+                
+                if(needsManagement)
+                {
+                    bool isBuy = (type == POSITION_TYPE_BUY);
+                    if(SetIntelligentSLTP(ticket, isBuy, entryPrice))
+                    {
+                        managedCount++;
+                        if(InpLogDebugInfo)
+                            LogRiskEvent("SUCCESS", StringFormat("Position %d SL/TP set successfully", ticket));
+                    }
+                    else
+                    {
+                        LogRiskEvent("WARNING", StringFormat("Failed to set SL/TP for position %d", ticket));
+                    }
+                }
+            }
+        }
+    }
+    
+    if(managedCount > 0 && InpLogDebugInfo)
+    {
+        LogRiskEvent("INFO", StringFormat("Managed %d positions with intelligent SL/TP", managedCount));
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Set Intelligent Stop Loss and Take Profit for a Position         |
+//+------------------------------------------------------------------+
+bool CGrandeRiskManager::SetIntelligentSLTP(ulong ticket, bool isBuy, double entryPrice)
+{
+    if(!m_isInitialized) return false;
+    
+    double atrValue = CalculateATR();
+    if(atrValue <= 0) return false;
+    
+    // Calculate smart SL/TP levels
+    double stopLoss = CalculateSmartStopLoss(isBuy, entryPrice, atrValue);
+    double takeProfit = CalculateSmartTakeProfit(isBuy, entryPrice, stopLoss, atrValue);
+    
+    if(stopLoss <= 0 || takeProfit <= 0) return false;
+    
+    // Validate against broker requirements
+    double minStopLevel = SymbolInfoInteger(m_symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+    if(minStopLevel <= 0) minStopLevel = 50 * _Point; // Fallback minimum
+    
+    double currentPrice = (isBuy) ? SymbolInfoDouble(m_symbol, SYMBOL_BID) : SymbolInfoDouble(m_symbol, SYMBOL_ASK);
+    
+    // Validate SL distance
+    double slDistance = MathAbs(currentPrice - stopLoss);
+    if(slDistance < minStopLevel)
+    {
+        if(InpLogDebugInfo)
+            LogRiskEvent("WARNING", StringFormat("Calculated SL too close (%.5f < %.5f) - adjusting", slDistance, minStopLevel));
+        
+        // Adjust SL to meet minimum distance
+        if(isBuy)
+            stopLoss = currentPrice - minStopLevel;
+        else
+            stopLoss = currentPrice + minStopLevel;
+    }
+    
+    // Validate TP distance
+    double tpDistance = MathAbs(takeProfit - currentPrice);
+    if(tpDistance < minStopLevel)
+    {
+        if(InpLogDebugInfo)
+            LogRiskEvent("WARNING", StringFormat("Calculated TP too close (%.5f < %.5f) - adjusting", tpDistance, minStopLevel));
+        
+        // Adjust TP to meet minimum distance
+        if(isBuy)
+            takeProfit = currentPrice + minStopLevel;
+        else
+            takeProfit = currentPrice - minStopLevel;
+    }
+    
+    // Normalize prices to symbol digits
+    int digits = (int)SymbolInfoInteger(m_symbol, SYMBOL_DIGITS);
+    stopLoss = NormalizeDouble(stopLoss, digits);
+    takeProfit = NormalizeDouble(takeProfit, digits);
+    
+    // Modify position with new SL/TP
+    ResetLastError();
+    if(m_trade.PositionModify(ticket, stopLoss, takeProfit))
+    {
+        if(InpLogDebugInfo)
+        {
+            LogRiskEvent("SUCCESS", StringFormat("Position %d modified - SL: %.5f, TP: %.5f", 
+                          ticket, stopLoss, takeProfit));
+        }
+        return true;
+    }
+    else
+    {
+        int error = m_trade.ResultRetcode();
+        LogRiskEvent("ERROR", StringFormat("Failed to modify position %d. Error: %d", ticket, error));
+        return false;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Smart Stop Loss Based on Market Conditions             |
+//+------------------------------------------------------------------+
+double CGrandeRiskManager::CalculateSmartStopLoss(bool isBuy, double entryPrice, double atrValue)
+{
+    if(atrValue <= 0) return 0;
+    
+    // Base ATR multiplier for stop loss
+    double baseAtrMultiplier = m_config.sl_atr_multiplier;
+    
+    // Adjust based on market regime if available
+    // This could be enhanced with trend strength, volatility regime, etc.
+    double adjustedMultiplier = baseAtrMultiplier;
+    
+    // Calculate stop loss distance
+    double stopDistance = atrValue * adjustedMultiplier;
+    
+    // Calculate stop loss price
+    double stopLoss;
+    if(isBuy)
+    {
+        stopLoss = entryPrice - stopDistance;
+    }
+    else
+    {
+        stopLoss = entryPrice + stopDistance;
+    }
+    
+    return stopLoss;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Smart Take Profit Based on Risk-Reward and ATR         |
+//+------------------------------------------------------------------+
+double CGrandeRiskManager::CalculateSmartTakeProfit(bool isBuy, double entryPrice, double stopLoss, double atrValue)
+{
+    if(atrValue <= 0) return 0;
+    
+    // Calculate stop loss distance
+    double slDistance = MathAbs(entryPrice - stopLoss);
+    if(slDistance <= 0) return 0;
+    
+    // Use configurable reward-to-risk ratio
+    double rewardRiskRatio = m_config.tp_reward_ratio;
+    
+    // Calculate take profit distance
+    double tpDistance = slDistance * rewardRiskRatio;
+    
+    // Calculate take profit price
+    double takeProfit;
+    if(isBuy)
+    {
+        takeProfit = entryPrice + tpDistance;
+    }
+    else
+    {
+        takeProfit = entryPrice - tpDistance;
+    }
+    
+    return takeProfit;
+}
+
+//+------------------------------------------------------------------+
+//| Check if Position Already Has SL/TP Set                          |
+//+------------------------------------------------------------------+
+bool CGrandeRiskManager::IsPositionManaged(ulong ticket)
+{
+    if(!PositionSelectByTicket(ticket)) return false;
+    
+    double sl = PositionGetDouble(POSITION_SL);
+    double tp = PositionGetDouble(POSITION_TP);
+    
+    // Position is managed if both SL and TP are set
+    return (sl > 0 && tp > 0);
 }
 
 //+------------------------------------------------------------------+
