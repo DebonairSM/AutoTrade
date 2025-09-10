@@ -585,10 +585,12 @@ public:
             string strength = GetStrengthDescription(m_keyLevels[idx].strength);
             string volumeIcon = m_keyLevels[idx].volumeConfirmed ? "🔊" : "🔇";
             
+            double __pipSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+            if(__pipSize <= 0) __pipSize = _Point;
             LogInfo(StringFormat("│ %s %s %.5f │ %8s │ S:%.3f │ T:%2d │ %4dpips │ %s %s │", 
                    arrow, type, m_keyLevels[idx].price, strength,
                    m_keyLevels[idx].strength, m_keyLevels[idx].touchCount,
-                   (int)(distance / _Point), volumeIcon,
+                   (int)(distance / __pipSize), volumeIcon,
                    TimeToString(m_keyLevels[idx].lastTouch, TIME_DATE)));
         }
         
@@ -1020,72 +1022,72 @@ private:
             default: touchBase = MathMin(0.94 + ((level.touchCount - 7) * 0.005), 0.97);
         }
         
-        // Enhanced recency modifier
+        // Enhanced recency modifier (toned down to avoid saturation)
         int periodMinutes = PeriodSeconds(Period()) / 60;
         double barsElapsed = (double)(TimeCurrent() - level.lastTouch) / (periodMinutes * 60);
         double recencyMod = 0;
         
         if(barsElapsed <= m_lookbackPeriod / 10)      // Very recent
-            recencyMod = 0.35;
+            recencyMod = 0.20;
         else if(barsElapsed <= m_lookbackPeriod / 6)  // Recent
-            recencyMod = 0.25;
+            recencyMod = 0.14;
         else if(barsElapsed <= m_lookbackPeriod / 4)  // Moderately recent
-            recencyMod = 0.15;
+            recencyMod = 0.08;
         else if(barsElapsed <= m_lookbackPeriod / 2)  // Within half lookback
-            recencyMod = 0.05;
+            recencyMod = 0.02;
         else if(barsElapsed <= m_lookbackPeriod)      // Within lookback
-            recencyMod = 0;
+            recencyMod = 0.00;
         else                                          // Old
-            recencyMod = -0.65;
+            recencyMod = -0.45;
         
-        // Enhanced duration bonus
+        // Enhanced duration bonus (toned down)
         double barsDuration = (double)(level.lastTouch - level.firstTouch) / (periodMinutes * 60);
         double durationMod = 0;
         
         if(barsDuration >= m_lookbackPeriod * 0.8)      // Very long-lasting
-            durationMod = 0.40;
+            durationMod = 0.28;
         else if(barsDuration >= m_lookbackPeriod * 0.6) // Long-lasting
-            durationMod = 0.30;
-        else if(barsDuration >= m_lookbackPeriod / 3)   // Medium duration
             durationMod = 0.20;
+        else if(barsDuration >= m_lookbackPeriod / 3)   // Medium duration
+            durationMod = 0.12;
         else if(barsDuration >= m_lookbackPeriod / 6)   // Short duration
-            durationMod = 0.10;
+            durationMod = 0.05;
         
         // Enhanced quality bonus based on multiple factors
         double qualityBonus = 0;
         
         // Bounce consistency bonus
-        qualityBonus += quality.bounceConsistency * 0.12;
+        qualityBonus += quality.bounceConsistency * 0.08;
         
         // Clean bounces bonus
         if(quality.cleanBounces)
-            qualityBonus += 0.08;
+            qualityBonus += 0.05;
         
         // Touch spacing bonus (well-distributed touches)
         if(quality.touchSpacing > 5)
-            qualityBonus += 0.06;
+            qualityBonus += 0.04;
         
         // Bounce speed bonus
         if(quality.quickestBounce < INT_MAX && quality.slowestBounce > 0)
         {
             double avgBounceSpeed = (double)(quality.quickestBounce + quality.slowestBounce) / 2.0;
             double speedBonus = 1.0 - (avgBounceSpeed / m_maxBounceDelay);
-            qualityBonus += speedBonus * 0.05;
+            qualityBonus += speedBonus * 0.03;
         }
         
         // Timeframe relevance bonus
         double timeframeBonus = GetTimeframeRelevanceBonus();
         
         // Volume confirmation bonus (applied separately)
-        double volumeBonus = level.volumeConfirmed ? 0.08 : 0;
+        double volumeBonus = level.volumeConfirmed ? 0.05 : 0;
         
-        // Calculate final strength with all modifiers
-        double strength = touchBase * (1.0 + recencyMod + durationMod + qualityBonus + timeframeBonus + volumeBonus);
+        // Calculate final strength with additive modifiers to reduce saturation
+        double strength = touchBase + recencyMod + durationMod + qualityBonus + timeframeBonus + volumeBonus;
         
-        // Add small random variation to prevent identical strengths
-        strength += 0.0002 * MathMod((int)(level.price * 100000), 10) / 10;
+        // Add small deterministic variation to prevent identical strengths
+        strength += 0.0015 * (MathMod((int)(level.price * 100000.0), 13) / 13.0);
         
-        return MathMin(MathMax(strength, 0.40), 0.99);
+        return MathMin(MathMax(strength, 0.40), 0.97);
     }
     
     // Enhanced chart line creation with advanced visual properties
@@ -1260,6 +1262,8 @@ private:
         string firstTouchStr = (level.firstTouch > 0) ? TimeToString(level.firstTouch, TIME_DATE|TIME_MINUTES) : "Not Available";
         string lastTouchStr = (level.lastTouch > 0) ? TimeToString(level.lastTouch, TIME_DATE|TIME_MINUTES) : "Not Available";
         
+        double __pipSize2 = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+        if(__pipSize2 <= 0) __pipSize2 = _Point;
         return StringFormat(
             "%s LEVEL\n" +
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
@@ -1276,7 +1280,7 @@ private:
             level.price,
             level.strength, strengthDesc,
             level.touchCount,
-            (int)(distance / _Point),
+            (int)(distance / __pipSize2),
             firstTouchStr,
             lastTouchStr,
             volumeIcon, level.volumeRatio,
@@ -1758,11 +1762,13 @@ private:
     
     string GetStrengthDescription(double strength) const
     {
-        if(strength >= 0.90)      return "ULTIMATE";
-        else if(strength >= 0.80) return "VERY STRONG";
+        // Finer buckets to avoid everything reading as ULTIMATE
+        if(strength >= 0.92)      return "ELITE";
+        else if(strength >= 0.86) return "ULTIMATE";
+        else if(strength >= 0.78) return "VERY STRONG";
         else if(strength >= 0.70) return "STRONG";
-        else if(strength >= 0.60) return "MODERATE";
-        else if(strength >= 0.50) return "WEAK";
+        else if(strength >= 0.62) return "MODERATE";
+        else if(strength >= 0.52) return "WEAK";
         else                      return "VERY WEAK";
     }
     

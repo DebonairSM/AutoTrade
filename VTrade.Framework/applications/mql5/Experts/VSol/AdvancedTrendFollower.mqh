@@ -102,6 +102,7 @@ private:
     void MCP_UI_UpdatePanel();
     void UpdatePanelText(const string trendMode, const double adxValue, 
                         const bool h1Aligned, const bool h4Aligned, const bool d1Aligned);
+    bool EnsureSeriesReady(const ENUM_TIMEFRAMES tf);
 
 public:
     //+------------------------------------------------------------------+
@@ -533,78 +534,243 @@ void CAdvancedTrendFollower::ReleaseIndicatorHandles()
 bool CAdvancedTrendFollower::CopyIndicatorData()
 {
     ResetLastError();
+    // Ensure H1 series is synchronized and handles are ready
+    EnsureSeriesReady(PERIOD_H1);
+    if(m_emaFastH1Handle == INVALID_HANDLE || BarsCalculated(m_emaFastH1Handle) <= 0)
+    {
+        if(m_emaFastH1Handle != INVALID_HANDLE) IndicatorRelease(m_emaFastH1Handle);
+        m_emaFastH1Handle = iMA(_Symbol, PERIOD_H1, InpEmaFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
+    }
+    if(m_emaSlowH1Handle == INVALID_HANDLE || BarsCalculated(m_emaSlowH1Handle) <= 0)
+    {
+        if(m_emaSlowH1Handle != INVALID_HANDLE) IndicatorRelease(m_emaSlowH1Handle);
+        m_emaSlowH1Handle = iMA(_Symbol, PERIOD_H1, InpEmaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
+    }
+    if(m_emaPullbackH1Handle == INVALID_HANDLE || BarsCalculated(m_emaPullbackH1Handle) <= 0)
+    {
+        if(m_emaPullbackH1Handle != INVALID_HANDLE) IndicatorRelease(m_emaPullbackH1Handle);
+        m_emaPullbackH1Handle = iMA(_Symbol, PERIOD_H1, InpEmaPullbackPeriod, 0, MODE_EMA, PRICE_CLOSE);
+    }
+    if(m_macdH1Handle == INVALID_HANDLE || BarsCalculated(m_macdH1Handle) <= 0)
+    {
+        if(m_macdH1Handle != INVALID_HANDLE) IndicatorRelease(m_macdH1Handle);
+        m_macdH1Handle = iMACD(_Symbol, PERIOD_H1, InpMacdFastPeriod, InpMacdSlowPeriod, InpMacdSignalPeriod, PRICE_CLOSE);
+    }
+    if(m_rsiH1Handle == INVALID_HANDLE || BarsCalculated(m_rsiH1Handle) <= 0)
+    {
+        if(m_rsiH1Handle != INVALID_HANDLE) IndicatorRelease(m_rsiH1Handle);
+        m_rsiH1Handle = iRSI(_Symbol, PERIOD_H1, InpRsiPeriod, PRICE_CLOSE);
+    }
+    if(m_adxH1Handle == INVALID_HANDLE || BarsCalculated(m_adxH1Handle) <= 0)
+    {
+        if(m_adxH1Handle != INVALID_HANDLE) IndicatorRelease(m_adxH1Handle);
+        m_adxH1Handle = iADX(_Symbol, PERIOD_H1, InpAdxPeriod);
+    }
     
     // Copy H1 data (critical - always required)
     if(CopyBuffer(m_emaFastH1Handle, 0, 0, 2, m_emaFastH1) <= 0)
     {
         int error = GetLastError();
         MCP_LogError("Failed to copy EMA Fast H1 buffer. Error: " + IntegerToString(error));
-        return false;
+        if(error == 4807 || error == 4802)
+        {
+            // Recreate handle and retry once
+            if(m_emaFastH1Handle != INVALID_HANDLE) IndicatorRelease(m_emaFastH1Handle);
+            m_emaFastH1Handle = iMA(_Symbol, PERIOD_H1, InpEmaFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
+            ResetLastError();
+            if(CopyBuffer(m_emaFastH1Handle, 0, 0, 2, m_emaFastH1) <= 0)
+                return false;
+        }
+        else
+        {
+            return false;
+        }
     }
     if(CopyBuffer(m_emaSlowH1Handle, 0, 0, 2, m_emaSlowH1) <= 0)
     {
         int error = GetLastError();
         MCP_LogError("Failed to copy EMA Slow H1 buffer. Error: " + IntegerToString(error));
-        return false;
+        if(error == 4807 || error == 4802)
+        {
+            if(m_emaSlowH1Handle != INVALID_HANDLE) IndicatorRelease(m_emaSlowH1Handle);
+            m_emaSlowH1Handle = iMA(_Symbol, PERIOD_H1, InpEmaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
+            ResetLastError();
+            if(CopyBuffer(m_emaSlowH1Handle, 0, 0, 2, m_emaSlowH1) <= 0)
+                return false;
+        }
+        else
+        {
+            return false;
+        }
     }
     if(CopyBuffer(m_emaPullbackH1Handle, 0, 0, 2, m_emaPullbackH1) <= 0)
     {
         int error = GetLastError();
         MCP_LogError("Failed to copy EMA Pullback H1 buffer. Error: " + IntegerToString(error));
-        return false;
+        if(error == 4807 || error == 4802)
+        {
+            if(m_emaPullbackH1Handle != INVALID_HANDLE) IndicatorRelease(m_emaPullbackH1Handle);
+            m_emaPullbackH1Handle = iMA(_Symbol, PERIOD_H1, InpEmaPullbackPeriod, 0, MODE_EMA, PRICE_CLOSE);
+            ResetLastError();
+            if(CopyBuffer(m_emaPullbackH1Handle, 0, 0, 2, m_emaPullbackH1) <= 0)
+                return false;
+        }
+        else
+        {
+            return false;
+        }
     }
     if(CopyBuffer(m_macdH1Handle, MAIN_LINE, 0, 2, m_macdMainH1) <= 0)
     {
         int error = GetLastError();
         MCP_LogError("Failed to copy MACD Main H1 buffer. Error: " + IntegerToString(error));
-        return false;
+        if(error == 4807 || error == 4802)
+        {
+            if(m_macdH1Handle != INVALID_HANDLE) IndicatorRelease(m_macdH1Handle);
+            m_macdH1Handle = iMACD(_Symbol, PERIOD_H1, InpMacdFastPeriod, InpMacdSlowPeriod, InpMacdSignalPeriod, PRICE_CLOSE);
+            ResetLastError();
+            if(CopyBuffer(m_macdH1Handle, MAIN_LINE, 0, 2, m_macdMainH1) <= 0)
+                return false;
+        }
+        else
+        {
+            return false;
+        }
     }
     if(CopyBuffer(m_macdH1Handle, SIGNAL_LINE, 0, 2, m_macdSignalH1) <= 0)
     {
         int error = GetLastError();
         MCP_LogError("Failed to copy MACD Signal H1 buffer. Error: " + IntegerToString(error));
-        return false;
+        if(error == 4807 || error == 4802)
+        {
+            if(m_macdH1Handle != INVALID_HANDLE) IndicatorRelease(m_macdH1Handle);
+            m_macdH1Handle = iMACD(_Symbol, PERIOD_H1, InpMacdFastPeriod, InpMacdSlowPeriod, InpMacdSignalPeriod, PRICE_CLOSE);
+            ResetLastError();
+            if(CopyBuffer(m_macdH1Handle, SIGNAL_LINE, 0, 2, m_macdSignalH1) <= 0)
+                return false;
+        }
+        else
+        {
+            return false;
+        }
     }
     if(CopyBuffer(m_rsiH1Handle, 0, 0, 2, m_rsiH1) <= 0)
     {
         int error = GetLastError();
         MCP_LogError("Failed to copy RSI H1 buffer. Error: " + IntegerToString(error));
-        return false;
+        if(error == 4807 || error == 4802)
+        {
+            if(m_rsiH1Handle != INVALID_HANDLE) IndicatorRelease(m_rsiH1Handle);
+            m_rsiH1Handle = iRSI(_Symbol, PERIOD_H1, InpRsiPeriod, PRICE_CLOSE);
+            ResetLastError();
+            if(CopyBuffer(m_rsiH1Handle, 0, 0, 2, m_rsiH1) <= 0)
+                return false;
+        }
+        else
+        {
+            return false;
+        }
     }
     if(CopyBuffer(m_adxH1Handle, MAIN_LINE, 0, 2, m_adxH1) <= 0)
     {
         int error = GetLastError();
         MCP_LogError("Failed to copy ADX H1 buffer. Error: " + IntegerToString(error));
-        return false;
+        if(error == 4807 || error == 4802)
+        {
+            if(m_adxH1Handle != INVALID_HANDLE) IndicatorRelease(m_adxH1Handle);
+            m_adxH1Handle = iADX(_Symbol, PERIOD_H1, InpAdxPeriod);
+            ResetLastError();
+            if(CopyBuffer(m_adxH1Handle, MAIN_LINE, 0, 2, m_adxH1) <= 0)
+                return false;
+        }
+        else
+        {
+            return false;
+        }
     }
     
     // Copy H4 data (important but can continue if fails)
     bool h4DataOk = true;
+    EnsureSeriesReady(PERIOD_H4);
+    if(m_emaFastH4Handle == INVALID_HANDLE || BarsCalculated(m_emaFastH4Handle) <= 0)
+    {
+        if(m_emaFastH4Handle != INVALID_HANDLE) IndicatorRelease(m_emaFastH4Handle);
+        m_emaFastH4Handle = iMA(_Symbol, PERIOD_H4, InpEmaFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
+    }
     if(CopyBuffer(m_emaFastH4Handle, 0, 0, 2, m_emaFastH4) <= 0)
     {
         int error = GetLastError();
         MCP_LogError("Failed to copy EMA Fast H4 buffer. Error: " + IntegerToString(error));
-        h4DataOk = false;
+        if(error == 4807 || error == 4802)
+        {
+            if(m_emaFastH4Handle != INVALID_HANDLE) IndicatorRelease(m_emaFastH4Handle);
+            m_emaFastH4Handle = iMA(_Symbol, PERIOD_H4, InpEmaFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
+            ResetLastError();
+            if(CopyBuffer(m_emaFastH4Handle, 0, 0, 2, m_emaFastH4) <= 0)
+                h4DataOk = false;
+        }
+        else
+        {
+            h4DataOk = false;
+        }
+    }
+    if(m_emaSlowH4Handle == INVALID_HANDLE || BarsCalculated(m_emaSlowH4Handle) <= 0)
+    {
+        if(m_emaSlowH4Handle != INVALID_HANDLE) IndicatorRelease(m_emaSlowH4Handle);
+        m_emaSlowH4Handle = iMA(_Symbol, PERIOD_H4, InpEmaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
     }
     if(CopyBuffer(m_emaSlowH4Handle, 0, 0, 2, m_emaSlowH4) <= 0)
     {
         int error = GetLastError();
         MCP_LogError("Failed to copy EMA Slow H4 buffer. Error: " + IntegerToString(error));
-        h4DataOk = false;
+        if(error == 4807 || error == 4802)
+        {
+            if(m_emaSlowH4Handle != INVALID_HANDLE) IndicatorRelease(m_emaSlowH4Handle);
+            m_emaSlowH4Handle = iMA(_Symbol, PERIOD_H4, InpEmaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
+            ResetLastError();
+            if(CopyBuffer(m_emaSlowH4Handle, 0, 0, 2, m_emaSlowH4) <= 0)
+                h4DataOk = false;
+        }
+        else
+        {
+            h4DataOk = false;
+        }
+    }
+    if(m_adxH4Handle == INVALID_HANDLE || BarsCalculated(m_adxH4Handle) <= 0)
+    {
+        if(m_adxH4Handle != INVALID_HANDLE) IndicatorRelease(m_adxH4Handle);
+        m_adxH4Handle = iADX(_Symbol, PERIOD_H4, InpAdxPeriod);
     }
     if(CopyBuffer(m_adxH4Handle, MAIN_LINE, 0, 2, m_adxH4) <= 0)
     {
         int error = GetLastError();
         MCP_LogError("Failed to copy ADX H4 buffer. Error: " + IntegerToString(error));
-        h4DataOk = false;
+        if(error == 4807 || error == 4802)
+        {
+            if(m_adxH4Handle != INVALID_HANDLE) IndicatorRelease(m_adxH4Handle);
+            m_adxH4Handle = iADX(_Symbol, PERIOD_H4, InpAdxPeriod);
+            ResetLastError();
+            if(CopyBuffer(m_adxH4Handle, MAIN_LINE, 0, 2, m_adxH4) <= 0)
+                h4DataOk = false;
+        }
+        else
+        {
+            h4DataOk = false;
+        }
     }
     
     // Copy D1 data (optional - can continue if fails)
     bool d1DataOk = true;
+    EnsureSeriesReady(PERIOD_D1);
     
     // Check if D1 handles are valid before attempting to copy
     if(m_emaFastD1Handle != INVALID_HANDLE)
     {
+        if(m_emaFastD1Handle == INVALID_HANDLE || BarsCalculated(m_emaFastD1Handle) <= 0)
+        {
+            if(m_emaFastD1Handle != INVALID_HANDLE) IndicatorRelease(m_emaFastD1Handle);
+            m_emaFastD1Handle = iMA(_Symbol, PERIOD_D1, InpEmaFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
+        }
         if(CopyBuffer(m_emaFastD1Handle, 0, 0, 2, m_emaFastD1) <= 0)
         {
             int error = GetLastError();
@@ -616,6 +782,14 @@ bool CAdvancedTrendFollower::CopyIndicatorData()
             else
             {
                 MCP_LogError("Failed to copy EMA Fast D1 buffer. Error: " + IntegerToString(error));
+                if(error == 4807 || error == 4802)
+                {
+                    if(m_emaFastD1Handle != INVALID_HANDLE) IndicatorRelease(m_emaFastD1Handle);
+                    m_emaFastD1Handle = iMA(_Symbol, PERIOD_D1, InpEmaFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
+                    ResetLastError();
+                    if(CopyBuffer(m_emaFastD1Handle, 0, 0, 2, m_emaFastD1) <= 0)
+                        d1DataOk = false;
+                }
             }
             d1DataOk = false;
         }
@@ -627,6 +801,11 @@ bool CAdvancedTrendFollower::CopyIndicatorData()
     
     if(m_emaSlowD1Handle != INVALID_HANDLE)
     {
+        if(m_emaSlowD1Handle == INVALID_HANDLE || BarsCalculated(m_emaSlowD1Handle) <= 0)
+        {
+            if(m_emaSlowD1Handle != INVALID_HANDLE) IndicatorRelease(m_emaSlowD1Handle);
+            m_emaSlowD1Handle = iMA(_Symbol, PERIOD_D1, InpEmaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
+        }
         if(CopyBuffer(m_emaSlowD1Handle, 0, 0, 2, m_emaSlowD1) <= 0)
         {
             int error = GetLastError();
@@ -638,6 +817,14 @@ bool CAdvancedTrendFollower::CopyIndicatorData()
             else
             {
                 MCP_LogError("Failed to copy EMA Slow D1 buffer. Error: " + IntegerToString(error));
+                if(error == 4807 || error == 4802)
+                {
+                    if(m_emaSlowD1Handle != INVALID_HANDLE) IndicatorRelease(m_emaSlowD1Handle);
+                    m_emaSlowD1Handle = iMA(_Symbol, PERIOD_D1, InpEmaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
+                    ResetLastError();
+                    if(CopyBuffer(m_emaSlowD1Handle, 0, 0, 2, m_emaSlowD1) <= 0)
+                        d1DataOk = false;
+                }
             }
             d1DataOk = false;
         }
@@ -649,6 +836,11 @@ bool CAdvancedTrendFollower::CopyIndicatorData()
     
     if(m_adxD1Handle != INVALID_HANDLE)
     {
+        if(m_adxD1Handle == INVALID_HANDLE || BarsCalculated(m_adxD1Handle) <= 0)
+        {
+            if(m_adxD1Handle != INVALID_HANDLE) IndicatorRelease(m_adxD1Handle);
+            m_adxD1Handle = iADX(_Symbol, PERIOD_D1, InpAdxPeriod);
+        }
         if(CopyBuffer(m_adxD1Handle, MAIN_LINE, 0, 2, m_adxD1) <= 0)
         {
             int error = GetLastError();
@@ -660,6 +852,14 @@ bool CAdvancedTrendFollower::CopyIndicatorData()
             else
             {
                 MCP_LogError("Failed to copy ADX D1 buffer. Error: " + IntegerToString(error));
+                if(error == 4807 || error == 4802)
+                {
+                    if(m_adxD1Handle != INVALID_HANDLE) IndicatorRelease(m_adxD1Handle);
+                    m_adxD1Handle = iADX(_Symbol, PERIOD_D1, InpAdxPeriod);
+                    ResetLastError();
+                    if(CopyBuffer(m_adxD1Handle, MAIN_LINE, 0, 2, m_adxD1) <= 0)
+                        d1DataOk = false;
+                }
             }
             d1DataOk = false;
         }
@@ -907,3 +1107,21 @@ bool CAdvancedTrendFollower::IsD1DataAvailable()
 {
     return (m_isInitialized && ArraySize(m_emaFastD1) > 0 && ArraySize(m_emaSlowD1) > 0);
 } 
+
+//+------------------------------------------------------------------+
+//| Ensure a timeframe series is synchronized                         |
+//+------------------------------------------------------------------+
+bool CAdvancedTrendFollower::EnsureSeriesReady(const ENUM_TIMEFRAMES tf)
+{
+    // Preload a couple of bars to trigger history sync
+    MqlRates preload[2];
+    CopyRates(_Symbol, tf, 0, 2, preload);
+    int attempts = 0;
+    const int maxAttempts = 50;
+    while(!SeriesInfoInteger(_Symbol, tf, SERIES_SYNCHRONIZED) && attempts < maxAttempts)
+    {
+        Sleep(10);
+        attempts++;
+    }
+    return SeriesInfoInteger(_Symbol, tf, SERIES_SYNCHRONIZED);
+}

@@ -44,6 +44,15 @@ struct RiskConfig
     double partial_close_percent;   // % of position to close
     bool enable_breakeven;          // Enable breakeven stops
     double breakeven_buffer;        // Buffer above breakeven
+
+    // === Management Coordination ===
+    ENUM_TIMEFRAMES management_timeframe; // Only manage on this timeframe (if enabled)
+    bool manage_only_on_timeframe;        // Gate management to selected timeframe
+
+    // === Modify Dampening ===
+    double min_modify_pips;               // Minimum pips change to modify SL/TP
+    double min_modify_atr_fraction;       // Or fraction of ATR to consider material change
+    int    min_modify_cooldown_sec;       // Per-ticket cooldown between SL/TP modifies
 };
 
 //+------------------------------------------------------------------+
@@ -64,6 +73,9 @@ struct PositionInfo
     bool breakeven_set;             // Breakeven stop set
     bool partial_closed;            // Partial close executed
     double atr_at_open;             // ATR at position open
+    bool tp_lock;                   // Whether TP is locked from comment
+    double tp_lock_price;           // Locked TP price parsed from comment
+    datetime last_sltp_set_time;    // Last time SL/TP was successfully modified
 };
 
 //+------------------------------------------------------------------+
@@ -211,6 +223,13 @@ CGrandeRiskManager::CGrandeRiskManager()
     m_config.partial_close_percent = 50.0;
     m_config.enable_breakeven = true;
     m_config.breakeven_buffer = 0.5;
+    // Management coordination defaults
+    m_config.management_timeframe = PERIOD_H1;
+    m_config.manage_only_on_timeframe = false;
+    // Modify dampening defaults
+    m_config.min_modify_pips = 5.0;
+    m_config.min_modify_atr_fraction = 0.05;
+    m_config.min_modify_cooldown_sec = 120;
 }
 
 //+------------------------------------------------------------------+
@@ -588,6 +607,13 @@ void CGrandeRiskManager::OnTick()
 {
     if(!m_isInitialized) return;
     
+    // Optional management timeframe gate to reduce churn across multi-timeframe charts
+    if(m_config.manage_only_on_timeframe)
+    {
+        if(Period() != m_config.management_timeframe)
+            return;
+    }
+
     ResetLastError();
     
     // Update position information
@@ -628,13 +654,10 @@ void CGrandeRiskManager::OnTick()
                 // Smart Position Management - Set SL/TP for all open positions
                 // Rate limiting: only attempt position management every 10 seconds
                 static datetime lastPositionManagement = 0;
-                if(TimeCurrent() - lastPositionManagement >= 10)
+                if(TimeCurrent() - lastPositionManagement >= 60)
                 {
-                    ResetLastError();
+                    // Rely on internal logging within ManageAllPositions; avoid GetLastError-based warnings
                     ManageAllPositions();
-                    error = GetLastError();
-                    if(error != 0)
-                        Print("[GrandeRisk] WARNING: ManageAllPositions failed. Error: ", error);
                     
                     lastPositionManagement = TimeCurrent();
                 }
@@ -643,13 +666,11 @@ void CGrandeRiskManager::OnTick()
             {
                 // Rate limiting: only attempt breakeven updates every 5 seconds
                 static datetime lastBreakevenAttempt = 0;
-                if(TimeCurrent() - lastBreakevenAttempt >= 5)
+                if(TimeCurrent() - lastBreakevenAttempt >= 15)
                 {
-                    ResetLastError();
+                    // Rely on internal logging within UpdateBreakevenStops.
+                    // Do not use GetLastError() for trade modify outcomes here to avoid spurious warnings.
                     UpdateBreakevenStops();
-                    error = GetLastError();
-                    if(error != 0)
-                        Print("[GrandeRisk] WARNING: UpdateBreakevenStops failed. Error: ", error);
                     
                     lastBreakevenAttempt = TimeCurrent();
                 }
@@ -659,7 +680,7 @@ void CGrandeRiskManager::OnTick()
             {
                 // Rate limiting: only attempt trailing stop updates every 3 seconds
                 static datetime lastTrailingAttempt = 0;
-                if(TimeCurrent() - lastTrailingAttempt >= 3)
+                if(TimeCurrent() - lastTrailingAttempt >= 10)
                 {
                     ResetLastError();
                     UpdateTrailingStops();
@@ -734,6 +755,25 @@ void CGrandeRiskManager::UpdatePositionInfo()
                 pos.take_profit = PositionGetDouble(POSITION_TP);
                 pos.profit = PositionGetDouble(POSITION_PROFIT);
                 pos.time_open = (datetime)PositionGetInteger(POSITION_TIME);
+                pos.tp_lock = false;
+                pos.tp_lock_price = 0.0;
+                
+                // Parse TP lock from position comment if present (format: |TP_LOCK@<price>|...)
+                string posComment = PositionGetString(POSITION_COMMENT);
+                int idx = StringFind(posComment, "TP_LOCK@");
+                if(idx >= 0)
+                {
+                    int start = idx + (int)StringLen("TP_LOCK@");
+                    int end = StringFind(posComment, "|", start);
+                    string priceStr = (end >= 0) ? StringSubstr(posComment, start, end - start)
+                                                 : StringSubstr(posComment, start);
+                    double locked = StringToDouble(priceStr);
+                    if(locked > 0)
+                    {
+                        pos.tp_lock = true;
+                        pos.tp_lock_price = locked;
+                    }
+                }
                 
                 // Check if this is a new position
                 bool isNewPosition = true;
@@ -745,6 +785,7 @@ void CGrandeRiskManager::UpdatePositionInfo()
                         pos.breakeven_set = m_positions[j].breakeven_set;
                         pos.partial_closed = m_positions[j].partial_closed;
                         pos.atr_at_open = m_positions[j].atr_at_open;
+                        pos.last_sltp_set_time = m_positions[j].last_sltp_set_time;
                         break;
                     }
                 }
@@ -754,6 +795,7 @@ void CGrandeRiskManager::UpdatePositionInfo()
                     pos.breakeven_set = false;
                     pos.partial_closed = false;
                     pos.atr_at_open = CalculateATR();
+                    pos.last_sltp_set_time = 0;
                 }
                 
                 // CRITICAL FIX: Check if position is already at breakeven by comparing stop loss
@@ -791,6 +833,11 @@ bool CGrandeRiskManager::UpdateBreakevenStops()
 {
     if(!m_config.enable_breakeven) return false;
     
+    // Backoff window after market-closed errors to avoid repeated attempts
+    static datetime marketClosedBackoffUntil = 0;
+    if(TimeCurrent() < marketClosedBackoffUntil)
+        return false;
+
     double atrValue = CalculateATR();
     bool updated = false;
     
@@ -847,6 +894,19 @@ bool CGrandeRiskManager::UpdateBreakevenStops()
                               m_config.breakeven_buffer * _Point : 
                               -m_config.breakeven_buffer * _Point);
             
+            // Rationale logging: context for breakeven decision
+            if(InpLogDetailedInfo)
+            {
+                LogRiskEvent("INFO", StringFormat(
+                    "BREAKEVEN DECISION ticket=%d type=%s profitDist=%.*f breakevenDist=%.*f atr=%.*f beBuffer(pips)=%.1f",
+                    pos.ticket,
+                    (pos.type==POSITION_TYPE_BUY?"BUY":"SELL"),
+                    _Digits, profitDistance,
+                    _Digits, breakevenDistance,
+                    _Digits, atrValue,
+                    m_config.breakeven_buffer/_Point));
+            }
+
             // Validate stop level before attempting modification
             double currentBid = SymbolInfoDouble(m_symbol, SYMBOL_BID);
             double currentAsk = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
@@ -859,8 +919,13 @@ bool CGrandeRiskManager::UpdateBreakevenStops()
                 // Rate limit warning logs
                 if(TimeCurrent() - lastBreakevenLog >= 30 || lastBreakevenTicket != pos.ticket)
                 {
-                    LogRiskEvent("WARNING", StringFormat("Stop level too close for ticket %d. Required: %.5f, Actual: %.5f", 
-                                  pos.ticket, minStopDistance, stopDistance));
+                    LogRiskEvent("WARNING", StringFormat(
+                        "BREAKEVEN SKIP stop too close ticket=%d required=%.*f actual=%.*f price=%.*f newSL=%.*f",
+                        pos.ticket,
+                        _Digits, minStopDistance,
+                        _Digits, stopDistance,
+                        _Digits, currentPrice,
+                        _Digits, newStopLoss));
                     lastBreakevenLog = TimeCurrent();
                     lastBreakevenTicket = pos.ticket;
                 }
@@ -883,12 +948,24 @@ bool CGrandeRiskManager::UpdateBreakevenStops()
                 // Rate limit warning logs
                 if(TimeCurrent() - lastBreakevenLog >= 30 || lastBreakevenTicket != pos.ticket)
                 {
-                    LogRiskEvent("WARNING", StringFormat("Invalid stop direction for ticket %d. Stop: %.5f, Price: %.5f", 
-                                  pos.ticket, newStopLoss, currentPrice));
+                    LogRiskEvent("WARNING", StringFormat(
+                        "BREAKEVEN SKIP invalid direction ticket=%d stop=%.*f price=%.*f type=%s",
+                        pos.ticket,
+                        _Digits, newStopLoss,
+                        _Digits, currentPrice,
+                        (pos.type==POSITION_TYPE_BUY?"BUY":"SELL")));
                     lastBreakevenLog = TimeCurrent();
                     lastBreakevenTicket = pos.ticket;
                 }
                 continue; // Skip this position, try again later
+            }
+            
+            // No-op guard: skip modify if stop wouldn't change materially
+            if(pos.stop_loss > 0 && MathAbs(pos.stop_loss - newStopLoss) < 5*_Point)
+            {
+                pos.breakeven_set = true;
+                m_positions[i] = pos;
+                continue;
             }
             
             // Attempt to modify position with validated stop level
@@ -898,7 +975,13 @@ bool CGrandeRiskManager::UpdateBreakevenStops()
                 pos.breakeven_set = true;
                 updated = true;
                 
-                LogRiskEvent("BREAKEVEN_SET", StringFormat("Ticket %d moved to breakeven at %.5f", pos.ticket, newStopLoss));
+                LogRiskEvent("BREAKEVEN_SET", StringFormat(
+                    "ticket=%d sl=%.*f tp=%.*f rr=%.2f reason=profit>=beDist",
+                    pos.ticket,
+                    _Digits, newStopLoss,
+                    _Digits, pos.take_profit,
+                    (pos.take_profit>0 && newStopLoss>0 ?
+                        MathAbs(pos.take_profit-pos.price_open)/MathAbs(pos.price_open-newStopLoss):0.0)));
                 
                 // Update the position in the array
                 m_positions[i] = pos;
@@ -906,14 +989,31 @@ bool CGrandeRiskManager::UpdateBreakevenStops()
             else
             {
                 int error = m_trade.ResultRetcode();
-                LogRiskEvent("ERROR", StringFormat("Failed to modify ticket %d. Error: %d", pos.ticket, error));
-                
-                // If it's an invalid stops error, mark as breakeven_set to prevent infinite retries
-                if(error == 4756) // ERR_TRADE_INVALID_STOPS
+                // Treat benign retcodes as non-errors
+                if(error == 10025) { /* no change */ }
+                else if(error == 4756) // invalid stops from server side, likely distance/freeze level
                 {
-                    pos.breakeven_set = true; // Prevent further attempts
-                    m_positions[i] = pos;
-                    LogRiskEvent("WARNING", StringFormat("Marked ticket %d as breakeven_set to prevent retries", pos.ticket));
+                    // Do not mark breakeven_set permanently; we will retry later when distance allows
+                    if(InpLogDebugInfo)
+                        LogRiskEvent("WARNING", StringFormat(
+                            "BREAKEVEN FAIL invalid stops ticket=%d ret=%d bid=%.*f ask=%.*f newSL=%.*f",
+                            pos.ticket, error,
+                            _Digits, currentBid,
+                            _Digits, currentAsk,
+                            _Digits, newStopLoss));
+                }
+                else if(error == 10018) // TRADE_RETCODE_MARKET_CLOSED
+                {
+                    // Back off for 15 minutes to avoid log spam while market is closed
+                    marketClosedBackoffUntil = TimeCurrent() + 900;
+                }
+                else
+                {
+                    LogRiskEvent("ERROR", StringFormat(
+                        "BREAKEVEN FAIL modify ticket=%d err=%d newSL=%.*f tp=%.*f",
+                        pos.ticket, error,
+                        _Digits, newStopLoss,
+                        _Digits, pos.take_profit));
                 }
             }
         }
@@ -929,6 +1029,11 @@ bool CGrandeRiskManager::UpdateTrailingStops()
 {
     if(!m_config.enable_trailing_stop) return false;
     
+    // Backoff window after market-closed errors to avoid repeated attempts
+    static datetime marketClosedBackoffUntil = 0;
+    if(TimeCurrent() < marketClosedBackoffUntil)
+        return false;
+
     double atrValue = CalculateATR();
     bool updated = false;
     
@@ -956,18 +1061,35 @@ bool CGrandeRiskManager::UpdateTrailingStops()
         if(pos.type == POSITION_TYPE_BUY)
         {
             newStopLoss = pos.price_current - trailingDistance;
-            // Only update if new stop is significantly better (at least 1 pip improvement)
-            shouldUpdate = (newStopLoss > pos.stop_loss + _Point);
+            // Only update if new stop is significantly better
+            double minImprovement = MathMax(10*_Point, 0.25 * atrValue);
+            shouldUpdate = (newStopLoss > pos.stop_loss + minImprovement);
         }
         else
         {
             newStopLoss = pos.price_current + trailingDistance;
-            // Only update if new stop is significantly better (at least 1 pip improvement)
-            shouldUpdate = (newStopLoss < pos.stop_loss - _Point);
+            // Only update if new stop is significantly better
+            double minImprovement = MathMax(10*_Point, 0.25 * atrValue);
+            shouldUpdate = (newStopLoss < pos.stop_loss - minImprovement);
         }
         
         if(shouldUpdate)
         {
+            // Rationale logging: context for trailing decision
+            if(InpLogDetailedInfo)
+            {
+                LogRiskEvent("INFO", StringFormat(
+                    "TRAIL DECISION ticket=%d type=%s price=%.*f prevSL=%.*f newSL=%.*f trailDist(ATR*%.2f)=%.*f minImprove=%.*f",
+                    pos.ticket,
+                    (pos.type==POSITION_TYPE_BUY?"BUY":"SELL"),
+                    _Digits, pos.price_current,
+                    _Digits, pos.stop_loss,
+                    _Digits, newStopLoss,
+                    m_config.trailing_atr_multiplier,
+                    _Digits, trailingDistance,
+                    _Digits, MathMax(10*_Point, 0.25 * atrValue)));
+            }
+
             // Validate stop level before attempting modification
             double currentBid = SymbolInfoDouble(m_symbol, SYMBOL_BID);
             double currentAsk = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
@@ -1018,7 +1140,13 @@ bool CGrandeRiskManager::UpdateTrailingStops()
                 pos.stop_loss = newStopLoss;
                 updated = true;
                 
-                LogRiskEvent("TRAILING_UPDATE", StringFormat("Ticket %d trailing stop updated to %.5f", pos.ticket, newStopLoss));
+                LogRiskEvent("TRAILING_UPDATE", StringFormat(
+                    "ticket=%d sl=%.*f tp=%.*f rr=%.2f",
+                    pos.ticket,
+                    _Digits, newStopLoss,
+                    _Digits, pos.take_profit,
+                    (pos.take_profit>0 && newStopLoss>0 ?
+                        MathAbs(pos.take_profit-pos.price_open)/MathAbs(pos.price_open-newStopLoss):0.0)));
                 
                 // Update the position in the array
                 m_positions[i] = pos;
@@ -1026,12 +1154,29 @@ bool CGrandeRiskManager::UpdateTrailingStops()
             else
             {
                 int error = m_trade.ResultRetcode();
-                LogRiskEvent("ERROR", StringFormat("Failed to modify trailing stop for ticket %d. Error: %d", pos.ticket, error));
-                
-                // If it's an invalid stops error, log but don't prevent future attempts
-                if(error == 4756) // ERR_TRADE_INVALID_STOPS
+                if(error == 10025) { /* no change */ }
+                else if(error == 4756)
                 {
-                    LogRiskEvent("WARNING", StringFormat("Invalid trailing stop for ticket %d, will retry later", pos.ticket));
+                    if(InpLogDebugInfo)
+                        LogRiskEvent("WARNING", StringFormat(
+                            "TRAIL FAIL invalid stops ticket=%d bid=%.*f ask=%.*f newSL=%.*f",
+                            pos.ticket,
+                            _Digits, currentBid,
+                            _Digits, currentAsk,
+                            _Digits, newStopLoss));
+                }
+                else if(error == 10018) // TRADE_RETCODE_MARKET_CLOSED
+                {
+                    // Back off for 15 minutes to avoid repeated attempts
+                    marketClosedBackoffUntil = TimeCurrent() + 900;
+                }
+                else
+                {
+                    LogRiskEvent("ERROR", StringFormat(
+                        "TRAIL FAIL modify ticket=%d err=%d newSL=%.*f tp=%.*f",
+                        pos.ticket, error,
+                        _Digits, newStopLoss,
+                        _Digits, pos.take_profit));
                 }
             }
         }
@@ -1094,6 +1239,20 @@ bool CGrandeRiskManager::ExecutePartialCloses()
         {
             double closeVolume = pos.volume * m_config.partial_close_percent / 100.0;
             
+            // Rationale logging: context for partial close decision
+            if(InpLogDetailedInfo)
+            {
+                LogRiskEvent("INFO", StringFormat(
+                    "PARTIAL DECISION ticket=%d type=%s profitDist=%.*f threshold(ATR*%.2f)=%.*f vol=%.2f%% closeVol=%.2f",
+                    pos.ticket,
+                    (pos.type==POSITION_TYPE_BUY?"BUY":"SELL"),
+                    _Digits, profitDistance,
+                    m_config.partial_close_atr,
+                    _Digits, partialDistance,
+                    m_config.partial_close_percent,
+                    closeVolume));
+            }
+
             // Validate volume before attempting partial close
             if(closeVolume < minLot)
             {
@@ -1136,8 +1295,13 @@ bool CGrandeRiskManager::ExecutePartialCloses()
                 pos.partial_closed = true;
                 executed = true;
                 
-                LogRiskEvent("PARTIAL_CLOSE", StringFormat("Ticket %d partial close %.5f lots", 
-                           pos.ticket, closeVolume));
+                LogRiskEvent("PARTIAL_CLOSE", StringFormat(
+                    "ticket=%d closed=%.2f lots remain=%.2f rr=%.2f",
+                    pos.ticket,
+                    closeVolume,
+                    MathMax(0.0, pos.volume - closeVolume),
+                    (pos.take_profit>0 && pos.stop_loss>0 ?
+                        MathAbs(pos.take_profit-pos.price_open)/MathAbs(pos.price_open-pos.stop_loss):0.0)));
                 
                 // Update the position in the array
                 m_positions[i] = pos;
@@ -1145,8 +1309,9 @@ bool CGrandeRiskManager::ExecutePartialCloses()
             else
             {
                 int error = m_trade.ResultRetcode();
-                LogRiskEvent("ERROR", StringFormat("Failed partial close for ticket %d. Error: %d, Volume: %.5f", 
-                              pos.ticket, error, closeVolume));
+                LogRiskEvent("ERROR", StringFormat(
+                    "PARTIAL FAIL ticket=%d err=%d volume=%.2f",
+                    pos.ticket, error, closeVolume));
                 
                 // If it's an invalid stops error, mark as partial_closed to prevent infinite retries
                 if(error == 4756) // ERR_TRADE_INVALID_STOPS
@@ -1248,6 +1413,32 @@ bool CGrandeRiskManager::SetIntelligentSLTP(ulong ticket, bool isBuy, double ent
     double atrValue = CalculateATR();
     if(atrValue <= 0) return false;
     
+    // Read current TP and check for TP lock from comment
+    bool preserveTP = false;
+    double currentTP = 0.0;
+    double currentSL = 0.0;
+    if(PositionSelectByTicket(ticket))
+    {
+        currentTP = PositionGetDouble(POSITION_TP);
+        currentSL = PositionGetDouble(POSITION_SL);
+        string posComment = PositionGetString(POSITION_COMMENT);
+        int idx = StringFind(posComment, "TP_LOCK@");
+        if(idx >= 0)
+        {
+            int start = idx + (int)StringLen("TP_LOCK@");
+            int end = StringFind(posComment, "|", start);
+            string priceStr = (end >= 0) ? StringSubstr(posComment, start, end - start)
+                                         : StringSubstr(posComment, start);
+            double locked = StringToDouble(priceStr);
+            if(locked > 0)
+            {
+                preserveTP = true;
+                // If current TP is not set use the locked value from comment
+                if(currentTP <= 0) currentTP = locked;
+            }
+        }
+    }
+    
     // Calculate smart SL/TP levels
     double stopLoss = CalculateSmartStopLoss(isBuy, entryPrice, atrValue);
     double takeProfit = CalculateSmartTakeProfit(isBuy, entryPrice, stopLoss, atrValue);
@@ -1288,25 +1479,84 @@ bool CGrandeRiskManager::SetIntelligentSLTP(ulong ticket, bool isBuy, double ent
             takeProfit = currentPrice - minStopLevel;
     }
     
+    // Respect TP lock: do not overwrite TP if lock present
+    if(preserveTP && currentTP > 0)
+    {
+        takeProfit = currentTP;
+    }
+    
     // Normalize prices to symbol digits
     int digits = (int)SymbolInfoInteger(m_symbol, SYMBOL_DIGITS);
     stopLoss = NormalizeDouble(stopLoss, digits);
     takeProfit = NormalizeDouble(takeProfit, digits);
     
+    // Material-change dampening: use pips or fraction of ATR and cooldown
+    double pipDeltaSL = MathAbs(currentSL - stopLoss) / _Point;
+    double pipDeltaTP = MathAbs(currentTP - takeProfit) / _Point;
+    double minPips = MathMax(1.0, m_config.min_modify_pips);
+    double minAtr = MathMax(0.0, m_config.min_modify_atr_fraction) * atrValue;
+    bool belowPipThreshold = (currentSL > 0 && pipDeltaSL < minPips) && (currentTP > 0 && pipDeltaTP < minPips);
+    bool belowAtrThreshold = (currentSL > 0 && MathAbs(currentSL - stopLoss) < minAtr) && (currentTP > 0 && MathAbs(currentTP - takeProfit) < minAtr);
+    bool withinCooldown = false;
+    // Determine last set time from tracked positions
+    for(int i=0;i<m_positionCount;i++){
+        if(m_positions[i].ticket==ticket){
+            withinCooldown = (TimeCurrent() - m_positions[i].last_sltp_set_time) < m_config.min_modify_cooldown_sec;
+            break;
+        }
+    }
+    if((belowPipThreshold || belowAtrThreshold) || withinCooldown)
+    {
+        if(InpLogDebugInfo)
+            LogRiskEvent("INFO", StringFormat(
+                "SLTP SKIP ticket=%d pipDeltaSL=%.1f pipDeltaTP=%.1f minPips=%.1f atr=%.5f minAtr=%.5f cooldown=%ds",
+                ticket, pipDeltaSL, pipDeltaTP, minPips, atrValue, minAtr, m_config.min_modify_cooldown_sec));
+        return true; // treat as success to avoid retries
+    }
+
     // Modify position with new SL/TP
     ResetLastError();
     if(m_trade.PositionModify(ticket, stopLoss, takeProfit))
     {
-        if(InpLogDebugInfo)
+        // Always-on concise rationale summary for SL/TP modify
+        // Suppress duplicate log lines if effectively unchanged
+        static double lastLoggedSL = 0.0;
+        static double lastLoggedTP = 0.0;
+        bool materiallyChangedForLog = (MathAbs(lastLoggedSL - stopLoss) >= 1*_Point) || (MathAbs(lastLoggedTP - takeProfit) >= 1*_Point);
+        if(materiallyChangedForLog)
         {
+            Print(StringFormat("[SLTP] SET ticket=%I64u side=%s entry=%.*f SL=%.*f TP=%.*f rr=%.2f",
+                           ticket,
+                           (isBuy?"BUY":"SELL"),
+                           _Digits, entryPrice,
+                           _Digits, stopLoss,
+                           _Digits, takeProfit,
+                           (MathAbs(takeProfit-entryPrice)/MathMax(1e-10, MathAbs(entryPrice-stopLoss)))));
+            lastLoggedSL = stopLoss;
+            lastLoggedTP = takeProfit;
+        }
+        if(InpLogDebugInfo)
             LogRiskEvent("SUCCESS", StringFormat("Position %d modified - SL: %.5f, TP: %.5f", 
                           ticket, stopLoss, takeProfit));
+        // Update last set time
+        for(int i=0;i<m_positionCount;i++){
+            if(m_positions[i].ticket==ticket){
+                m_positions[i].last_sltp_set_time = TimeCurrent();
+                break;
+            }
         }
         return true;
     }
     else
     {
         int error = m_trade.ResultRetcode();
+        if(error == 10025)
+        {
+            // No changes; benign outcome
+            if(InpLogDebugInfo)
+                LogRiskEvent("INFO", StringFormat("Ticket %d modify returned NO_CHANGES", ticket));
+            return true;
+        }
         LogRiskEvent("ERROR", StringFormat("Failed to modify position %d. Error: %d", ticket, error));
         return false;
     }
@@ -1618,11 +1868,59 @@ double CGrandeRiskManager::CalculateATRFallback()
 //+------------------------------------------------------------------+
 void CGrandeRiskManager::LogRiskEvent(const string &event, const string &details)
 {
-    string logMessage = StringFormat("[GrandeRisk] %s", event);
-    if(details != "")
-        logMessage += ": " + details;
-    
-    Print(logMessage);
+    // Classify event severity
+    bool isCritical = (StringFind(event, "CRITICAL") == 0);
+    bool isError    = (StringFind(event, "ERROR") == 0);
+    bool isWarning  = (event == "WARNING");
+    bool isMaxPos   = (event == "MAX_POSITIONS");
+    bool isInfoLike = (event == "INFO" || event == "SUCCESS" || event == "BREAKEVEN_SET" ||
+                       event == "TRAILING_UPDATE" || event == "POSITION_CLOSED" ||
+                       event == "ALL_POSITIONS_CLOSED" || event == "CONFIG_UPDATED" ||
+                       event == "EQUITY_PEAK_RESET" || event == "PARTIAL_CLOSE");
+
+    static datetime lastInfoLog = 0;
+    static datetime lastWarnLog = 0;
+    static datetime lastMaxPosLog = 0;
+
+    // Always log critical and errors immediately
+    if(isCritical || isError)
+    {
+        string msg = StringFormat("[GrandeRisk] %s", event);
+        if(details != "") msg += ": " + details;
+        Print(msg);
+        return;
+    }
+
+    // Throttle MAX_POSITIONS messages to at most once per 60s
+    if(isMaxPos)
+    {
+        if(TimeCurrent() - lastMaxPosLog < 60) return;
+        lastMaxPosLog = TimeCurrent();
+        string msg = StringFormat("[GrandeRisk] %s", event);
+        if(details != "") msg += ": " + details;
+        Print(msg);
+        return;
+    }
+
+    // Warnings: only when debug enabled and rate-limited (30s)
+    if(isWarning)
+    {
+        if(!InpLogDebugInfo) return;
+        if(TimeCurrent() - lastWarnLog < 30) return;
+        lastWarnLog = TimeCurrent();
+        string msg = StringFormat("[GrandeRisk] %s", event);
+        if(details != "") msg += ": " + details;
+        Print(msg);
+        return;
+    }
+
+    // Info-like events (including breakeven/trailing updates): debug-only and lightly rate-limited
+    if(!InpLogDebugInfo) return;
+    if(TimeCurrent() - lastInfoLog < 10) return;
+    lastInfoLog = TimeCurrent();
+    string msg = StringFormat("[GrandeRisk] %s", event);
+    if(details != "") msg += ": " + details;
+    Print(msg);
 }
 
 //+------------------------------------------------------------------+

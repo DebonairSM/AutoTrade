@@ -37,6 +37,7 @@ input group "=== Trading Settings ==="
 input bool   InpEnableTrading = true;           // Enable Live Trading
 input int    InpMagicNumber = 123456;            // Magic Number for Trades
 input int    InpSlippage = 30;                   // Slippage in Points
+input string InpOrderTag = "[GRANDE]";           // Order comment tag for identification
 
 input group "=== Risk Management Settings ==="
 input double InpRiskPctTrend = 2.5;              // Risk % for Trend Trades
@@ -60,6 +61,11 @@ input double InpTrailingATRMultiplier = 0.8;     // Trailing Stop ATR Multiplier
 input bool   InpEnablePartialCloses = true;      // Enable Partial Profit Taking
 input double InpPartialClosePercent = 50.0;      // % of Position to Close
 input bool   InpEnableBreakeven = true;          // Enable Breakeven Stops
+input ENUM_TIMEFRAMES InpManagementTimeframe = PERIOD_H1; // Only manage on this TF when gated
+input bool   InpManageOnlyOnTimeframe = true;    // Gate management to InpManagementTimeframe
+input double InpMinModifyPips = 7.0;             // Min pips change to modify SL/TP
+input double InpMinModifyATRFraction = 0.07;     // Fraction of ATR for material change
+input int    InpMinModifyCooldownSec = 180;      // Cooldown between SL/TP modifies
 
 input group "=== Signal Settings ==="
 input int    InpEMA50Period = 50;                // 50 EMA Period
@@ -98,6 +104,7 @@ input bool   InpLogDebugInfo = false;            // Log Debug Information (Risk 
 input group "=== Update Settings ==="
 input int    InpRegimeUpdateSeconds = 5;         // Regime Update Interval (seconds)
 input int    InpKeyLevelUpdateSeconds = 300;     // Key Level Update Interval (seconds)
+input int    InpRiskUpdateSeconds   = 2;         // Risk Update Interval (seconds)
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                 |
@@ -113,6 +120,7 @@ datetime                      g_lastRegimeUpdate;
 datetime                      g_lastKeyLevelUpdate;
 datetime                      g_lastDisplayUpdate;
 long                          g_chartID;
+datetime                      g_lastRiskUpdate;
 
 // Chart object names
 const string REGIME_BACKGROUND_NAME = "GrandeRegimeBackground";
@@ -167,6 +175,11 @@ int OnInit()
     g_riskConfig.partial_close_percent = InpPartialClosePercent;
     g_riskConfig.enable_breakeven = InpEnableBreakeven;
     g_riskConfig.breakeven_buffer = InpBreakevenBuffer;
+    g_riskConfig.management_timeframe = InpManagementTimeframe;
+    g_riskConfig.manage_only_on_timeframe = InpManageOnlyOnTimeframe;
+    g_riskConfig.min_modify_pips = InpMinModifyPips;
+    g_riskConfig.min_modify_atr_fraction = InpMinModifyATRFraction;
+    g_riskConfig.min_modify_cooldown_sec = InpMinModifyCooldownSec;
     
     // Configure regime detection settings
     g_regimeConfig.adx_trend_threshold = InpADXTrendThreshold;
@@ -285,12 +298,13 @@ int OnInit()
     SetupChartDisplay();
     
     // Set timer for updates
-    EventSetTimer(MathMin(InpRegimeUpdateSeconds, InpKeyLevelUpdateSeconds));
+    EventSetTimer(MathMin(MathMin(InpRegimeUpdateSeconds, InpKeyLevelUpdateSeconds), InpRiskUpdateSeconds));
     
     // Initialize update times
     g_lastRegimeUpdate = 0;
     g_lastKeyLevelUpdate = 0;
     g_lastDisplayUpdate = 0;
+    g_lastRiskUpdate = 0;
     
     // Initial analysis
     PerformInitialAnalysis();
@@ -363,58 +377,11 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-    // Comprehensive error handling for OnTick
-    ResetLastError();
-    
+    // Minimize OnTick work and avoid any logging or trade/risk operations here.
     // Check if trading is allowed
     if(!MQLInfoInteger(MQL_TRADE_ALLOWED) || !InpEnableTrading)
         return;
-    
-    // Update risk manager with error handling
-    if(g_riskManager != NULL)
-    {
-        ResetLastError();
-        g_riskManager.OnTick();
-        
-        int error = GetLastError();
-        if(error != 0)
-        {
-            Print("[Grande] ERROR: Risk manager OnTick failed. Error: ", error);
-            Print("[Grande] CRITICAL: Risk manager error, stopping trading for this tick");
-            return;
-        }
-        
-        // Check if trading is still enabled after risk checks
-        if(!g_riskManager.IsTradingEnabled())
-            return;
-    }
-    
-    // Lightweight tick processing with error handling
-    if(g_regimeDetector != NULL)
-    {
-        ResetLastError();
-        g_regimeDetector.UpdateRegime();
-        
-        int error = GetLastError();
-        if(error != 0)
-        {
-            Print("[Grande] ERROR: Regime detection failed. Error: ", error);
-            Print("[Grande] WARNING: Skipping trading logic for this tick due to regime detection error");
-            return;
-        }
-        
-        // Execute trading logic based on current regime with error handling
-        ResetLastError();
-        RegimeSnapshot currentRegime = g_regimeDetector.GetLastSnapshot();
-        ExecuteTradeLogic(currentRegime);
-        
-        error = GetLastError();
-        if(error != 0)
-        {
-            Print("[Grande] ERROR: Trade logic execution failed. Error: ", error);
-            Print("[Grande] WARNING: Trade logic error occurred but continuing");
-        }
-    }
+    // All periodic updates are handled in OnTimer to prevent per-tick thrashing
 }
 
 //+------------------------------------------------------------------+
@@ -423,6 +390,20 @@ void OnTick()
 void OnTimer()
 {
     datetime currentTime = TimeCurrent();
+    
+    // Periodic risk manager updates (trailing stop, breakeven, etc.)
+    if(g_riskManager != NULL && currentTime - g_lastRiskUpdate >= InpRiskUpdateSeconds)
+    {
+        ResetLastError();
+        g_riskManager.OnTick();
+        // Do not log on timer by default; optional debug only
+        int rmError = GetLastError();
+        if(rmError == 0 && !g_riskManager.IsTradingEnabled())
+        {
+            // Trading disabled by risk checks; simply skip further actions this cycle
+        }
+        g_lastRiskUpdate = currentTime;
+    }
     
     // Update regime detection
     if(g_regimeDetector != NULL && 
@@ -441,6 +422,11 @@ void OnTimer()
                 lastLoggedRegime = currentRegime.regime;
             }
         }
+
+        // Execute trading logic periodically based on current regime (no tick-level execution)
+        ResetLastError();
+        ExecuteTradeLogic(currentRegime);
+        // Swallow non-critical errors silently to avoid log spam
     }
     
     // Update key level detection
@@ -473,6 +459,19 @@ void OnTimer()
         UpdateDisplayElements();
         g_lastDisplayUpdate = currentTime;
     }
+
+    // Auto-hide startup panel after expiry
+    const string STARTUP_PANEL_NAME = "GrandeStartupSnapshotPanel";
+    if(ObjectFind(g_chartID, STARTUP_PANEL_NAME) >= 0)
+    {
+        string expireStr = ObjectGetString(g_chartID, STARTUP_PANEL_NAME, OBJPROP_TOOLTIP);
+        if(StringLen(expireStr) > 0)
+        {
+            long expire = (long)StringToInteger(expireStr);
+            if(TimeCurrent() >= (datetime)expire)
+                ObjectDelete(g_chartID, STARTUP_PANEL_NAME);
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -488,7 +487,14 @@ void SetupChartDisplay()
 }
 
 //+------------------------------------------------------------------+
-//| Perform initial analysis                                         |
+//| Forward declarations                                              |
+//+------------------------------------------------------------------+
+void ShowStartupSnapshot();
+bool FindNearestKeyLevels(const double currentPrice, SKeyLevel &outSupport, SKeyLevel &outResistance);
+string BuildGoldenNugget(const RegimeSnapshot &rs, const SKeyLevel &support, const SKeyLevel &resistance);
+
+//+------------------------------------------------------------------+
+//| Perform initial analysis                                          |
 //+------------------------------------------------------------------+
 void PerformInitialAnalysis()
 {
@@ -525,6 +531,9 @@ void PerformInitialAnalysis()
     
     // Ensure chart redraws
     ChartRedraw(g_chartID);
+
+    // Show startup snapshot with actionable insights
+    ShowStartupSnapshot();
 }
 
 //+------------------------------------------------------------------+
@@ -1334,7 +1343,76 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
         tp = TakeProfit_TREND(bullish, rs);
     }
     
-    string comment = StringFormat("Trend-%s", bullish ? "BULL" : "BEAR");
+    // Cap TP at nearest STRONG key level (leave a buffer) and mark TP lock in comment
+    string tpLockTag = "";
+    {
+        int levelCount = (g_keyLevelDetector != NULL ? g_keyLevelDetector.GetKeyLevelCount() : 0);
+        if(levelCount > 0)
+        {
+            int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+            double buffer = MathMax(5 * _Point, 0.2 * rs.atr_current);
+            double minStrength = InpMinStrength;
+            
+            // Find nearest strong resistance above price and nearest strong support below price
+            bool haveStrongRes = false, haveStrongSup = false;
+            SKeyLevel strongRes; ZeroMemory(strongRes);
+            SKeyLevel strongSup; ZeroMemory(strongSup);
+            double bestResDelta = DBL_MAX, bestSupDelta = DBL_MAX;
+            
+            for(int i = 0; i < levelCount; i++)
+            {
+                SKeyLevel lvl;
+                if(!g_keyLevelDetector.GetKeyLevel(i, lvl))
+                    continue;
+                if(lvl.strength < minStrength)
+                    continue; // skip weak levels
+                
+                if(lvl.isResistance && lvl.price > price)
+                {
+                    double d = lvl.price - price;
+                    if(d < bestResDelta)
+                    {
+                        bestResDelta = d;
+                        strongRes = lvl;
+                        haveStrongRes = true;
+                    }
+                }
+                else if(!lvl.isResistance && lvl.price < price)
+                {
+                    double d = price - lvl.price;
+                    if(d < bestSupDelta)
+                    {
+                        bestSupDelta = d;
+                        strongSup = lvl;
+                        haveStrongSup = true;
+                    }
+                }
+            }
+            
+            if(bullish && haveStrongRes)
+            {
+                double cappedTp = NormalizeDouble(strongRes.price - buffer, digits);
+                if(cappedTp < tp)
+                {
+                    tp = cappedTp;
+                    tpLockTag = StringFormat("|TP_LOCK@%s|R=%s|SCORE=%.2f", DoubleToString(tp, digits), DoubleToString(strongRes.price, digits), strongRes.strength);
+                }
+            }
+            else if(!bullish && haveStrongSup)
+            {
+                double cappedTp = NormalizeDouble(strongSup.price + buffer, digits);
+                if(cappedTp > tp)
+                {
+                    tp = cappedTp;
+                    tpLockTag = StringFormat("|TP_LOCK@%s|S=%s|SCORE=%.2f", DoubleToString(tp, digits), DoubleToString(strongSup.price, digits), strongSup.strength);
+                }
+            }
+        }
+    }
+    
+    string comment = StringFormat("%s Trend-%s", InpOrderTag, bullish ? "BULL" : "BEAR");
+    if(tpLockTag != "")
+        comment += tpLockTag;
     
     if(InpLogDetailedInfo)
     {
@@ -1355,6 +1433,16 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     else
         tradeResult = g_trade.Sell(lot, _Symbol, price, sl, tp, comment);
     
+    // Always-on concise summary for monitoring
+    Print(StringFormat("[TREND] %s %s @%s SL=%s TP=%s lot=%.2f rr=%.2f",
+                       (tradeResult?"FILLED":"FAILED"),
+                       bullish?"BUY":"SELL",
+                       DoubleToString(price, _Digits),
+                       DoubleToString(sl, _Digits),
+                       DoubleToString(tp, _Digits),
+                       lot,
+                       (MathAbs(tp-price)/MathMax(1e-10, MathAbs(price-sl)))));
+
     if(InpLogDetailedInfo)
     {
         if(tradeResult)
@@ -1468,7 +1556,7 @@ void BreakoutTrade(const RegimeSnapshot &rs)
                     breakoutLevel + rs.atr_current * 3.0;
     }
     
-    string comment = StringFormat("BO-%s", strongestLevel.isResistance ? "RESISTANCE" : "SUPPORT");
+    string comment = StringFormat("%s BO-%s", InpOrderTag, strongestLevel.isResistance ? "RESISTANCE" : "SUPPORT");
     // Always-on concise order summary for monitoring
     Print(StringFormat("[BREAKOUT] ORDER %s @%s SL=%s TP=%s lot=%.2f",
                        strongestLevel.isResistance ? "BUYSTOP" : "SELLSTOP",
@@ -1622,7 +1710,15 @@ void RangeTrade(const RegimeSnapshot &rs)
             Print(logPrefix + "→ EXECUTING RANGE SELL...");
         }
         
-        bool tradeResult = g_trade.Sell(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_BID), sl, tp, "Range-Sell");
+        bool tradeResult = g_trade.Sell(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_BID), sl, tp, StringFormat("%s Range-Sell", InpOrderTag));
+        // Always-on concise outcome
+        Print(StringFormat("[RANGE] %s SELL @%s SL=%s TP=%s lot=%.2f rr=%.2f",
+                           (tradeResult?"FILLED":"FAILED"),
+                           DoubleToString(currentPrice, _Digits),
+                           DoubleToString(sl, _Digits),
+                           DoubleToString(tp, _Digits),
+                           lot,
+                           (MathAbs(tp-currentPrice)/MathMax(1e-10, MathAbs(currentPrice-sl)))));
         
         if(InpLogDetailedInfo)
         {
@@ -1667,7 +1763,15 @@ void RangeTrade(const RegimeSnapshot &rs)
             Print(logPrefix + "→ EXECUTING RANGE BUY...");
         }
         
-        bool tradeResult = g_trade.Buy(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_ASK), sl, tp, "Range-Buy");
+        bool tradeResult = g_trade.Buy(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_ASK), sl, tp, StringFormat("%s Range-Buy", InpOrderTag));
+        // Always-on concise outcome
+        Print(StringFormat("[RANGE] %s BUY @%s SL=%s TP=%s lot=%.2f rr=%.2f",
+                           (tradeResult?"FILLED":"FAILED"),
+                           DoubleToString(currentPrice, _Digits),
+                           DoubleToString(sl, _Digits),
+                           DoubleToString(tp, _Digits),
+                           lot,
+                           (MathAbs(tp-currentPrice)/MathMax(1e-10, MathAbs(currentPrice-sl)))));
         
         if(InpLogDetailedInfo)
         {
@@ -2279,6 +2383,38 @@ double PointValueUSD()
     return tickValue / tickSize * _Point;
 }
 
+double GetPipSize()
+{
+    // For most FX: if 5-digit pricing then pip is 10 * _Point, else use _Point
+    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+    // Handle JPY pairs (2 or 3 digits) and metals/CFDs generically via tick size
+    if(digits >= 5)
+        return _Point * 10.0;
+    if(digits == 3)
+        return _Point * 10.0;
+    // Fallback to tick size to be safe across symbols
+    double ts = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+    return (ts > 0 ? ts : _Point);
+}
+
+string GetTFShortName(ENUM_TIMEFRAMES tf)
+{
+    switch(tf)
+    {
+        case PERIOD_M1:  return "M1";
+        case PERIOD_M5:  return "M5";
+        case PERIOD_M15: return "M15";
+        case PERIOD_M30: return "M30";
+        case PERIOD_H1:  return "H1";
+        case PERIOD_H2:  return "H2";
+        case PERIOD_H4:  return "H4";
+        case PERIOD_D1:  return "D1";
+        case PERIOD_W1:  return "W1";
+        case PERIOD_MN1: return "MN1";
+        default:         return EnumToString(tf);
+    }
+}
+
 double StopLoss_TREND(bool bullish, const RegimeSnapshot &rs)
 {
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -2323,6 +2459,172 @@ bool GetRangeBoundaries(SKeyLevel &resistance, SKeyLevel &support)
     support.isResistance = false;
     
     return true;
+}
+
+//+------------------------------------------------------------------+
+//| Startup snapshot helpers                                          |
+//+------------------------------------------------------------------+
+bool FindNearestKeyLevels(const double currentPrice, SKeyLevel &outSupport, SKeyLevel &outResistance)
+{
+    if(g_keyLevelDetector == NULL)
+        return false;
+
+    int levelCount = g_keyLevelDetector.GetKeyLevelCount();
+    if(levelCount <= 0)
+        return false;
+
+    bool haveSupport = false;
+    bool haveResistance = false;
+    double bestSupportDelta = DBL_MAX;
+    double bestResistanceDelta = DBL_MAX;
+
+    for(int i = 0; i < levelCount; i++)
+    {
+        SKeyLevel level;
+        if(!g_keyLevelDetector.GetKeyLevel(i, level))
+            continue;
+
+        double delta = level.price - currentPrice;
+        if(delta < 0)
+        {
+            double d = -delta;
+            if(d < bestSupportDelta)
+            {
+                bestSupportDelta = d;
+                outSupport = level;
+                outSupport.isResistance = false;
+                haveSupport = true;
+            }
+        }
+        else if(delta > 0)
+        {
+            if(delta < bestResistanceDelta)
+            {
+                bestResistanceDelta = delta;
+                outResistance = level;
+                outResistance.isResistance = true;
+                haveResistance = true;
+            }
+        }
+    }
+
+    return (haveSupport || haveResistance);
+}
+
+string BuildGoldenNugget(const RegimeSnapshot &rs, const SKeyLevel &support, const SKeyLevel &resistance)
+{
+    double atr = rs.atr_current;
+    double roomUp = (resistance.price > 0 ? (resistance.price - SymbolInfoDouble(_Symbol, SYMBOL_BID)) : 0.0);
+    double roomDown = (support.price > 0 ? (SymbolInfoDouble(_Symbol, SYMBOL_BID) - support.price) : 0.0);
+
+    switch(rs.regime)
+    {
+        case REGIME_TREND_BULL:
+            if(resistance.price > 0 && roomUp < 0.8 * atr)
+                return "Bull trend but close to resistance — favor pullbacks or wait for breakout.";
+            return "Bull trend with room — buy pullbacks in direction of strength.";
+        case REGIME_TREND_BEAR:
+            if(support.price > 0 && roomDown < 0.8 * atr)
+                return "Bear trend but near support — favor rallies to sell or wait for break.";
+            return "Bear trend with room — sell rallies in direction of weakness.";
+        case REGIME_BREAKOUT_SETUP:
+            return "Volatility building — watch for break of nearest level for momentum entry.";
+        case REGIME_RANGING:
+            return "Range conditions — fade moves toward boundaries; avoid chasing.";
+        case REGIME_HIGH_VOLATILITY:
+            return "High volatility — reduce size and widen stops; be selective.";
+    }
+    return "Stay disciplined — confirm with levels and risk plan.";
+}
+
+void ShowStartupSnapshot()
+{
+    if(g_regimeDetector == NULL)
+        return;
+
+    RegimeSnapshot rs = g_regimeDetector.GetLastSnapshot();
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+    SKeyLevel support; ZeroMemory(support);
+    SKeyLevel resistance; ZeroMemory(resistance);
+    FindNearestKeyLevels(price, support, resistance);
+
+    double atr = rs.atr_current;
+    double atrAvg = rs.atr_avg;
+    double volRatio = (atrAvg > 0 ? atr / atrAvg : 0.0);
+    double pipSize = GetPipSize();
+
+    // Risk preview
+    string tradingStatus = (g_riskManager != NULL && g_riskManager.IsTradingEnabled()) ? "ACTIVE" : "DISABLED";
+    double slPoints = (atr > 0 ? (atr * InpSLATRMultiplier) / _Point : 0.0); // used for calculation
+    double slPipsDisp = (atr > 0 ? (atr * InpSLATRMultiplier) / pipSize : 0.0); // used for display
+    double previewLot = 0.0;
+    if(g_riskManager != NULL && slPoints > 0)
+        previewLot = g_riskManager.CalculateLotSize(slPoints, rs.regime);
+
+    // Distances to levels in pips
+    double toResPips = (resistance.price > 0 ? (resistance.price - price) / _Point : 0.0);
+    double toSupPips = (support.price > 0 ? (price - support.price) / _Point : 0.0);
+
+    string nugget = BuildGoldenNugget(rs, support, resistance);
+
+    string tfName = GetTFShortName((ENUM_TIMEFRAMES)Period());
+    string header = StringFormat("=== Grande Snapshot %s %s ===", _Symbol, tfName);
+    // Label ADX with current timeframe correctly in first slot
+    string regimeLine = StringFormat("Regime: %s  Conf: %.2f  ADX(%s/H4/D1): %.1f/%.1f/%.1f",
+        g_regimeDetector.RegimeToString(rs.regime), rs.confidence, tfName, rs.adx_h1, rs.adx_h4, rs.adx_d1);
+    string volLine = StringFormat("Volatility: ATR %.5f (avg %.5f, x%.2f)", atr, atrAvg, volRatio);
+
+    // Use pip size for distances and show N/A if missing
+    double toRes = (resistance.price > 0 ? (resistance.price - price) : 0.0);
+    double toSup = (support.price > 0 ? (price - support.price) : 0.0);
+    string resStr = (resistance.price > 0 ? DoubleToString(resistance.price, _Digits) : "N/A");
+    string supStr = (support.price > 0 ? DoubleToString(support.price, _Digits) : "N/A");
+    string levelLine = StringFormat("Nearest: R %s (+%d pips) | S %s (+%d pips)",
+        resStr, (int)MathMax(0.0, toRes / pipSize),
+        supStr, (int)MathMax(0.0, toSup / pipSize));
+    string riskLine = StringFormat("Risk: MaxPerTrade %.1f%%, MaxPos %d, Status %s, PreviewLot %.2f (SL≈%.0f pips)",
+        InpMaxRiskPerTrade, InpMaxPositions, tradingStatus, previewLot, slPipsDisp);
+
+    string golden = StringFormat("Golden Nugget: %s", nugget);
+
+    string snapshot = header + "\n" + regimeLine + "\n" + volLine + "\n" + levelLine + "\n" + riskLine + "\n" + golden;
+
+    // Create compact panel in top-right to avoid overlaps
+    const string STARTUP_PANEL_NAME = "GrandeStartupSnapshotPanel";
+    ObjectDelete(g_chartID, STARTUP_PANEL_NAME);
+
+    bool ok = ObjectCreate(g_chartID, STARTUP_PANEL_NAME, OBJ_LABEL, 0, 0, 0);
+    if(ok)
+    {
+        // Adaptive font size based on chart width
+        int chartWidth = (int)ChartGetInteger(g_chartID, CHART_WIDTH_IN_PIXELS, 0);
+        int fontSize = 8;
+        if(chartWidth >= 1900) fontSize = 11;
+        else if(chartWidth >= 1400) fontSize = 10;
+        else if(chartWidth >= 1000) fontSize = 9;
+        else fontSize = 8;
+
+        ObjectSetString(g_chartID, STARTUP_PANEL_NAME, OBJPROP_TEXT, snapshot);
+        ObjectSetInteger(g_chartID, STARTUP_PANEL_NAME, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
+        ObjectSetInteger(g_chartID, STARTUP_PANEL_NAME, OBJPROP_XDISTANCE, 10);
+        ObjectSetInteger(g_chartID, STARTUP_PANEL_NAME, OBJPROP_YDISTANCE, 10);
+        ObjectSetInteger(g_chartID, STARTUP_PANEL_NAME, OBJPROP_COLOR, clrWhite);
+        ObjectSetInteger(g_chartID, STARTUP_PANEL_NAME, OBJPROP_FONTSIZE, fontSize);
+        ObjectSetString(g_chartID, STARTUP_PANEL_NAME, OBJPROP_FONT, "Consolas");
+        ObjectSetInteger(g_chartID, STARTUP_PANEL_NAME, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(g_chartID, STARTUP_PANEL_NAME, OBJPROP_BACK, true);
+        ObjectSetInteger(g_chartID, STARTUP_PANEL_NAME, OBJPROP_BGCOLOR, C'0,0,0');
+        ObjectSetInteger(g_chartID, STARTUP_PANEL_NAME, OBJPROP_BORDER_COLOR, clrDimGray);
+        ObjectSetInteger(g_chartID, STARTUP_PANEL_NAME, OBJPROP_HIDDEN, false);
+
+        // Store removal time in object description
+        string expire = IntegerToString((long)(TimeCurrent() + 30));
+        ObjectSetString(g_chartID, STARTUP_PANEL_NAME, OBJPROP_TOOLTIP, expire); // reuse tooltip to stash expiry
+    }
+
+    Print(snapshot);
+    ChartRedraw(g_chartID);
 }
 
 //+------------------------------------------------------------------+
@@ -2677,36 +2979,208 @@ bool ValidateInputParameters()
 }
 
 //+------------------------------------------------------------------+
-//| Legacy Close All Positions (Fallback)                            |
+//| Close All Positions FIFO (oldest first)                          |
 //+------------------------------------------------------------------+
 void CloseAllPositions()
 {
     // Fallback method when risk manager is not available
     int totalPositions = PositionsTotal();
     int closedCount = 0;
-    
-    for(int i = totalPositions - 1; i >= 0; i--)
+
+    // Collect matching tickets and times
+    ulong tickets[];
+    long  times[];
+    ArrayResize(tickets, 0);
+    ArrayResize(times, 0);
+
+    for(int i = 0; i < totalPositions; i++)
     {
         ulong ticket = PositionGetTicket(i);
-        if(PositionSelectByTicket(ticket))
+        if(!PositionSelectByTicket(ticket))
+            continue;
+        if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+            continue;
+        ArrayResize(tickets, ArraySize(tickets) + 1);
+        ArrayResize(times, ArraySize(times) + 1);
+        tickets[ArraySize(tickets) - 1] = ticket;
+        times[ArraySize(times) - 1] = (long)PositionGetInteger(POSITION_TIME);
+    }
+
+    // Sort by open time ascending (oldest first)
+    int n = ArraySize(tickets);
+    for(int a = 0; a < n - 1; a++)
+    {
+        for(int b = a + 1; b < n; b++)
         {
-            if(PositionGetString(POSITION_SYMBOL) == _Symbol)
+            if(times[a] > times[b])
             {
-                if(g_trade.PositionClose(ticket))
-                {
-                    closedCount++;
-                    if(InpLogDetailedInfo)
-                        Print("[Grande] Closed position #", ticket);
-                }
-                else
-                {
-                    if(InpLogDetailedInfo)
-                        Print("[Grande] Failed to close position #", ticket, " Error: ", GetLastError());
-                }
+                long  tTime = times[a];
+                times[a] = times[b];
+                times[b] = tTime;
+                ulong tTicket = tickets[a];
+                tickets[a] = tickets[b];
+                tickets[b] = tTicket;
             }
         }
     }
-    
-    if(InpLogDetailedInfo)
-        Print("[Grande] Closed ", closedCount, " positions for ", _Symbol);
+
+    // Close in FIFO order
+    for(int i = 0; i < n; i++)
+    {
+        ulong ticket = tickets[i];
+        if(PositionSelectByTicket(ticket) && PositionGetString(POSITION_SYMBOL) == _Symbol)
+        {
+            // Always-on concise rationale for closing
+            double po = PositionGetDouble(POSITION_PRICE_OPEN);
+            double pc = PositionGetDouble(POSITION_PRICE_CURRENT);
+            double sl = PositionGetDouble(POSITION_SL);
+            double tp = PositionGetDouble(POSITION_TP);
+            ENUM_POSITION_TYPE ptype = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            Print(StringFormat("[CLOSE] ATTEMPT ticket=%I64u %s open=%s curr=%s sl=%s tp=%s reason=manual_close_all",
+                               ticket,
+                               (ptype==POSITION_TYPE_BUY?"BUY":"SELL"),
+                               DoubleToString(po, _Digits),
+                               DoubleToString(pc, _Digits),
+                               DoubleToString(sl, _Digits),
+                               DoubleToString(tp, _Digits)));
+            if(g_trade.PositionClose(ticket))
+            {
+                closedCount++;
+                Print(StringFormat("[CLOSE] SUCCESS ticket=%I64u", ticket));
+            }
+            else
+            {
+                Print(StringFormat("[CLOSE] FAIL ticket=%I64u err=%d", ticket, GetLastError()));
+            }
+        }
+    }
+
+    Print(StringFormat("[CLOSE] SUMMARY closed=%d symbol=%s", closedCount, _Symbol));
 } 
+
+//+------------------------------------------------------------------+
+//| Close a specific ticket FIFO-safe                                 |
+//+------------------------------------------------------------------+
+bool ClosePositionFifoSafe(const ulong requestedTicket)
+{
+    if(!PositionSelectByTicket(requestedTicket))
+        return false;
+
+    string symbol = PositionGetString(POSITION_SYMBOL);
+    ENUM_POSITION_TYPE side = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+    double vol = PositionGetDouble(POSITION_VOLUME);
+
+    double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+    if(step <= 0.0)
+        step = 0.01;
+
+    ulong oldestTicket = 0;
+    long oldestTime = LONG_MAX;
+
+    int total = PositionsTotal();
+    for(int i = 0; i < total; i++)
+    {
+        ulong t = PositionGetTicket(i);
+        if(!PositionSelectByTicket(t))
+            continue;
+        if(PositionGetString(POSITION_SYMBOL) != symbol)
+            continue;
+        if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side)
+            continue;
+        double v = PositionGetDouble(POSITION_VOLUME);
+        if(MathAbs(v - vol) > step / 2.0)
+            continue;
+        long timeOpen = (long)PositionGetInteger(POSITION_TIME);
+        if(timeOpen < oldestTime)
+        {
+            oldestTime = timeOpen;
+            oldestTicket = t;
+        }
+    }
+
+    if(oldestTicket == 0)
+        return false;
+
+    if(requestedTicket != oldestTicket && InpLogDetailedInfo)
+        Print("[Grande] FIFO guard rerouted close from #", requestedTicket, " to oldest #", oldestTicket);
+
+    return g_trade.PositionClose(oldestTicket);
+}
+
+//+------------------------------------------------------------------+
+//| Close volume FIFO-safe for symbol and side                        |
+//+------------------------------------------------------------------+
+double CloseSymbolFifoVolume(const string symbol,
+                             const ENUM_POSITION_TYPE side,
+                             double volumeToClose)
+{
+    if(volumeToClose <= 0.0)
+        return 0.0;
+
+    double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+    double volMin = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double volMax = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+    if(step <= 0.0) step = 0.01;
+    if(volMin <= 0.0) volMin = step;
+
+    // helper to normalize to volume step
+    double normalizeVol;
+    normalizeVol = 0.0; // placeholder to appease compiler before first use
+
+    double remaining = volumeToClose;
+    double closed = 0.0;
+
+    while(remaining > 0.0)
+    {
+        ulong oldestTicket = 0;
+        long oldestTime = LONG_MAX;
+        double oldestVolume = 0.0;
+
+        int total = PositionsTotal();
+        for(int i = 0; i < total; i++)
+        {
+            ulong t = PositionGetTicket(i);
+            if(!PositionSelectByTicket(t))
+                continue;
+            if(PositionGetString(POSITION_SYMBOL) != symbol)
+                continue;
+            if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side)
+                continue;
+            long timeOpen = (long)PositionGetInteger(POSITION_TIME);
+            if(timeOpen < oldestTime)
+            {
+                oldestTime = timeOpen;
+                oldestTicket = t;
+                oldestVolume = PositionGetDouble(POSITION_VOLUME);
+            }
+        }
+
+        if(oldestTicket == 0)
+            break;
+
+        double allowable = MathMin(remaining, oldestVolume);
+        double n = MathFloor(allowable / step + 1e-8) * step;
+        if(n < 0.0) n = 0.0;
+        allowable = n;
+        if(allowable < volMin - 1e-12)
+            break;
+
+        bool ok;
+        if(allowable + step/2.0 < oldestVolume)
+            ok = g_trade.PositionClosePartial(oldestTicket, allowable);
+        else
+            ok = g_trade.PositionClose(oldestTicket);
+
+        if(!ok)
+        {
+            if(InpLogDetailedInfo)
+                Print("[Grande] FIFO volume close failed for #", oldestTicket, " Error: ", GetLastError());
+            break;
+        }
+
+        closed += allowable;
+        remaining -= allowable;
+    }
+
+    return closed;
+}
