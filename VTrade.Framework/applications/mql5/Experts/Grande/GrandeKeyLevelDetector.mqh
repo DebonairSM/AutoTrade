@@ -33,6 +33,8 @@ struct SKeyLevel
     double      strength;           // Level strength (0.0 - 1.0)
     datetime    firstTouch;         // First touch time
     datetime    lastTouch;          // Last touch time
+    datetime    detectionTime;      // When this level was first detected/created
+    int         detectionOrder;     // Chronological order of detection (1 = first, 2 = second, etc.)
     bool        volumeConfirmed;    // Volume confirmation
     double      volumeRatio;        // Volume ratio at formation
     double      slopeConsistency;   // Slope validation score
@@ -122,6 +124,13 @@ private:
     SKeyLevel   m_keyLevels[];          // Array of key levels
     int         m_levelCount;           // Number of levels found
     datetime    m_lastUpdate;           // Last update time
+    int         m_detectionCounter;     // Counter for chronological order tracking
+    
+    // Persistent storage for detection times
+    string      m_persistentFile;       // File path for persistent storage
+    datetime    m_originalDetectionTimes[]; // Array to store original detection times
+    int         m_originalDetectionOrders[]; // Array to store original detection orders
+    double      m_originalDetectionPrices[]; // Array to store original detection prices
     
     // Enterprise Chart Management
     SEnterpriseChartLine m_chartLines[]; // Enhanced chart line objects
@@ -156,6 +165,16 @@ public:
         m_lastUpdate = 0;
         m_lastChartUpdate = 0;
         m_chartID = ChartID();
+        m_detectionCounter = 0;
+        
+        // Initialize persistent storage
+        m_persistentFile = StringFormat("GrandeKeyLevels_%s_%s.dat", _Symbol, EnumToString(Period()));
+        ArrayResize(m_originalDetectionTimes, 200);
+        ArrayResize(m_originalDetectionOrders, 200);
+        ArrayResize(m_originalDetectionPrices, 200);
+        
+        // Load existing detection data
+        LoadPersistentData();
         
         // Initialize arrays with intelligent sizing
         ArrayResize(m_keyLevels, 200);
@@ -175,8 +194,10 @@ public:
     
     ~CGrandeKeyLevelDetector(void)
     {
+        // Save persistent data before destruction
+        SavePersistentData();
         ClearAllChartObjects();
-        LogInfo("🔚 Grande Key Level Detector destroyed - all chart objects cleared");
+        LogInfo("🔚 Grande Key Level Detector destroyed - all chart objects cleared, data saved");
     }
     
     //+------------------------------------------------------------------+
@@ -234,8 +255,18 @@ public:
         m_levelCount = 0;
         m_lastUpdate = 0;
         m_lastChartUpdate = 0;
+        m_detectionCounter = 0;
         m_diagnostics.Reset();
         m_logThrottle.Reset();
+        
+        // Initialize persistent storage
+        m_persistentFile = StringFormat("GrandeKeyLevels_%s_%s.dat", _Symbol, EnumToString(Period()));
+        ArrayResize(m_originalDetectionTimes, 200);
+        ArrayResize(m_originalDetectionOrders, 200);
+        ArrayResize(m_originalDetectionPrices, 200);
+        
+        // Load existing detection data
+        LoadPersistentData();
         
         // Performance validation
         uint testStart = GetTickCount();
@@ -524,6 +555,48 @@ public:
         PrintEnhancedReport();
     }
     
+    void PrintChronologicalReport()
+    {
+        if(!m_showDebugPrints) return;
+        
+        double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        
+        // Sort by detection order for chronological display
+        SortLevelsByDetectionOrder();
+        
+        LogInfo("┌" + StringRepeat("─", 85) + "┐");
+        LogInfo("│" + StringFormat("%83s", "🕒 CHRONOLOGICAL KEY LEVELS REPORT") + " │");
+        LogInfo("├" + StringRepeat("─", 85) + "┤");
+        LogInfo(StringFormat("│ Symbol: %-15s │ Current Price: %15.5f │ Levels: %8d │", 
+               _Symbol, currentPrice, m_levelCount));
+        LogInfo(StringFormat("│ Timeframe: %-12s │ Last Update: %17s │ Avg Time: %5.1fms │", 
+               EnumToString(Period()), 
+               TimeToString(m_lastUpdate, TIME_DATE|TIME_MINUTES),
+               m_avgCalculationTime));
+        LogInfo("├" + StringRepeat("─", 85) + "┤");
+        
+        for(int i = 0; i < MathMin(m_levelCount, 15); i++) // Show up to 15 levels chronologically
+        {
+            double distance = MathAbs(currentPrice - m_keyLevels[i].price);
+            string arrow = m_keyLevels[i].price > currentPrice ? "↑" : "↓";
+            string type = m_keyLevels[i].isResistance ? "R" : "S";
+            string strength = GetStrengthDescription(m_keyLevels[i].strength);
+            string volumeIcon = m_keyLevels[i].volumeConfirmed ? "🔊" : "🔇";
+            string ageStr = GetLevelAgeString(m_keyLevels[i].detectionTime);
+            string detectionStr = TimeToString(m_keyLevels[i].detectionTime, TIME_DATE|TIME_MINUTES);
+            
+            double __pipSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+            if(__pipSize <= 0) __pipSize = _Point;
+            LogInfo(StringFormat("│ #%2d %s %s %.5f │ %8s │ S:%.3f │ T:%2d │ %4dpips │ %s │ %s │", 
+                   m_keyLevels[i].detectionOrder,
+                   arrow, type, m_keyLevels[i].price, strength,
+                   m_keyLevels[i].strength, m_keyLevels[i].touchCount,
+                   (int)(distance / __pipSize), ageStr, detectionStr));
+        }
+        
+        LogInfo("└" + StringRepeat("─", 85) + "┘");
+    }
+    
     void PrintEnhancedReport()
     {
         if(!m_showDebugPrints) return;
@@ -584,14 +657,16 @@ public:
             string type = m_keyLevels[idx].isResistance ? "R" : "S";
             string strength = GetStrengthDescription(m_keyLevels[idx].strength);
             string volumeIcon = m_keyLevels[idx].volumeConfirmed ? "🔊" : "🔇";
+            string ageStr = GetLevelAgeString(m_keyLevels[idx].detectionTime);
             
             double __pipSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
             if(__pipSize <= 0) __pipSize = _Point;
-            LogInfo(StringFormat("│ %s %s %.5f │ %8s │ S:%.3f │ T:%2d │ %4dpips │ %s %s │", 
+            LogInfo(StringFormat("│ #%d %s %s %.5f │ %8s │ S:%.3f │ T:%2d │ %4dpips │ %s %s │ %s │", 
+                   m_keyLevels[idx].detectionOrder,
                    arrow, type, m_keyLevels[idx].price, strength,
                    m_keyLevels[idx].strength, m_keyLevels[idx].touchCount,
                    (int)(distance / __pipSize), volumeIcon,
-                   TimeToString(m_keyLevels[idx].lastTouch, TIME_DATE)));
+                   TimeToString(m_keyLevels[idx].lastTouch, TIME_DATE), ageStr));
         }
         
         LogInfo("└" + StringRepeat("─", 78) + "┘");
@@ -677,6 +752,13 @@ public:
         }
         
         ChartRedraw(m_chartID);
+    }
+    
+    // Public method to clear persistent data
+    void ResetDetectionHistory()
+    {
+        ClearPersistentData();
+        LogInfo("🔄 Detection history reset - all levels will be treated as new");
     }
     
     datetime GetLastUpdateTime() const { return m_lastUpdate; }
@@ -1137,6 +1219,9 @@ private:
         string tooltip = CreateEnhancedTooltip(level, currentPrice);
         ObjectSetString(m_chartID, lineName, OBJPROP_TOOLTIP, tooltip);
         
+        // Create order indicator label
+        CreateOrderIndicator(level, currentTime, index);
+        
         // Add to tracking array
         m_chartLines[index].name = lineName;
         m_chartLines[index].price = level.price;
@@ -1261,11 +1346,25 @@ private:
         // Handle invalid/uninitialized datetime values
         string firstTouchStr = (level.firstTouch > 0) ? TimeToString(level.firstTouch, TIME_DATE|TIME_MINUTES) : "Not Available";
         string lastTouchStr = (level.lastTouch > 0) ? TimeToString(level.lastTouch, TIME_DATE|TIME_MINUTES) : "Not Available";
+        string detectionStr = (level.detectionTime > 0) ? TimeToString(level.detectionTime, TIME_DATE|TIME_MINUTES) : "Not Available";
+        
+        // Calculate age of level
+        string ageStr = "Unknown";
+        if(level.detectionTime > 0)
+        {
+            int hoursElapsed = (int)((TimeCurrent() - level.detectionTime) / 3600);
+            if(hoursElapsed < 1)
+                ageStr = "Just detected";
+            else if(hoursElapsed < 24)
+                ageStr = StringFormat("%d hours ago", hoursElapsed);
+            else
+                ageStr = StringFormat("%d days ago", hoursElapsed / 24);
+        }
         
         double __pipSize2 = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
         if(__pipSize2 <= 0) __pipSize2 = _Point;
         return StringFormat(
-            "%s LEVEL\n" +
+            "%s LEVEL #%d\n" +
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
             "💰 Price: %.5f\n" +
             "💪 Strength: %.3f (%s)\n" +
@@ -1273,20 +1372,242 @@ private:
             "📏 Distance: %d pips\n" +
             "🕐 First Touch: %s\n" +
             "🕐 Last Touch: %s\n" +
+            "🕒 Detected: %s (%s)\n" +
             "%s Volume: %.1fx average\n" +
             "📊 Bounce Quality: %.2f\n" +
             "🎯 Slope Score: %.2f",
-            levelType,
+            levelType, level.detectionOrder,
             level.price,
             level.strength, strengthDesc,
             level.touchCount,
             (int)(distance / __pipSize2),
             firstTouchStr,
             lastTouchStr,
+            detectionStr, ageStr,
             volumeIcon, level.volumeRatio,
             level.bounceQuality,
             level.slopeConsistency
         );
+    }
+    
+    //+------------------------------------------------------------------+
+    //| Order Indicator Creation Methods                                 |
+    //+------------------------------------------------------------------+
+    
+    // Create visual order indicator showing chronological sequence
+    bool CreateOrderIndicator(const SKeyLevel &level, datetime currentTime, int index)
+    {
+        string labelName = StringFormat("%sORDER_%d_%.5f_%d", 
+            CHART_OBJECT_PREFIX,
+            level.detectionOrder,
+            level.price,
+            currentTime);
+        
+        // Calculate position for the label (slightly offset from the line)
+        double labelPrice = level.price;
+        if(level.isResistance)
+            labelPrice += m_touchZone * 0.5; // Above resistance line
+        else
+            labelPrice -= m_touchZone * 0.5; // Below support line
+        
+        // Create text label
+        if(!ObjectCreate(m_chartID, labelName, OBJ_TEXT, 0, currentTime, labelPrice))
+        {
+            int error = GetLastError();
+            LogError(StringFormat("Order indicator creation failed: %s (Error: %d)", labelName, error));
+            return false;
+        }
+        
+        // Set label properties
+        bool success = true;
+        success &= ObjectSetString(m_chartID, labelName, OBJPROP_TEXT, StringFormat("#%d", level.detectionOrder));
+        success &= ObjectSetInteger(m_chartID, labelName, OBJPROP_COLOR, GetOrderIndicatorColor(level.detectionOrder));
+        success &= ObjectSetInteger(m_chartID, labelName, OBJPROP_FONTSIZE, GetOrderIndicatorFontSize(level.strength));
+        success &= ObjectSetString(m_chartID, labelName, OBJPROP_FONT, "Arial Bold");
+        success &= ObjectSetInteger(m_chartID, labelName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+        success &= ObjectSetInteger(m_chartID, labelName, OBJPROP_BACK, false);
+        success &= ObjectSetInteger(m_chartID, labelName, OBJPROP_SELECTABLE, false);
+        success &= ObjectSetInteger(m_chartID, labelName, OBJPROP_HIDDEN, false);
+        success &= ObjectSetInteger(m_chartID, labelName, OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
+        
+        // Create tooltip for order indicator
+        string orderTooltip = StringFormat(
+            "🕒 DETECTION ORDER #%d\n" +
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+            "📅 Detected: %s\n" +
+            "⏰ Age: %s\n" +
+            "💰 Price: %.5f\n" +
+            "💪 Strength: %.3f\n" +
+            "👆 Touches: %d",
+            level.detectionOrder,
+            TimeToString(level.detectionTime, TIME_DATE|TIME_MINUTES),
+            GetLevelAgeString(level.detectionTime),
+            level.price,
+            level.strength,
+            level.touchCount
+        );
+        success &= ObjectSetString(m_chartID, labelName, OBJPROP_TOOLTIP, orderTooltip);
+        
+        if(!success)
+        {
+            LogError(StringFormat("Failed to set order indicator properties for: %s", labelName));
+            ObjectDelete(m_chartID, labelName);
+            return false;
+        }
+        
+        return true;
+    }
+    
+    // Get color for order indicator based on detection order
+    color GetOrderIndicatorColor(int detectionOrder)
+    {
+        // Use different colors for different order ranges
+        if(detectionOrder <= 3)
+            return clrGold;           // First 3 levels - Gold (most important)
+        else if(detectionOrder <= 6)
+            return clrOrange;         // Next 3 levels - Orange
+        else if(detectionOrder <= 10)
+            return clrLightBlue;      // Next 4 levels - Light Blue
+        else if(detectionOrder <= 15)
+            return clrLightGray;      // Next 5 levels - Light Gray
+        else
+            return clrSilver;         // Older levels - Silver
+    }
+    
+    // Get font size for order indicator based on level strength
+    int GetOrderIndicatorFontSize(double strength)
+    {
+        if(strength >= 0.90)      return 12;  // Strongest levels - larger font
+        else if(strength >= 0.80) return 11;  // Strong levels
+        else if(strength >= 0.70) return 10;  // Medium-strong levels
+        else if(strength >= 0.60) return 9;   // Medium levels
+        else                      return 8;   // Weaker levels - smaller font
+    }
+    
+    // Get human-readable age string for level
+    string GetLevelAgeString(datetime detectionTime)
+    {
+        if(detectionTime <= 0) return "Unknown";
+        
+        int secondsElapsed = (int)(TimeCurrent() - detectionTime);
+        
+        if(secondsElapsed < 60)
+            return "Just now";
+        else if(secondsElapsed < 3600)
+            return StringFormat("%d minutes ago", secondsElapsed / 60);
+        else if(secondsElapsed < 86400)
+            return StringFormat("%d hours ago", secondsElapsed / 3600);
+        else if(secondsElapsed < 604800)
+            return StringFormat("%d days ago", secondsElapsed / 86400);
+        else
+            return StringFormat("%d weeks ago", secondsElapsed / 604800);
+    }
+    
+    //+------------------------------------------------------------------+
+    //| Persistent Storage Methods                                       |
+    //+------------------------------------------------------------------+
+    
+    // Load persistent detection data from file
+    void LoadPersistentData()
+    {
+        int fileHandle = FileOpen(m_persistentFile, FILE_READ|FILE_BIN);
+        if(fileHandle == INVALID_HANDLE)
+        {
+            if(m_showDebugPrints)
+            {
+                LogInfo("📁 No existing persistent data found, starting fresh");
+            }
+            return;
+        }
+        
+        // Read detection counter
+        if(FileReadInteger(fileHandle) == 0x47524E44) // "GRND" magic number
+        {
+            m_detectionCounter = FileReadInteger(fileHandle);
+            
+            // Read detection times, orders, and prices
+            int count = MathMin(m_detectionCounter, ArraySize(m_originalDetectionTimes));
+            for(int i = 0; i < count; i++)
+            {
+                m_originalDetectionTimes[i] = (datetime)FileReadLong(fileHandle);
+                m_originalDetectionOrders[i] = FileReadInteger(fileHandle);
+                m_originalDetectionPrices[i] = FileReadDouble(fileHandle);
+            }
+            
+            if(m_showDebugPrints)
+            {
+                LogInfo(StringFormat("📁 Loaded persistent data: %d levels, counter at %d", count, m_detectionCounter));
+            }
+        }
+        
+        FileClose(fileHandle);
+    }
+    
+    // Save persistent detection data to file
+    void SavePersistentData()
+    {
+        int fileHandle = FileOpen(m_persistentFile, FILE_WRITE|FILE_BIN);
+        if(fileHandle == INVALID_HANDLE)
+        {
+            LogError("Failed to create persistent data file: " + m_persistentFile);
+            return;
+        }
+        
+        // Write magic number and detection counter
+        FileWriteInteger(fileHandle, 0x47524E44); // "GRND" magic number
+        FileWriteInteger(fileHandle, m_detectionCounter);
+        
+        // Write detection times, orders, and prices
+        int count = MathMin(m_detectionCounter, ArraySize(m_originalDetectionTimes));
+        for(int i = 0; i < count; i++)
+        {
+            FileWriteLong(fileHandle, (long)m_originalDetectionTimes[i]);
+            FileWriteInteger(fileHandle, m_originalDetectionOrders[i]);
+            FileWriteDouble(fileHandle, m_originalDetectionPrices[i]);
+        }
+        
+        FileClose(fileHandle);
+        
+        if(m_showDebugPrints)
+        {
+            LogInfo(StringFormat("💾 Saved persistent data: %d levels", count));
+        }
+    }
+    
+    // Find existing level in persistent storage
+    int FindExistingLevel(double price)
+    {
+        double tolerance = m_touchZone * 0.5; // Half touch zone for matching
+        
+        for(int i = 0; i < m_detectionCounter && i < ArraySize(m_originalDetectionTimes); i++)
+        {
+            if(m_originalDetectionTimes[i] > 0 && m_originalDetectionOrders[i] > 0)
+            {
+                // Check if price matches within tolerance
+                if(MathAbs(m_originalDetectionPrices[i] - price) <= tolerance)
+                {
+                    return i;
+                }
+            }
+        }
+        
+        return -1; // Not found
+    }
+    
+    // Clear persistent data (for testing/reset)
+    void ClearPersistentData()
+    {
+        if(FileIsExist(m_persistentFile))
+        {
+            FileDelete(m_persistentFile);
+        }
+        
+        ArrayInitialize(m_originalDetectionTimes, 0);
+        ArrayInitialize(m_originalDetectionOrders, 0);
+        ArrayInitialize(m_originalDetectionPrices, 0.0);
+        m_detectionCounter = 0;
+        
+        LogInfo("🗑️ Cleared all persistent detection data");
     }
     
     //+------------------------------------------------------------------+
@@ -1466,6 +1787,45 @@ private:
         
         level.firstTouch = firstTouch;
         level.lastTouch = firstTouch;
+        
+        // Check if this level already exists in persistent storage
+        int existingIndex = FindExistingLevel(price);
+        if(existingIndex >= 0)
+        {
+            // Use existing detection time and order
+            level.detectionTime = m_originalDetectionTimes[existingIndex];
+            level.detectionOrder = m_originalDetectionOrders[existingIndex];
+            if(m_showDebugPrints)
+            {
+                LogInfo(StringFormat("🔄 Restored existing level %.5f: Order #%d, Detected: %s", 
+                    price, level.detectionOrder, TimeToString(level.detectionTime, TIME_DATE|TIME_MINUTES)));
+            }
+        }
+        else
+        {
+            // New level - set detection tracking
+            m_detectionCounter++;
+            level.detectionTime = TimeCurrent();
+            level.detectionOrder = m_detectionCounter;
+            
+            // Store in persistent arrays
+            if(m_detectionCounter < ArraySize(m_originalDetectionTimes))
+            {
+                m_originalDetectionTimes[m_detectionCounter - 1] = level.detectionTime;
+                m_originalDetectionOrders[m_detectionCounter - 1] = level.detectionOrder;
+                m_originalDetectionPrices[m_detectionCounter - 1] = level.price;
+            }
+            
+            // Save to file
+            SavePersistentData();
+            
+            if(m_showDebugPrints)
+            {
+                LogInfo(StringFormat("🆕 New level %.5f: Order #%d, Detected: %s", 
+                    price, level.detectionOrder, TimeToString(level.detectionTime, TIME_DATE|TIME_MINUTES)));
+            }
+        }
+        
         level.volumeConfirmed = false;
         level.volumeRatio = 1.0;
         level.slopeConsistency = 0.0;
@@ -1566,6 +1926,23 @@ private:
             for(int j = 0; j < m_levelCount - 1 - i; j++)
             {
                 if(m_keyLevels[j].strength < m_keyLevels[j + 1].strength)
+                {
+                    SKeyLevel temp = m_keyLevels[j];
+                    m_keyLevels[j] = m_keyLevels[j + 1];
+                    m_keyLevels[j + 1] = temp;
+                }
+            }
+        }
+    }
+    
+    void SortLevelsByDetectionOrder()
+    {
+        // Simple bubble sort by detection order (ascending - oldest first)
+        for(int i = 0; i < m_levelCount - 1; i++)
+        {
+            for(int j = 0; j < m_levelCount - 1 - i; j++)
+            {
+                if(m_keyLevels[j].detectionOrder > m_keyLevels[j + 1].detectionOrder)
                 {
                     SKeyLevel temp = m_keyLevels[j];
                     m_keyLevels[j] = m_keyLevels[j + 1];
@@ -1705,13 +2082,15 @@ private:
     void ClearAllChartObjectsWithVerification()
     {
         int beforeCount = ObjectsTotal(m_chartID, 0, OBJ_HLINE);
+        int beforeTextCount = ObjectsTotal(m_chartID, 0, OBJ_TEXT);
         int deletedCount = ObjectsDeleteAll(m_chartID, CHART_OBJECT_PREFIX);
         int afterCount = ObjectsTotal(m_chartID, 0, OBJ_HLINE);
+        int afterTextCount = ObjectsTotal(m_chartID, 0, OBJ_TEXT);
         
         ArrayFree(m_chartLines);
         
-        LogInfo(StringFormat("🗑️ Chart cleanup: %d objects deleted, %d→%d total lines", 
-               deletedCount, beforeCount, afterCount));
+        LogInfo(StringFormat("🗑️ Chart cleanup: %d objects deleted, %d→%d lines, %d→%d text objects", 
+               deletedCount, beforeCount, afterCount, beforeTextCount, afterTextCount));
         
         // Force redraw
         Sleep(100);

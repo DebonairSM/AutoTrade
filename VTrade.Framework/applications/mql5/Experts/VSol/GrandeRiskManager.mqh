@@ -53,6 +53,10 @@ struct RiskConfig
     double min_modify_pips;               // Minimum pips change to modify SL/TP
     double min_modify_atr_fraction;       // Or fraction of ATR to consider material change
     int    min_modify_cooldown_sec;       // Per-ticket cooldown between SL/TP modifies
+    
+    // === Stop Level Validation ===
+    double min_stop_distance_multiplier;  // Multiplier for minimum stop distance (default 1.5)
+    bool   validate_stop_levels;          // Enable comprehensive stop level validation
 };
 
 //+------------------------------------------------------------------+
@@ -163,6 +167,10 @@ public:
     double CalculateSmartTakeProfit(bool isBuy, double entryPrice, double stopLoss, double atrValue);
     bool IsPositionManaged(ulong ticket);
     
+    // === Stop Level Validation ===
+    bool ValidateStopLevels(string symbol, double sl, double tp, ENUM_POSITION_TYPE type);
+    bool ModifyPositionWithValidation(ulong ticket, double sl, double tp, string symbol, ENUM_POSITION_TYPE type);
+    
     // === Position Information ===
     int GetPositionCount() const { return m_positionCount; }
     PositionInfo GetPosition(int index);
@@ -253,6 +261,12 @@ bool CGrandeRiskManager::Initialize(const string &symbol, const RiskConfig &conf
     
     m_symbol = symbol;
     m_config = config;
+    
+    // Set default values for new validation parameters if not set
+    if(m_config.min_stop_distance_multiplier <= 0)
+        m_config.min_stop_distance_multiplier = 1.5; // 50% buffer above minimum
+    if(m_config.validate_stop_levels == false && m_config.validate_stop_levels != true)
+        m_config.validate_stop_levels = true; // Enable by default
     
     // Validate configuration
     if(m_config.risk_percent_trend <= 0 || m_config.risk_percent_trend > 10.0)
@@ -968,8 +982,8 @@ bool CGrandeRiskManager::UpdateBreakevenStops()
                 continue;
             }
             
-            // Attempt to modify position with validated stop level
-            if(m_trade.PositionModify(pos.ticket, newStopLoss, pos.take_profit))
+            // Attempt to modify position with enhanced validation
+            if(ModifyPositionWithValidation(pos.ticket, newStopLoss, pos.take_profit, pos.symbol, pos.type))
             {
                 pos.stop_loss = newStopLoss;
                 pos.breakeven_set = true;
@@ -1134,8 +1148,8 @@ bool CGrandeRiskManager::UpdateTrailingStops()
                 continue; // Skip this position, try again later
             }
             
-            // Attempt to modify position with validated stop level
-            if(m_trade.PositionModify(pos.ticket, newStopLoss, pos.take_profit))
+            // Attempt to modify position with enhanced validation
+            if(ModifyPositionWithValidation(pos.ticket, newStopLoss, pos.take_profit, pos.symbol, pos.type))
             {
                 pos.stop_loss = newStopLoss;
                 updated = true;
@@ -1514,9 +1528,9 @@ bool CGrandeRiskManager::SetIntelligentSLTP(ulong ticket, bool isBuy, double ent
         return true; // treat as success to avoid retries
     }
 
-    // Modify position with new SL/TP
+    // Modify position with new SL/TP using enhanced validation
     ResetLastError();
-    if(m_trade.PositionModify(ticket, stopLoss, takeProfit))
+    if(ModifyPositionWithValidation(ticket, stopLoss, takeProfit, m_symbol, isBuy ? POSITION_TYPE_BUY : POSITION_TYPE_SELL))
     {
         // Always-on concise rationale summary for SL/TP modify
         // Suppress duplicate log lines if effectively unchanged
@@ -1560,6 +1574,98 @@ bool CGrandeRiskManager::SetIntelligentSLTP(ulong ticket, bool isBuy, double ent
         LogRiskEvent("ERROR", StringFormat("Failed to modify position %d. Error: %d", ticket, error));
         return false;
     }
+}
+
+//+------------------------------------------------------------------+
+//| Validate Stop Levels Before Modification                         |
+//+------------------------------------------------------------------+
+bool CGrandeRiskManager::ValidateStopLevels(string symbol, double sl, double tp, ENUM_POSITION_TYPE type)
+{
+    if(!m_config.validate_stop_levels) return true; // Skip validation if disabled
+    
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    int stopLevel = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    
+    // Get current market prices
+    double currentBid = SymbolInfoDouble(symbol, SYMBOL_BID);
+    double currentAsk = SymbolInfoDouble(symbol, SYMBOL_ASK);
+    double currentPrice = (type == POSITION_TYPE_BUY) ? currentBid : currentAsk;
+    
+    // Calculate minimum distance with multiplier for safety
+    if(stopLevel <= 0) 
+        stopLevel = 150; // Default minimum distance
+    else 
+        stopLevel = (int)(stopLevel * m_config.min_stop_distance_multiplier);
+    
+    double minDistance = stopLevel * point;
+    
+    // Validate stop loss
+    if(sl > 0)
+    {
+        double slDistance = MathAbs(currentPrice - sl);
+        if(slDistance < minDistance)
+        {
+            LogRiskEvent("WARNING", StringFormat("SL too close: %.5f (min: %.5f) for %s", 
+                          slDistance, minDistance, symbol));
+            return false;
+        }
+        
+        // Check direction for stop loss
+        if(type == POSITION_TYPE_BUY && sl >= currentBid)
+        {
+            LogRiskEvent("WARNING", StringFormat("Invalid SL direction for BUY: SL=%.5f >= BID=%.5f", sl, currentBid));
+            return false;
+        }
+        if(type == POSITION_TYPE_SELL && sl <= currentAsk)
+        {
+            LogRiskEvent("WARNING", StringFormat("Invalid SL direction for SELL: SL=%.5f <= ASK=%.5f", sl, currentAsk));
+            return false;
+        }
+    }
+    
+    // Validate take profit
+    if(tp > 0)
+    {
+        double tpDistance = MathAbs(tp - currentPrice);
+        if(tpDistance < minDistance)
+        {
+            LogRiskEvent("WARNING", StringFormat("TP too close: %.5f (min: %.5f) for %s", 
+                          tpDistance, minDistance, symbol));
+            return false;
+        }
+        
+        // Check direction for take profit
+        if(type == POSITION_TYPE_BUY && tp <= currentBid)
+        {
+            LogRiskEvent("WARNING", StringFormat("Invalid TP direction for BUY: TP=%.5f <= BID=%.5f", tp, currentBid));
+            return false;
+        }
+        if(type == POSITION_TYPE_SELL && tp >= currentAsk)
+        {
+            LogRiskEvent("WARNING", StringFormat("Invalid TP direction for SELL: TP=%.5f >= ASK=%.5f", tp, currentAsk));
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Enhanced Position Modification with Validation                   |
+//+------------------------------------------------------------------+
+bool CGrandeRiskManager::ModifyPositionWithValidation(ulong ticket, double sl, double tp, string symbol, ENUM_POSITION_TYPE type)
+{
+    // First validate the stop levels
+    if(!ValidateStopLevels(symbol, sl, tp, type))
+    {
+        LogRiskEvent("ERROR", StringFormat("Invalid stop levels for ticket %d - SL: %.5f, TP: %.5f", 
+                      ticket, sl, tp));
+        return false;
+    }
+    
+    // Use CTrade PositionModify method with enhanced error handling
+    return m_trade.PositionModify(ticket, sl, tp);
 }
 
 //+------------------------------------------------------------------+

@@ -66,6 +66,8 @@ input bool   InpManageOnlyOnTimeframe = true;    // Gate management to InpManage
 input double InpMinModifyPips = 7.0;             // Min pips change to modify SL/TP
 input double InpMinModifyATRFraction = 0.07;     // Fraction of ATR for material change
 input int    InpMinModifyCooldownSec = 180;      // Cooldown between SL/TP modifies
+input double InpMinStopDistanceMultiplier = 1.5; // Multiplier for minimum stop distance
+input bool   InpValidateStopLevels = true;       // Enable comprehensive stop level validation
 
 input group "=== Signal Settings ==="
 input int    InpEMA50Period = 50;                // 50 EMA Period
@@ -180,6 +182,8 @@ int OnInit()
     g_riskConfig.min_modify_pips = InpMinModifyPips;
     g_riskConfig.min_modify_atr_fraction = InpMinModifyATRFraction;
     g_riskConfig.min_modify_cooldown_sec = InpMinModifyCooldownSec;
+    g_riskConfig.min_stop_distance_multiplier = InpMinStopDistanceMultiplier;
+    g_riskConfig.validate_stop_levels = InpValidateStopLevels;
     
     // Configure regime detection settings
     g_regimeConfig.adx_trend_threshold = InpADXTrendThreshold;
