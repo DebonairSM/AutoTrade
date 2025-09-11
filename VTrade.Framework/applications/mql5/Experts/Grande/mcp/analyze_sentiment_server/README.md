@@ -16,19 +16,19 @@ python -m venv .venv
 ```powershell
 pip install -r requirements.txt
 ```
-3) Set environment variables:
+3) Set environment variables (base URL required for local model):
 ```powershell
-[System.Environment]::SetEnvironmentVariable("OPENAI_API_KEY","<YOUR_NEW_KEY>","User")
-$env:OPENAI_API_KEY = "<YOUR_NEW_KEY>"  # for current shell
-# Optional model override (defaults to gpt-4o-mini)
-$env:OPENAI_MODEL = "gpt-4o-mini"
+[System.Environment]::SetEnvironmentVariable("OPENAI_BASE_URL","http://localhost:11434/v1","User")
+$env:OPENAI_BASE_URL = "http://localhost:11434/v1"
+# Optional model override
+$env:OPENAI_MODEL = "llama3.2"
+# Optional: some servers require a token; many ignore it
+$env:OPENAI_API_KEY = "EMPTY"
 
-# To use a local OpenAI-compatible server (Ollama/vLLM/NIM), set base URL and optional dummy key:
+# OpenAI-compatible endpoints (Ollama/vLLM/NIM):
 # Ollama (Windows/NVIDIA): http://localhost:11434/v1
 # vLLM: http://localhost:8000/v1
 # NIM:  http://localhost:8000/v1 (varies by image)
-$env:OPENAI_BASE_URL = "http://localhost:11434/v1"
-$env:OPENAI_API_KEY = "EMPTY"  # many local servers ignore the key
 ```
 
 #### Run
@@ -107,3 +107,26 @@ $env:OPENAI_API_KEY = "EMPTY"
 ```
 
 Once the local server is running, launch this MCP server and call `analyze_sentiment` as usual.
+
+#### Use local FinBERT (no Docker)
+
+Install dependencies (PowerShell):
+```powershell
+pip install -r requirements.txt
+# Then install PyTorch appropriate for your system (choose ONE of the following):
+# GPU (CUDA 12.1, Windows x64 example):
+pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
+# CPU only (works everywhere):
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
+Enable FinBERT provider:
+```powershell
+$env:SENTIMENT_PROVIDER = "finbert_local"
+$env:FINBERT_MODEL = "yiyanghkust/finbert-tone"  # optional override
+python .\main.py
+```
+
+Notes:
+- Uses GPU if available (CUDA); otherwise CPU. First run will download the model.
+- Output is normalized to {sentiment, score in [-1,1], confidence in [0,1]}.
