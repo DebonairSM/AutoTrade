@@ -13,6 +13,8 @@
 
 #include "GrandeMarketRegimeDetector.mqh"
 #include "GrandeKeyLevelDetector.mqh"
+#include "GrandeTrianglePatternDetector.mqh"
+#include "GrandeTriangleTradingRules.mqh"
 #include "..\VSol\AdvancedTrendFollower.mqh"
 #include "..\VSol\GrandeRiskManager.mqh"
 #include <Trade\Trade.mqh>
@@ -38,6 +40,14 @@ input bool   InpEnableTrading = true;           // Enable Live Trading
 input int    InpMagicNumber = 123456;            // Magic Number for Trades
 input int    InpSlippage = 30;                   // Slippage in Points
 input string InpOrderTag = "[GRANDE]";           // Order comment tag for identification
+
+input group "=== Triangle Pattern Settings ==="
+input bool   InpEnableTriangleTrading = true;    // Enable Triangle Pattern Trading
+input double InpTriangleMinConfidence = 0.6;     // Minimum Pattern Confidence
+input double InpTriangleMinBreakoutProb = 0.6;   // Minimum Breakout Probability
+input bool   InpTriangleRequireVolume = true;    // Require Volume Confirmation
+input double InpTriangleRiskPct = 2.0;           // Risk % for Triangle Trades
+input bool   InpTriangleAllowEarlyEntry = false; // Allow Early Entry (Pre-breakout)
 
 input group "=== Risk Management Settings ==="
 input double InpRiskPctTrend = 2.5;              // Risk % for Trend Trades
@@ -113,13 +123,17 @@ input int    InpRiskUpdateSeconds   = 2;         // Risk Update Interval (second
 //+------------------------------------------------------------------+
 CGrandeMarketRegimeDetector*  g_regimeDetector;
 CGrandeKeyLevelDetector*      g_keyLevelDetector;
+CGrandeTrianglePatternDetector* g_triangleDetector;
+CGrandeTriangleTradingRules*  g_triangleTrading;
 CAdvancedTrendFollower*       g_trendFollower;
 CGrandeRiskManager*           g_riskManager;
 CTrade                        g_trade;
 RegimeConfig                  g_regimeConfig;
 RiskConfig                    g_riskConfig;
+TriangleTradingConfig         g_triangleConfig;
 datetime                      g_lastRegimeUpdate;
 datetime                      g_lastKeyLevelUpdate;
+datetime                      g_lastTriangleUpdate;
 datetime                      g_lastDisplayUpdate;
 long                          g_chartID;
 datetime                      g_lastRiskUpdate;
@@ -233,6 +247,74 @@ int OnInit()
         return INIT_FAILED;
     }
     
+    // Configure triangle trading settings
+    g_triangleConfig.minConfidence = InpTriangleMinConfidence;
+    g_triangleConfig.minBreakoutProb = InpTriangleMinBreakoutProb;
+    g_triangleConfig.requireVolumeConfirm = InpTriangleRequireVolume;
+    g_triangleConfig.maxRiskPercent = InpTriangleRiskPct;
+    g_triangleConfig.allowEarlyEntry = InpTriangleAllowEarlyEntry;
+    
+    // Create and initialize triangle pattern detector (if enabled)
+    g_triangleDetector = NULL;
+    g_triangleTrading = NULL;
+    if(InpEnableTriangleTrading)
+    {
+        g_triangleDetector = new CGrandeTrianglePatternDetector();
+        if(g_triangleDetector == NULL)
+        {
+            Print("ERROR: Failed to create Triangle Pattern Detector");
+            delete g_regimeDetector;
+            delete g_keyLevelDetector;
+            g_regimeDetector = NULL;
+            g_keyLevelDetector = NULL;
+            return INIT_FAILED;
+        }
+        
+        TriangleConfig triangleConfig;
+        if(!g_triangleDetector.Initialize(_Symbol, triangleConfig))
+        {
+            Print("ERROR: Failed to initialize Triangle Pattern Detector");
+            delete g_regimeDetector;
+            delete g_keyLevelDetector;
+            delete g_triangleDetector;
+            g_regimeDetector = NULL;
+            g_keyLevelDetector = NULL;
+            g_triangleDetector = NULL;
+            return INIT_FAILED;
+        }
+        
+        // Create and initialize triangle trading rules
+        g_triangleTrading = new CGrandeTriangleTradingRules();
+        if(g_triangleTrading == NULL)
+        {
+            Print("ERROR: Failed to create Triangle Trading Rules");
+            delete g_regimeDetector;
+            delete g_keyLevelDetector;
+            delete g_triangleDetector;
+            g_regimeDetector = NULL;
+            g_keyLevelDetector = NULL;
+            g_triangleDetector = NULL;
+            return INIT_FAILED;
+        }
+        
+        if(!g_triangleTrading.Initialize(_Symbol, g_triangleConfig))
+        {
+            Print("ERROR: Failed to initialize Triangle Trading Rules");
+            delete g_regimeDetector;
+            delete g_keyLevelDetector;
+            delete g_triangleDetector;
+            delete g_triangleTrading;
+            g_regimeDetector = NULL;
+            g_keyLevelDetector = NULL;
+            g_triangleDetector = NULL;
+            g_triangleTrading = NULL;
+            return INIT_FAILED;
+        }
+        
+        if(InpLogDebugInfo)
+            Print("[Grande] Triangle Pattern Detection and Trading initialized");
+    }
+    
     // Create and initialize trend follower (if enabled)
     g_trendFollower = NULL;
     if(InpEnableTrendFollower)
@@ -307,6 +389,7 @@ int OnInit()
     // Initialize update times
     g_lastRegimeUpdate = 0;
     g_lastKeyLevelUpdate = 0;
+    g_lastTriangleUpdate = 0;
     g_lastDisplayUpdate = 0;
     g_lastRiskUpdate = 0;
     
@@ -355,6 +438,18 @@ void OnDeinit(const int reason)
     {
         delete g_keyLevelDetector;
         g_keyLevelDetector = NULL;
+    }
+    
+    if(g_triangleDetector != NULL)
+    {
+        delete g_triangleDetector;
+        g_triangleDetector = NULL;
+    }
+    
+    if(g_triangleTrading != NULL)
+    {
+        delete g_triangleTrading;
+        g_triangleTrading = NULL;
     }
     
     if(g_trendFollower != NULL)
@@ -446,6 +541,41 @@ void OnTimer()
                 g_keyLevelDetector.PrintKeyLevelsReport();
         }
         g_lastKeyLevelUpdate = currentTime;
+    }
+    
+    // Update triangle pattern detection and trading
+    if(g_triangleDetector != NULL && g_triangleTrading != NULL && 
+       InpEnableTriangleTrading && currentTime - g_lastTriangleUpdate >= InpRegimeUpdateSeconds)
+    {
+        // CRITICAL: Only proceed if risk manager allows trading
+        if(g_riskManager != NULL && !g_riskManager.IsTradingEnabled())
+        {
+            // Risk manager has disabled trading - skip triangle detection
+            g_lastTriangleUpdate = currentTime;
+            return;
+        }
+        
+        // Update triangle pattern detection
+        if(g_triangleDetector.DetectTrianglePattern(100))
+        {
+            // Generate trading signals if pattern detected
+            STriangleSignal signal = g_triangleTrading.GenerateSignal();
+            if(signal.isValid && InpEnableTrading)
+            {
+                // CRITICAL: Validate regime compatibility before executing
+                RegimeSnapshot currentRegime = g_regimeDetector.GetLastSnapshot();
+                if(IsTriangleRegimeCompatible(currentRegime.regime))
+                {
+                    // Execute triangle-based trades with full validation
+                    ExecuteTriangleTrade(signal, currentRegime);
+                }
+                else if(InpLogDetailedInfo)
+                {
+                    Print("[Grande] Triangle trade skipped: Incompatible regime - ", GetRegimeString(currentRegime.regime));
+                }
+            }
+        }
+        g_lastTriangleUpdate = currentTime;
     }
     
     // Update trend follower
@@ -3187,4 +3317,273 @@ double CloseSymbolFifoVolume(const string symbol,
     }
 
     return closed;
+}
+
+//+------------------------------------------------------------------+
+//| Execute Triangle Pattern Trade with Full Integration            |
+//+------------------------------------------------------------------+
+void ExecuteTriangleTrade(const STriangleSignal &signal, const RegimeSnapshot &currentRegime)
+{
+    if(!signal.isValid)
+        return;
+    
+    string logPrefix = "[TRIANGLE TRADE] ";
+    
+    // CRITICAL: Check if we already have a triangle trade open
+    if(HasTrianglePositionOpen())
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "Triangle trade already open, skipping new signal");
+        return;
+    }
+    
+    // CRITICAL: Check for conflicting positions
+    if(HasConflictingPosition(signal.orderType))
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "Conflicting position exists, skipping triangle trade");
+        return;
+    }
+    
+    // CRITICAL: Validate trade setup with triangle trading rules
+    if(!g_triangleTrading.ValidateTradeSetup())
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "Triangle trade setup validation failed");
+        return;
+    }
+    
+    // CRITICAL: Use Risk Manager for position sizing and validation
+    double stopDistancePips = MathAbs(signal.stopLoss - signal.entryPrice) / _Point;
+    double lotSize = 0.0;
+    
+    if(g_riskManager != NULL)
+    {
+        // Use Grande Risk Manager for position sizing
+        lotSize = g_riskManager.CalculateLotSize(stopDistancePips, currentRegime.regime);
+        
+        // Validate trade setup with risk manager
+        if(!g_riskManager.ValidateTradeSetup(signal.entryPrice, signal.stopLoss, lotSize))
+        {
+            if(InpLogDetailedInfo)
+                Print(logPrefix + "Trade blocked by Risk Manager validation");
+            return;
+        }
+        
+        if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "Risk Manager Integration:");
+            Print(logPrefix + "  Stop Distance: ", DoubleToString(stopDistancePips, 1), " pips");
+            Print(logPrefix + "  Lot Size (Risk Manager): ", DoubleToString(lotSize, 2));
+            Print(logPrefix + "  Regime: ", GetRegimeString(currentRegime.regime));
+        }
+    }
+    else
+    {
+        // Fallback to triangle trading rules position sizing
+        double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+        double riskAmount = g_triangleTrading.CalculateRiskAmount(accountBalance);
+        lotSize = g_triangleTrading.CalculatePositionSize(accountBalance, riskAmount);
+        
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "Using fallback position sizing: ", DoubleToString(lotSize, 2));
+    }
+    
+    if(lotSize <= 0)
+    {
+        Print(logPrefix + "ERROR: Invalid lot size calculated (", DoubleToString(lotSize, 2), ")");
+        return;
+    }
+    
+    // CRITICAL: Final risk validation
+    double currentRisk = CalculateCurrentAccountRisk();
+    double triangleRisk = (MathAbs(signal.stopLoss - signal.entryPrice) * lotSize) / AccountInfoDouble(ACCOUNT_BALANCE) * 100;
+    
+    if(currentRisk + triangleRisk > InpMaxRiskPerTrade)
+    {
+        Print(logPrefix + "Trade blocked: Risk limit exceeded (", DoubleToString(currentRisk + triangleRisk, 1), "% > ", InpMaxRiskPerTrade, "%)");
+        return;
+    }
+    
+    // Execute the trade with proper integration
+    bool success = false;
+    string comment = StringFormat("[GRANDE-TRIANGLE-%s] %s", 
+                                 GetRegimeString(currentRegime.regime),
+                                 g_triangleTrading.GetSignalTypeString());
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "Trade Parameters:");
+        Print(logPrefix + "  Direction: ", g_triangleTrading.GetSignalTypeString());
+        Print(logPrefix + "  Entry Price: ", DoubleToString(signal.entryPrice, _Digits));
+        Print(logPrefix + "  Stop Loss: ", DoubleToString(signal.stopLoss, _Digits));
+        Print(logPrefix + "  Take Profit: ", DoubleToString(signal.takeProfit, _Digits));
+        Print(logPrefix + "  Lot Size: ", DoubleToString(lotSize, 2));
+        Print(logPrefix + "  Risk/Reward: 1:", DoubleToString(MathAbs(signal.takeProfit - signal.entryPrice) / MathAbs(signal.entryPrice - signal.stopLoss), 2));
+        Print(logPrefix + "  Regime: ", GetRegimeString(currentRegime.regime));
+        Print(logPrefix + "  Pattern: ", g_triangleDetector.GetPatternTypeString());
+        Print(logPrefix + "→ EXECUTING TRIANGLE TRADE...");
+    }
+    
+    if(signal.orderType == ORDER_TYPE_BUY)
+    {
+        success = g_trade.Buy(lotSize, _Symbol, signal.entryPrice, signal.stopLoss, 
+                             signal.takeProfit, comment);
+    }
+    else if(signal.orderType == ORDER_TYPE_SELL)
+    {
+        success = g_trade.Sell(lotSize, _Symbol, signal.entryPrice, signal.stopLoss, 
+                              signal.takeProfit, comment);
+    }
+    
+    // Always-on concise summary for monitoring
+    Print(StringFormat("[TRIANGLE] %s %s @%s SL=%s TP=%s lot=%.2f rr=%.2f pattern=%s",
+                       (success ? "FILLED" : "FAILED"),
+                       g_triangleTrading.GetSignalTypeString(),
+                       DoubleToString(signal.entryPrice, _Digits),
+                       DoubleToString(signal.stopLoss, _Digits),
+                       DoubleToString(signal.takeProfit, _Digits),
+                       lotSize,
+                       (MathAbs(signal.takeProfit - signal.entryPrice) / MathMax(1e-10, MathAbs(signal.entryPrice - signal.stopLoss))),
+                       g_triangleDetector.GetPatternTypeString()));
+    
+    if(success)
+    {
+        if(InpLogDetailedInfo)
+        {
+            Print("✅ TRIANGLE TRADE EXECUTED:");
+            Print("   Type: ", g_triangleTrading.GetSignalTypeString());
+            Print("   Entry: ", DoubleToString(signal.entryPrice, _Digits));
+            Print("   Stop Loss: ", DoubleToString(signal.stopLoss, _Digits));
+            Print("   Take Profit: ", DoubleToString(signal.takeProfit, _Digits));
+            Print("   Lot Size: ", DoubleToString(lotSize, 2));
+            Print("   Signal Strength: ", DoubleToString(signal.signalStrength * 100, 1), "%");
+            Print("   Pattern: ", g_triangleDetector.GetPatternTypeString());
+            Print("   Regime: ", GetRegimeString(currentRegime.regime));
+            Print("   Comment: ", comment);
+            Print("   Reason: ", signal.signalReason);
+        }
+        
+        // Register triangle trade for special management
+        RegisterTriangleTrade(signal);
+    }
+    else
+    {
+        Print(logPrefix + "Trade execution failed. Error: ", GetLastError());
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check if Triangle Position is Already Open                      |
+//+------------------------------------------------------------------+
+bool HasTrianglePositionOpen()
+{
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(PositionGetTicket(i) > 0)
+        {
+            string comment = PositionGetString(POSITION_COMMENT);
+            if(StringFind(comment, "[GRANDE-TRIANGLE]") >= 0)
+                return true;
+        }
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check if Triangle Trading is Compatible with Current Regime     |
+//+------------------------------------------------------------------+
+bool IsTriangleRegimeCompatible(MARKET_REGIME regime)
+{
+    // Triangle trading works best in breakout and ranging regimes
+    switch(regime)
+    {
+        case REGIME_BREAKOUT_SETUP:  return true;  // Perfect for triangle breakouts
+        case REGIME_RANGING:         return true;  // Good for triangle formations
+        case REGIME_TREND_BULL:      return true;  // Can work with trend continuation
+        case REGIME_TREND_BEAR:      return true;  // Can work with trend continuation
+        case REGIME_HIGH_VOLATILITY: return false; // Too risky for precise triangle patterns
+        default:                     return false;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check for Conflicting Positions                                 |
+//+------------------------------------------------------------------+
+bool HasConflictingPosition(ENUM_ORDER_TYPE orderType)
+{
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(PositionGetTicket(i) > 0)
+        {
+            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            
+            // Check for opposite direction conflicts
+            if((orderType == ORDER_TYPE_BUY && posType == POSITION_TYPE_SELL) ||
+               (orderType == ORDER_TYPE_SELL && posType == POSITION_TYPE_BUY))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Current Account Risk Percentage                       |
+//+------------------------------------------------------------------+
+double CalculateCurrentAccountRisk()
+{
+    double totalRisk = 0.0;
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(PositionGetTicket(i) > 0)
+        {
+            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            double stopLoss = PositionGetDouble(POSITION_SL);
+            double volume = PositionGetDouble(POSITION_VOLUME);
+            
+            if(stopLoss > 0)
+            {
+                double riskAmount = MathAbs(openPrice - stopLoss) * volume;
+                totalRisk += (riskAmount / accountBalance) * 100;
+            }
+        }
+    }
+    
+    return totalRisk;
+}
+
+//+------------------------------------------------------------------+
+//| Get Regime String for Display                                   |
+//+------------------------------------------------------------------+
+string GetRegimeString(MARKET_REGIME regime)
+{
+    switch(regime)
+    {
+        case REGIME_TREND_BULL:      return "TREND-BULL";
+        case REGIME_TREND_BEAR:      return "TREND-BEAR";
+        case REGIME_BREAKOUT_SETUP:  return "BREAKOUT";
+        case REGIME_RANGING:         return "RANGING";
+        case REGIME_HIGH_VOLATILITY: return "HIGH-VOL";
+        default:                     return "UNKNOWN";
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Register Triangle Trade for Special Management                  |
+//+------------------------------------------------------------------+
+void RegisterTriangleTrade(const STriangleSignal &signal)
+{
+    // This function can be expanded to track triangle trades for special management
+    // For now, it's a placeholder for future triangle-specific position management
+    if(InpLogDetailedInfo)
+    {
+        Print("[TRIANGLE] Trade registered for special management:");
+        Print("  Pattern: ", g_triangleDetector.GetPatternTypeString());
+        Print("  Signal Strength: ", DoubleToString(signal.signalStrength * 100, 1), "%");
+        Print("  Breakout Confirmed: ", signal.breakoutConfirmed ? "YES" : "NO");
+    }
 }
