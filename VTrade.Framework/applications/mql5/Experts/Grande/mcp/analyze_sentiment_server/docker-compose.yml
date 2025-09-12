@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  sentiment-server:
+    build: .
+    container_name: grande-sentiment-mcp
+    ports:
+      - "8000:8000"
+    environment:
+      - MCP_TRANSPORT=streamable-http
+      - SENTIMENT_PROVIDER=${SENTIMENT_PROVIDER:-openai_compat}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-http://localhost:11434/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-EMPTY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - CLASSIFIER_URL=${CLASSIFIER_URL:-}
+      - FINBERT_MODEL=${FINBERT_MODEL:-yiyanghkust/finbert-tone}
+    healthcheck:
+      test: ["CMD", "netstat", "-an", "|", "grep", ":8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - mcp-network
+
+  # Optional: Local LLM server (Ollama)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: grande-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    restart: unless-stopped
+    networks:
+      - mcp-network
+    profiles:
+      - local-llm
+
+networks:
+  mcp-network:
+    driver: bridge
+
+volumes:
+  ollama_data:

@@ -217,7 +217,12 @@ def main() -> None:
     if transport not in {"stdio", "streamable-http", "streamable_http"}:
         transport = "stdio"
     transport = "streamable-http" if transport.startswith("streamable") else "stdio"
-    mcp.run(transport=transport)
+    
+    # For HTTP transport, bind to all interfaces
+    if transport == "streamable-http":
+        mcp.run(transport=transport, host="0.0.0.0", port=8000)
+    else:
+        mcp.run(transport=transport)
 
 
 if __name__ == "__main__":
