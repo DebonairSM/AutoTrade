@@ -218,11 +218,12 @@ def main() -> None:
         transport = "stdio"
     transport = "streamable-http" if transport.startswith("streamable") else "stdio"
     
-    # For HTTP transport, bind to all interfaces
+    # Set environment variables for HTTP binding
     if transport == "streamable-http":
-        mcp.run(transport=transport, host="0.0.0.0", port=8000)
-    else:
-        mcp.run(transport=transport)
+        os.environ["MCP_HOST"] = "0.0.0.0"
+        os.environ["MCP_PORT"] = "8000"
+    
+    mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

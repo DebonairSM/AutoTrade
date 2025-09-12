@@ -8,6 +8,8 @@ services:
       - "8000:8000"
     environment:
       - MCP_TRANSPORT=streamable-http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
       - SENTIMENT_PROVIDER=${SENTIMENT_PROVIDER:-openai_compat}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-http://localhost:11434/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-EMPTY}
