@@ -493,13 +493,17 @@ void OnTimer()
     // Periodic risk manager updates (trailing stop, breakeven, etc.)
     if(g_riskManager != NULL && currentTime - g_lastRiskUpdate >= InpRiskUpdateSeconds)
     {
-        ResetLastError();
-        g_riskManager.OnTick();
-        // Do not log on timer by default; optional debug only
-        int rmError = GetLastError();
-        if(rmError == 0 && !g_riskManager.IsTradingEnabled())
+        // CRITICAL FIX: Only manage positions on the designated timeframe to prevent competition
+        if(!InpManageOnlyOnTimeframe || Period() == InpManagementTimeframe)
         {
-            // Trading disabled by risk checks; simply skip further actions this cycle
+            ResetLastError();
+            g_riskManager.OnTick();
+            // Do not log on timer by default; optional debug only
+            int rmError = GetLastError();
+            if(rmError == 0 && !g_riskManager.IsTradingEnabled())
+            {
+                // Trading disabled by risk checks; simply skip further actions this cycle
+            }
         }
         g_lastRiskUpdate = currentTime;
     }
