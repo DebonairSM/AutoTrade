@@ -167,7 +167,7 @@ public:
     ~CGrandeTrianglePatternDetector();
     
     // Initialization
-    bool                Initialize(string symbol, TriangleConfig config = TriangleConfig());
+    bool                Initialize(string symbol, const TriangleConfig &config);
     void                Deinitialize();
     
     // Pattern Detection
@@ -214,7 +214,7 @@ CGrandeTrianglePatternDetector::~CGrandeTrianglePatternDetector()
 //+------------------------------------------------------------------+
 //| Initialize Triangle Pattern Detector                            |
 //+------------------------------------------------------------------+
-bool CGrandeTrianglePatternDetector::Initialize(string symbol, TriangleConfig config)
+bool CGrandeTrianglePatternDetector::Initialize(string symbol, const TriangleConfig &config)
 {
     if(symbol == "" || SymbolSelect(symbol, true) == false)
     {
@@ -268,13 +268,22 @@ bool CGrandeTrianglePatternDetector::DetectTrianglePattern(int lookback)
     ArrayResize(m_volumes, lookback);
     ArrayResize(m_times, lookback);
     
+    long volumes[];
+    ArrayResize(volumes, lookback);
+    
     if(CopyHigh(m_symbol, Period(), 0, lookback, m_highs) != lookback ||
        CopyLow(m_symbol, Period(), 0, lookback, m_lows) != lookback ||
-       CopyTickVolume(m_symbol, Period(), 0, lookback, m_volumes) != lookback ||
+       CopyTickVolume(m_symbol, Period(), 0, lookback, volumes) != lookback ||
        CopyTime(m_symbol, Period(), 0, lookback, m_times) != lookback)
     {
         Print("❌ Failed to copy price data for triangle detection");
         return false;
+    }
+    
+    // Copy volume data to double array
+    for(int i = 0; i < lookback; i++)
+    {
+        m_volumes[i] = (double)volumes[i];
     }
     
     // Set arrays as series (newest first)
@@ -488,8 +497,8 @@ bool CGrandeTrianglePatternDetector::ValidateTriangleFormation()
     }
     
     // Check formation time
-    double formationDays = (m_resistanceLine.endTime - m_resistanceLine.startTime) / 86400.0;
-    double formationBars = ArraySize(m_highs) - (m_resistanceLine.endTime - TimeCurrent()) / PeriodSeconds(Period());
+    double formationDays = (double)(m_resistanceLine.endTime - m_resistanceLine.startTime) / 86400.0;
+    double formationBars = (double)ArraySize(m_highs) - (double)(m_resistanceLine.endTime - TimeCurrent()) / (double)PeriodSeconds(Period());
     
     if(formationBars < m_config.minFormationBars || formationBars > m_config.maxFormationBars)
     {

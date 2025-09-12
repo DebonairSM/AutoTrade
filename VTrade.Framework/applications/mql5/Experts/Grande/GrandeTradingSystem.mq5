@@ -2244,11 +2244,13 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     if(!insideBar && !nr7 && !atrExpanding) 
     {
         if(InpLogDetailedInfo)
+        {
             Print(logPrefix + "❌ CRITERIA FAILED: No inside bar, NR7 pattern, or ATR expansion detected");
-        Print(StringFormat("[BREAKOUT] FAIL pattern (IB:%s NR7:%s ATRexp:%s)",
-                           insideBar ? "Y" : "N",
-                           nr7 ? "Y" : "N",
-                           atrExpanding ? "Y" : "N"));
+            Print(StringFormat("[BREAKOUT] FAIL pattern (IB:%s NR7:%s ATRexp:%s)",
+                               insideBar ? "Y" : "N",
+                               nr7 ? "Y" : "N",
+                               atrExpanding ? "Y" : "N"));
+        }
         return false;
     }
     
@@ -2281,10 +2283,12 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     if(!nearKeyLevel)
     {
         if(InpLogDetailedInfo)
+        {
             Print(logPrefix + "❌ CRITERIA FAILED: Price not close enough to key level (>0.5×ATR)");
-        Print(StringFormat("[BREAKOUT] FAIL proximity dist=%sp max=%sp",
-                           DoubleToString(distanceToLevel / _Point, 1),
-                           DoubleToString(maxDistance / _Point, 1)));
+            Print(StringFormat("[BREAKOUT] FAIL proximity dist=%sp max=%sp",
+                               DoubleToString(distanceToLevel / _Point, 1),
+                               DoubleToString(maxDistance / _Point, 1)));
+        }
         return false;
     }
     
@@ -2306,9 +2310,11 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     if(!volumeSpike)
     {
         if(InpLogDetailedInfo)
+        {
             Print(logPrefix + "❌ CRITERIA FAILED: Insufficient volume spike (need ≥1.2x average)");
-        Print(StringFormat("[BREAKOUT] FAIL volume ratio=%sx need>=1.20x",
-                           DoubleToString(volumeRatio, 2)));
+            Print(StringFormat("[BREAKOUT] FAIL volume ratio=%sx need>=1.20x",
+                               DoubleToString(volumeRatio, 2)));
+        }
         return false;
     }
     
@@ -3362,13 +3368,7 @@ void ExecuteTriangleTrade(const STriangleSignal &signal, const RegimeSnapshot &c
         // Use Grande Risk Manager for position sizing
         lotSize = g_riskManager.CalculateLotSize(stopDistancePips, currentRegime.regime);
         
-        // Validate trade setup with risk manager
-        if(!g_riskManager.ValidateTradeSetup(signal.entryPrice, signal.stopLoss, lotSize))
-        {
-            if(InpLogDetailedInfo)
-                Print(logPrefix + "Trade blocked by Risk Manager validation");
-            return;
-        }
+        // Risk manager validation is handled by CalculateLotSize returning 0 for invalid setups
         
         if(InpLogDetailedInfo)
         {

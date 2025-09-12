@@ -110,7 +110,7 @@ public:
     ~CGrandeTriangleTradingRules();
     
     // Initialization
-    bool                Initialize(string symbol, TriangleTradingConfig config = TriangleTradingConfig());
+    bool                Initialize(string symbol, const TriangleTradingConfig &config);
     void                Deinitialize();
     
     // Signal Generation
@@ -166,7 +166,7 @@ CGrandeTriangleTradingRules::~CGrandeTriangleTradingRules()
 //+------------------------------------------------------------------+
 //| Initialize Triangle Trading Rules                               |
 //+------------------------------------------------------------------+
-bool CGrandeTriangleTradingRules::Initialize(string symbol, TriangleTradingConfig config)
+bool CGrandeTriangleTradingRules::Initialize(string symbol, const TriangleTradingConfig &config)
 {
     if(symbol == "" || SymbolSelect(symbol, true) == false)
     {
