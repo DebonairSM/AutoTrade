@@ -1,0 +1,73 @@
+{
+  "signal": "BUY",
+  "strength": 0.6645962732919255,
+  "confidence": 0.225,
+  "reasoning": "Based on 4 articles from 4 sources. Avg sentiment: 0.665, Confidence: 0.225",
+  "article_count": 4,
+  "sources": [
+    "Reuters (Simulated)",
+    "Financial Times (Simulated)",
+    "Bloomberg (Simulated)",
+    "Alpha Vantage (Simulated)"
+  ],
+  "avg_sentiment": 0.6645962732919255,
+  "articles": [
+    {
+      "title": "Federal Reserve Signals Potential Rate Cut",
+      "description": "The Federal Reserve has signaled a potential rate cut in upcoming meetings, affecting major currency pairs.",
+      "source": "Reuters (Simulated)",
+      "published_at": "2025-09-12T16:16:35.255412",
+      "url": "https://reuters.com/fed-rate-cut",
+      "raw_text": "Federal Reserve Signals Potential Rate Cut The Federal Reserve has signaled a potential rate cut in upcoming meetings, affecting major currency pairs.",
+      "sentiment_score": 1.0,
+      "sentiment_label": "Positive",
+      "confidence": 0.1,
+      "relevance": 90
+    },
+    {
+      "title": "ECB Maintains Hawkish Stance on Inflation",
+      "description": "The European Central Bank maintains its hawkish stance on inflation, supporting the euro.",
+      "source": "Bloomberg (Simulated)",
+      "published_at": "2025-09-12T16:16:35.255421",
+      "url": "https://bloomberg.com/ecb-hawkish",
+      "raw_text": "ECB Maintains Hawkish Stance on Inflation The European Central Bank maintains its hawkish stance on inflation, supporting the euro.",
+      "sentiment_score": 1.0,
+      "sentiment_label": "Positive",
+      "confidence": 0.3,
+      "relevance": 85
+    },
+    {
+      "title": "Bank of Japan Considers Policy Shift",
+      "description": "The Bank of Japan is considering a major policy shift that could impact the yen significantly.",
+      "source": "Financial Times (Simulated)",
+      "published_at": "2025-09-12T16:16:35.255422",
+      "url": "https://ft.com/boj-policy-shift",
+      "raw_text": "Bank of Japan Considers Policy Shift The Bank of Japan is considering a major policy shift that could impact the yen significantly.",
+      "sentiment_score": 0.0,
+      "sentiment_label": "Neutral",
+      "confidence": 0.1,
+      "relevance": 80
+    },
+    {
+      "title": "EUR/USD Technical Analysis: Bullish Momentum Building",
+      "description": "Technical indicators show strong bullish momentum building in EUR/USD with key resistance levels being tested.",
+      "source": "Alpha Vantage (Simulated)",
+      "published_at": "2025-09-12T16:16:35.255582",
+      "url": "https://alphavantage.co/eur-usd-analysis",
+      "raw_text": "EUR/USD Technical Analysis: Bullish Momentum Building Technical indicators show strong bullish momentum building in EUR/USD with key resistance levels being tested.",
+      "sentiment_score": 0.5,
+      "sentiment_label": "Positive",
+      "confidence": 0.4,
+      "relevance": 95
+    }
+  ],
+  "timestamp": "2025-09-12T16:16:38.953009",
+  "symbols": [
+    "EURUSD",
+    "GBPUSD",
+    "USDJPY",
+    "AUDUSD",
+    "USDCAD"
+  ],
+  "sentiment_server_status": "connected"
+}
