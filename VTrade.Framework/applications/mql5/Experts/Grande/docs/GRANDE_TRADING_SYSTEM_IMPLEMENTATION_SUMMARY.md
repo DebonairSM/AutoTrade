@@ -13,7 +13,7 @@ The **Grande Trading System** has been successfully transformed from an analytic
 
 | Regime | Entry Logic | Filters | Exit/Management |
 |--------|-------------|---------|-----------------|
-| **TREND_BULL/BEAR** | ✅ 50 & 200 EMA alignment (H1+H4)<br>✅ Price pull-back ≤ 1×ATR to 20 EMA<br>✅ RSI(14) 40-60 reset + hook | ✅ ADX ≥ 25 on H1 AND H4<br>✅ No key level ≤ 0.5×ATR ahead | ✅ Initial SL = last swing ± 1.2×ATR<br>✅ TP at 3×ATR |
+| **TREND_BULL/BEAR** | ✅ 50 & 200 EMA alignment (H1+H4)<br>✅ Price pull-back ≤ 1×ATR to 20 EMA<br>✅ RSI(14) 40-60 reset + hook | ✅ ADX ≥ 25 on H1 AND H4<br>✅ No key level ≤ 0.5×ATR ahead<br>✅ **H4/D1 RSI exhaustion filter** | ✅ Initial SL = last swing ± 1.2×ATR<br>✅ TP at 3×ATR<br>✅ **RSI-based partial exits** |
 | **BREAKOUT_SETUP** | ✅ Inside-bar/NR7 at strong key level<br>✅ Buy/Sell Stop ± 0.2×ATR outside range | ✅ Volume spike ≥ 1.5×20-bar MA<br>✅ Near strong key level | ✅ Move SL to BE at +1R<br>✅ TP at 3×ATR |
 | **RANGING** | ✅ Fade touches of top/bottom 80%<br>✅ Stoch(14,3,3) crossing 80/20 | ✅ Range width ≥ 1.5×spread<br>✅ ADX < 20 | ✅ Hard TP at mid-range<br>✅ SL outside range |
 | **HIGH_VOL** | ✅ **No new positions** | — | Manage open trades only |
@@ -41,8 +41,45 @@ The **Grande Trading System** has been successfully transformed from an analytic
 - **Drawdown Protection**: Automatic trading disable at 25% DD
 - **Regime-Specific Risk**: Different risk percentages per market condition
 - **ATR Integration**: Volatility-adjusted stop losses and position sizes
+- **Multi-Timeframe RSI Filtering**: H4/D1 exhaustion gates prevent entries into overbought/oversold conditions
+- **RSI-Based Exit Management**: Partial position closes at RSI extremes with configurable thresholds
 
-### **3. Trading Execution Engine** ✅
+### **3. RSI Risk Management System** ✅
+**Status: NEWLY IMPLEMENTED**
+
+**Multi-Timeframe RSI Filtering:**
+- **H4 RSI Gate**: Blocks long entries when H4 RSI ≥ 68, short entries when H4 RSI ≤ 32
+- **D1 RSI Gate**: Optional additional filter at 70/30 extremes for macro context
+- **Chart TF Timing**: Maintains existing 40-60 RSI reset + hook for precise entry timing
+- **Exhaustion Prevention**: Prevents buying into overbought conditions or selling into oversold
+
+**RSI-Based Exit Management:**
+- **Partial Closes**: Configurable fraction (default 50%) closed at RSI extremes
+- **Multi-TF Triggers**: Chart TF RSI 70/30 OR H4 RSI 68/32 trigger partial exits
+- **Profit Protection**: Requires minimum profit (default 10 pips) before RSI exits
+- **Risk Integration**: Works alongside existing trailing stops and breakeven logic
+
+**Configuration Parameters:**
+```
+✅ InpEnableMTFRSI = true              // Enable H4/D1 RSI filtering
+✅ InpH4RSIOverbought = 68.0          // H4 overbought threshold
+✅ InpH4RSIOversold = 32.0            // H4 oversold threshold
+✅ InpUseD1RSI = true                 // Enable D1 RSI filter
+✅ InpD1RSIOverbought = 70.0          // D1 overbought threshold
+✅ InpD1RSIOversold = 30.0            // D1 oversold threshold
+✅ InpEnableRSIExits = true           // Enable RSI-based exits
+✅ InpRSIExitOB = 70.0                // Chart TF overbought exit
+✅ InpRSIExitOS = 30.0                // Chart TF oversold exit
+✅ InpRSIPartialClose = 0.50          // Fraction to close on RSI extreme
+✅ InpRSIExitMinProfitPips = 10       // Minimum profit required
+✅ InpRSIExitCooldownSec = 900        // Cooldown between RSI partial closes
+✅ InpMinRemainingVolume = 0.02       // Min remaining volume after partial
+✅ InpExitRequireATROK = false        // Require ATR not collapsing
+✅ InpExitMinATRRat = 0.80            // Min ATR ratio vs 10-bar average
+✅ InpExitStructureGuard = false      // Require ≥1R in favor before exit
+```
+
+### **4. Trading Execution Engine** ✅
 **Status: FULLY IMPLEMENTED**
 
 **Core Components:**
@@ -113,6 +150,21 @@ The **Grande Trading System** has been successfully transformed from an analytic
 ✅ InpMaxAccountDDPct = 25.0%        // Max drawdown
 ✅ InpMagicNumber = 123456           // Trade identifier
 ✅ InpSlippage = 30                  // Slippage points
+```
+
+### **RSI Risk Management Parameters** ✅
+```cpp
+✅ InpEnableMTFRSI = true            // Enable H4/D1 RSI filtering
+✅ InpH4RSIOverbought = 68.0         // H4 overbought threshold
+✅ InpH4RSIOversold = 32.0           // H4 oversold threshold
+✅ InpUseD1RSI = true                // Enable D1 RSI filter
+✅ InpD1RSIOverbought = 70.0         // D1 overbought threshold
+✅ InpD1RSIOversold = 30.0           // D1 oversold threshold
+✅ InpEnableRSIExits = true          // Enable RSI-based exits
+✅ InpRSIExitOB = 70.0               // Chart TF overbought exit
+✅ InpRSIExitOS = 30.0               // Chart TF oversold exit
+✅ InpRSIPartialClose = 0.50         // Fraction to close on RSI extreme
+✅ InpRSIExitMinProfitPips = 10      // Minimum profit required
 ```
 
 ### **Signal Parameters** ✅

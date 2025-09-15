@@ -87,6 +87,21 @@ This guide explains how to use the optimization templates for the Grande Trading
 - **InpRSIPeriod**: RSI calculation period (10-20)
 - **InpStochPeriod**: Stochastic period (10-20)
 
+### RSI Risk Management Settings
+- **InpH4RSIOverbought**: H4 overbought threshold (60-75)
+- **InpH4RSIOversold**: H4 oversold threshold (25-40)
+- **InpD1RSIOverbought**: D1 overbought threshold (65-80)
+- **InpD1RSIOversold**: D1 oversold threshold (20-35)
+- **InpRSIExitOB**: Chart TF overbought exit (65-80)
+- **InpRSIExitOS**: Chart TF oversold exit (20-35)
+- **InpRSIPartialClose**: Partial close fraction (0.3-0.7)
+- **InpRSIExitMinProfitPips**: Minimum profit required (5-20)
+- **InpRSIExitCooldownSec**: Cooldown between partial closes (300-1800)
+- **InpMinRemainingVolume**: Min remaining lot after partial (0.01-0.10)
+- **InpExitRequireATROK**: Require ATR not collapsing (bool)
+- **InpExitMinATRRat**: Min ATR ratio vs 10-bar avg (0.7-1.1)
+- **InpExitStructureGuard**: Require ≥1R in favor before exit (bool)
+
 ## Optimization Strategy
 
 ### Phase 1: Safe Initial Optimization
@@ -104,6 +119,15 @@ This guide explains how to use the optimization templates for the Grande Trading
 2. Adjust parameters based on market conditions
 3. Forward test on out-of-sample data
 4. Validate parameters using built-in validation
+
+### RSI Risk Management Optimization
+1. **Start Conservative**: Begin with default RSI thresholds (68/32 H4, 70/30 D1)
+2. **Test Entry Filters**: Optimize H4/D1 RSI levels for your market conditions
+3. **Tune Exit Triggers**: Adjust chart TF RSI exit levels (70/30 default)
+4. **Optimize Partial Closes**: Test different partial close percentages (0.3-0.7)
+5. **Validate Profit Thresholds**: Ensure minimum profit requirements are realistic
+6. **Add Cooldown**: Increase cooldown on choppy symbols to reduce over-trimming
+7. **Enable Guards**: Turn on ATR/Structure guards if exits fire too often in chop
 
 ## Best Practices
 

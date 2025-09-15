@@ -186,7 +186,13 @@ bool CGrandeTriangleTradingRules::Initialize(string symbol, const TriangleTradin
     }
     
     m_initialized = true;
-    Print("✅ GrandeTriangleTradingRules initialized for ", m_symbol);
+    // Prevent duplicate init logs across multiple initializations
+    static bool s_rulesInitLogged = false;
+    if(!s_rulesInitLogged)
+    {
+        Print("✅ GrandeTriangleTradingRules initialized for ", m_symbol);
+        s_rulesInitLogged = true;
+    }
     return true;
 }
 

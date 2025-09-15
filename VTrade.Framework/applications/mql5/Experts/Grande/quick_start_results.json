@@ -1,0 +1,91 @@
+{
+  "timestamp": "2025-09-15T11:56:37.913642",
+  "signal": {
+    "signal": "BUY",
+    "strength": 0.4163360560093348,
+    "confidence": 0.7142857142857143,
+    "reasoning": "Based on 7 articles. Avg sentiment: 0.416, Confidence: 0.714",
+    "article_count": 7,
+    "avg_sentiment": 0.4163360560093348
+  },
+  "articles": [
+    {
+      "title": "Federal Reserve Signals Potential Rate Cut",
+      "description": "The Federal Reserve has signaled a potential rate cut in upcoming meetings, affecting major currency pairs.",
+      "source": "Reuters (Simulated)",
+      "published_at": "2025-09-15T11:56:37.912338",
+      "url": "https://reuters.com/fed-rate-cut",
+      "sentiment_score": 0.7,
+      "sentiment_label": "Positive",
+      "confidence": 0.8,
+      "relevance": 90
+    },
+    {
+      "title": "ECB Maintains Hawkish Stance on Inflation",
+      "description": "The European Central Bank maintains its hawkish stance on inflation, supporting the euro.",
+      "source": "Bloomberg (Simulated)",
+      "published_at": "2025-09-15T11:56:37.912359",
+      "url": "https://bloomberg.com/ecb-hawkish",
+      "sentiment_score": 0.5,
+      "sentiment_label": "Positive",
+      "confidence": 0.7,
+      "relevance": 85
+    },
+    {
+      "title": "EUR/USD Technical Analysis: Bullish Breakout Confirmed",
+      "description": "The EUR/USD pair has confirmed a bullish breakout above key resistance, with strong momentum indicators supporting further upside.",
+      "source": "Investing.com (Investpy)",
+      "published_at": "2025-09-15T11:56:37.912451",
+      "url": "https://investing.com/eur-usd-technical",
+      "sentiment_score": 0.8,
+      "sentiment_label": "Very Positive",
+      "confidence": 0.9,
+      "relevance": 95
+    },
+    {
+      "title": "GBP/USD Forecast: Bank of England Policy Shift Expected",
+      "description": "The British pound is expected to gain strength as the Bank of England signals a potential policy shift in upcoming meetings.",
+      "source": "Investing.com (Investpy)",
+      "published_at": "2025-09-15T11:56:37.912460",
+      "url": "https://investing.com/gbp-usd-forecast",
+      "sentiment_score": 0.6,
+      "sentiment_label": "Positive",
+      "confidence": 0.8,
+      "relevance": 90
+    },
+    {
+      "title": "USD/JPY Analysis: Intervention Concerns Mount",
+      "description": "The USD/JPY pair faces pressure as traders worry about potential Bank of Japan intervention at current levels.",
+      "source": "Investing.com (Investpy)",
+      "published_at": "2025-09-15T11:56:37.912463",
+      "url": "https://investing.com/usd-jpy-analysis",
+      "sentiment_score": -0.3,
+      "sentiment_label": "Negative",
+      "confidence": 0.7,
+      "relevance": 85
+    },
+    {
+      "title": "Market Analysis: Major Currency Pairs Show Divergence",
+      "description": "Major currency pairs are showing significant divergence as central bank policies continue to diverge globally.",
+      "source": "TradingView (Free)",
+      "published_at": "2025-09-15T11:56:37.912580",
+      "url": "https://tradingview.com/analysis/currency-divergence",
+      "sentiment_score": 0.1,
+      "sentiment_label": "Neutral",
+      "confidence": 0.6,
+      "relevance": 75
+    },
+    {
+      "title": "Technical Analysis: AUD/USD Support Level Test",
+      "description": "The AUD/USD pair is testing key support levels with traders watching for a potential bounce or breakdown.",
+      "source": "TradingView (Free)",
+      "published_at": "2025-09-15T11:56:37.912584",
+      "url": "https://tradingview.com/analysis/aud-usd-support",
+      "sentiment_score": 0.0,
+      "sentiment_label": "Neutral",
+      "confidence": 0.5,
+      "relevance": 70
+    }
+  ],
+  "cost": 0.0
+}

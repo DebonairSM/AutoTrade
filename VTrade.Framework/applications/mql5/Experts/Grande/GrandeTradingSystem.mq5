@@ -15,6 +15,7 @@
 #include "GrandeKeyLevelDetector.mqh"
 #include "GrandeTrianglePatternDetector.mqh"
 #include "GrandeTriangleTradingRules.mqh"
+#include "mcp/analyze_sentiment_server/GrandeNewsSentimentIntegration.mqh"
 #include "..\VSol\AdvancedTrendFollower.mqh"
 #include "..\VSol\GrandeRiskManager.mqh"
 #include <Trade\Trade.mqh>
@@ -56,7 +57,7 @@ input double InpRiskPctBreakout = 3.0;           // Risk % for Breakout Trades
 input double InpMaxRiskPerTrade = 5.0;           // Maximum Risk % per Trade
 input double InpMaxDrawdownPct = 25.0;           // Maximum Account Drawdown %
 input double InpEquityPeakReset = 5.0;           // Reset Peak after X% Recovery
-input int    InpMaxPositions = 3;                // Maximum Concurrent Positions
+input int    InpMaxPositions = 5;                // Maximum Concurrent Positions
 
 input group "=== Stop Loss & Take Profit ==="
 input double InpSLATRMultiplier = 1.2;           // Stop Loss ATR Multiplier
@@ -98,9 +99,30 @@ input int    InpTFMacdSlowPeriod = 26;           // TF MACD Slow Period
 input int    InpTFMacdSignalPeriod = 9;          // TF MACD Signal Period
 input int    InpTFRsiPeriod = 14;                // TF RSI Period
 input double InpTFRsiThreshold = 50.0;           // TF RSI Threshold
+
+// RSI Risk Management Settings
+input bool   InpEnableMTFRSI = true;              // Gate entries by H4/D1 RSI
+input double InpH4RSIOverbought = 68.0;           // H4 RSI overbought
+input double InpH4RSIOversold  = 32.0;            // H4 RSI oversold
+input bool   InpUseD1RSI = true;                  // Also gate by D1 extremes
+input double InpD1RSIOverbought = 70.0;
+input double InpD1RSIOversold  = 30.0;
+
+input bool   InpEnableRSIExits = true;            // Enable RSI-based exits
+input double InpRSIExitOB = 70.0;                 // Chart TF RSI overbought (long exit trigger)
+input double InpRSIExitOS = 30.0;                 // Chart TF RSI oversold (short exit trigger)
+input double InpRSIPartialClose = 0.50;           // Fraction to close on RSI extreme
+input int    InpRSIExitMinProfitPips = 10;        // Require min unrealized profit
 input int    InpTFAdxPeriod = 14;                // TF ADX Period
 input double InpTFAdxThreshold = 25.0;           // TF ADX Minimum Threshold
 input bool   InpShowTrendFollowerPanel = true;   // Show TF Diagnostic Panel
+
+// RSI Exit Enhancements
+input int    InpRSIExitCooldownSec = 900;         // Cooldown between RSI partial closes (seconds)
+input double InpMinRemainingVolume = 0.02;        // Min remaining volume after partial close
+input bool   InpExitRequireATROK = false;         // Require ATR not collapsing for RSI exit
+input double InpExitMinATRRat = 0.80;             // Min ATR ratio vs 10-bar avg (0.8 = 80%)
+input bool   InpExitStructureGuard = false;       // Require >=1R in favor before RSI exit
 
 input group "=== Display Settings ==="
 input bool   InpShowRegimeBackground = true;     // Show Regime Background Colors
@@ -127,6 +149,7 @@ CGrandeTrianglePatternDetector* g_triangleDetector;
 CGrandeTriangleTradingRules*  g_triangleTrading;
 CAdvancedTrendFollower*       g_trendFollower;
 CGrandeRiskManager*           g_riskManager;
+CNewsSentimentIntegration     g_newsSentiment;
 CTrade                        g_trade;
 RegimeConfig                  g_regimeConfig;
 RiskConfig                    g_riskConfig;
@@ -137,6 +160,19 @@ datetime                      g_lastTriangleUpdate;
 datetime                      g_lastDisplayUpdate;
 long                          g_chartID;
 datetime                      g_lastRiskUpdate;
+
+// Cached RSI values per management cycle
+datetime                      g_lastRsiCacheTime;
+double                        g_cachedRsiCTF = EMPTY_VALUE;
+double                        g_cachedRsiH4  = EMPTY_VALUE;
+double                        g_cachedRsiD1  = EMPTY_VALUE;
+
+// Cooldown storage per ticket for partial closes
+struct SRsiExitState {
+    datetime lastPartialTime;
+};
+// We will store cooldowns in chart objects to avoid dynamic arrays/maps complexity
+// Key format: "RSIExitCooldown_" + IntegerToString(ticket)
 
 // Chart object names
 const string REGIME_BACKGROUND_NAME = "GrandeRegimeBackground";
@@ -349,6 +385,14 @@ int OnInit()
             Print("[Grande] Advanced Trend Follower initialized and integrated");
     }
     
+    // Initialize News Sentiment (non-fatal if unavailable)
+    if(!g_newsSentiment.Initialize())
+    {
+        if(InpLogDebugInfo)
+            Print("[Grande] WARNING: News sentiment server unavailable; continuing without sentiment integration");
+    }
+    g_newsSentiment.SetAnalysisInterval(300);
+    
     // Create and initialize risk manager
     g_riskManager = new CGrandeRiskManager();
     if(g_riskManager == NULL)
@@ -497,7 +541,13 @@ void OnTimer()
         if(!InpManageOnlyOnTimeframe || Period() == InpManagementTimeframe)
         {
             ResetLastError();
+            // Cache RSI once per management tick for reuse
+            if(InpEnableRSIExits || InpEnableMTFRSI)
+                CacheRsiForCycle();
             g_riskManager.OnTick();
+            // Add RSI-based exit management (optional)
+            if(InpEnableRSIExits)
+                ApplyRSIExitRules();
             // Do not log on timer by default; optional debug only
             int rmError = GetLastError();
             if(rmError == 0 && !g_riskManager.IsTradingEnabled())
@@ -1373,6 +1423,20 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         Print(logPrefix + "ATR Average: ", DoubleToString(rs.atr_avg, _Digits));
     }
     
+    // Optionally refresh sentiment before decisions (rate-limited)
+    static datetime s_lastSentimentRun = 0;
+    if(TimeCurrent() - s_lastSentimentRun > 300 && !g_newsSentiment.IsAnalysisFresh())
+    {
+        if(g_newsSentiment.RunNewsAnalysis())
+        {
+            if(InpLogDetailedInfo)
+            {
+                Print(logPrefix + "Sentiment refreshed: ", g_newsSentiment.GetSentimentDescription());
+            }
+        }
+        s_lastSentimentRun = TimeCurrent();
+    }
+
     // Execute trading strategy with comprehensive error handling
     ResetLastError();
     
@@ -1552,6 +1616,21 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     if(tpLockTag != "")
         comment += tpLockTag;
     
+    // Append concise sentiment tag if sentiment agrees with direction
+    // Keep order comment short due to broker limits (~31-63 chars typical)
+    bool sentimentSupports = false;
+    if(g_newsSentiment.GetCurrentSignal() != "")
+    {
+        if(bullish)
+            sentimentSupports = g_newsSentiment.ShouldEnterLong();
+        else
+            sentimentSupports = g_newsSentiment.ShouldEnterShort();
+        if(sentimentSupports)
+        {
+            comment += "|SENTI";
+        }
+    }
+    
     if(InpLogDetailedInfo)
     {
         Print(logPrefix + "Trade Parameters:");
@@ -1572,14 +1651,15 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
         tradeResult = g_trade.Sell(lot, _Symbol, price, sl, tp, comment);
     
     // Always-on concise summary for monitoring
-    Print(StringFormat("[TREND] %s %s @%s SL=%s TP=%s lot=%.2f rr=%.2f",
+    Print(StringFormat("[TREND] %s %s @%s SL=%s TP=%s lot=%.2f rr=%.2f%s",
                        (tradeResult?"FILLED":"FAILED"),
                        bullish?"BUY":"SELL",
                        DoubleToString(price, _Digits),
                        DoubleToString(sl, _Digits),
                        DoubleToString(tp, _Digits),
                        lot,
-                       (MathAbs(tp-price)/MathMax(1e-10, MathAbs(price-sl)))));
+                       (MathAbs(tp-price)/MathMax(1e-10, MathAbs(price-sl))),
+                       (sentimentSupports?" senti=YES":"")));
 
     if(InpLogDetailedInfo)
     {
@@ -1719,9 +1799,9 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     // Place stop order
     bool tradeResult = false;
     if(strongestLevel.isResistance)
-        tradeResult = g_trade.BuyStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), (string)comment);
+        tradeResult = g_trade.BuyStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
     else
-        tradeResult = g_trade.SellStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), (string)comment);
+        tradeResult = g_trade.SellStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
     // Always-on concise outcome
     if(tradeResult)
         Print(StringFormat("[BREAKOUT] ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
@@ -2145,6 +2225,61 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         return false;
     }
     
+    // Higher-timeframe RSI exhaustion gate
+    if(InpEnableMTFRSI)
+    {
+        // Use cached values if available
+        double rsi_h4 = (g_cachedRsiH4 != EMPTY_VALUE ? g_cachedRsiH4 : GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0));
+        if(rsi_h4 < 0) return false;
+
+        if(bullish && rsi_h4 >= InpH4RSIOverbought)
+        {
+            if(InpLogDetailedInfo) 
+                Print(logPrefix + "❌ SIGNAL BLOCKED: H4 RSI overbought (", DoubleToString(rsi_h4, 2), ")");
+            return false;
+        }
+        if(!bullish && rsi_h4 <= InpH4RSIOversold)
+        {
+            if(InpLogDetailedInfo) 
+                Print(logPrefix + "❌ SIGNAL BLOCKED: H4 RSI oversold (", DoubleToString(rsi_h4, 2), ")");
+            return false;
+        }
+
+        if(InpUseD1RSI)
+        {
+            double rsi_d1 = (g_cachedRsiD1 != EMPTY_VALUE ? g_cachedRsiD1 : GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0));
+            if(rsi_d1 < 0) return false;
+
+            if(bullish && rsi_d1 >= InpD1RSIOverbought)
+            {
+                if(InpLogDetailedInfo) 
+                    Print(logPrefix + "❌ SIGNAL BLOCKED: D1 RSI overbought (", DoubleToString(rsi_d1, 2), ")");
+                return false;
+            }
+            if(!bullish && rsi_d1 <= InpD1RSIOversold)
+            {
+                if(InpLogDetailedInfo) 
+                    Print(logPrefix + "❌ SIGNAL BLOCKED: D1 RSI oversold (", DoubleToString(rsi_d1, 2), ")");
+                return false;
+            }
+        }
+        
+        if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "5. Multi-Timeframe RSI Analysis:");
+            Print(logPrefix + "  H4 RSI: ", DoubleToString(rsi_h4, 2), " (", 
+                  (bullish ? (rsi_h4 < InpH4RSIOverbought ? "✅ NOT OVERBOUGHT" : "❌ OVERBOUGHT") :
+                            (rsi_h4 > InpH4RSIOversold ? "✅ NOT OVERSOLD" : "❌ OVERSOLD")), ")");
+            if(InpUseD1RSI)
+            {
+                double rsi_d1 = (g_cachedRsiD1 != EMPTY_VALUE ? g_cachedRsiD1 : GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0));
+                Print(logPrefix + "  D1 RSI: ", DoubleToString(rsi_d1, 2), " (", 
+                      (bullish ? (rsi_d1 < InpD1RSIOverbought ? "✅ NOT OVERBOUGHT" : "❌ OVERBOUGHT") :
+                                (rsi_d1 > InpD1RSIOversold ? "✅ NOT OVERSOLD" : "❌ OVERSOLD")), ")");
+            }
+        }
+    }
+    
     // RSI(14) 40-60 reset, then hook with price continuation
     int rsi_handle = iRSI(_Symbol, PERIOD_CURRENT, InpRSIPeriod, PRICE_CLOSE);
     double rsi = 0, rsi_prev = 0;
@@ -2201,6 +2336,8 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         Print(logPrefix + "  ✅ Trend Follower (if enabled)");
         Print(logPrefix + "  ✅ EMA Alignment (H1 & H4)");
         Print(logPrefix + "  ✅ Price Pullback (≤ 1×ATR from EMA20)");
+        if(InpEnableMTFRSI)
+            Print(logPrefix + "  ✅ Multi-TF RSI (H4/D1 not exhausted)");
         Print(logPrefix + "  ✅ RSI Momentum (40-60 range with correct direction)");
     }
     
@@ -2832,6 +2969,132 @@ long GetAverageVolume(int period)
 }
 
 //+------------------------------------------------------------------+
+//| Get RSI value for any timeframe                                  |
+//+------------------------------------------------------------------+
+double GetRSIValue(string symbol, ENUM_TIMEFRAMES tf, int period, int shift=0)
+{
+    int handle = iRSI(symbol, tf, period, PRICE_CLOSE);
+    if(handle == INVALID_HANDLE)
+    {
+        Print("[Grande] ERROR: Invalid RSI handle for tf=", (int)tf);
+        return -1;
+    }
+    double buf[];
+    ArraySetAsSeries(buf, true);
+    int copied = CopyBuffer(handle, 0, shift, 1, buf);
+    IndicatorRelease(handle);
+    if(copied < 1)
+    {
+        Print("[Grande] WARNING: Failed to copy RSI data for tf=", (int)tf);
+        return -1;
+    }
+    return buf[0];
+}
+
+//+------------------------------------------------------------------+
+//| RSI-based exit management with partial closes                    |
+//+------------------------------------------------------------------+
+void ApplyRSIExitRules()
+{
+    for(int i = PositionsTotal() - 1; i >= 0; --i)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        if(!PositionSelectByTicket(ticket)) continue;
+        if((long)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+        if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+        long   type   = PositionGetInteger(POSITION_TYPE);
+        double vol    = PositionGetDouble(POSITION_VOLUME);
+        double open   = PositionGetDouble(POSITION_PRICE_OPEN);
+        double price  = (type == POSITION_TYPE_BUY ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                                                   : SymbolInfoDouble(_Symbol, SYMBOL_ASK));
+
+        // Cooldown check using chart objects
+        string cooldownKey = StringFormat("RSIExitCooldown_%I64u", ticket);
+        datetime lastTime = 0;
+        string lastStr = ObjectGetString(g_chartID, cooldownKey, OBJPROP_TOOLTIP);
+        if(lastStr != NULL && StringLen(lastStr) > 0)
+            lastTime = (datetime)StringToInteger(lastStr);
+        if(InpRSIExitCooldownSec > 0 && (TimeCurrent() - lastTime) < InpRSIExitCooldownSec)
+            continue;
+
+        double pip = GetPipSize();
+        if(pip <= 0) pip = _Point;
+        double profitPips = (type == POSITION_TYPE_BUY ? (price - open) : (open - price)) / pip;
+        if(profitPips < InpRSIExitMinProfitPips) continue;
+
+        // Use cached RSI values from current cycle
+        double rsi_ctf = (g_cachedRsiCTF != EMPTY_VALUE ? g_cachedRsiCTF : GetRSIValue(_Symbol, (ENUM_TIMEFRAMES)Period(), InpRSIPeriod, 0));
+        double rsi_h4  = (g_cachedRsiH4  != EMPTY_VALUE ? g_cachedRsiH4  : GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0));
+        if(rsi_ctf < 0 || rsi_h4 < 0) continue;
+
+        // Optional ATR guard (avoid exits when ATR collapsed)
+        if(InpExitRequireATROK)
+        {
+            int atrHandle = iATR(_Symbol, PERIOD_CURRENT, 14);
+            if(atrHandle != INVALID_HANDLE)
+            {
+                double buf[];
+                ArraySetAsSeries(buf, true);
+                int copied = CopyBuffer(atrHandle, 0, 0, 11, buf);
+                IndicatorRelease(atrHandle);
+                if(copied >= 11)
+                {
+                    double currentATR = buf[0];
+                    double avgATR = 0.0;
+                    for(int k = 1; k < 11; ++k) avgATR += buf[k];
+                    avgATR /= 10.0;
+                    if(avgATR > 0 && currentATR / avgATR < InpExitMinATRRat)
+                        continue;
+                }
+            }
+        }
+
+        // Optional structure/R-multiple guard: require >=1R in favor
+        if(InpExitStructureGuard)
+        {
+            double sl = PositionGetDouble(POSITION_SL);
+            if(sl > 0)
+            {
+                double riskPips = MathAbs(open - sl) / pip;
+                if(riskPips > 0 && profitPips < riskPips)
+                    continue;
+            }
+        }
+
+        bool exitSignal = false;
+        if(type == POSITION_TYPE_BUY)
+            exitSignal = (rsi_ctf >= InpRSIExitOB) || (rsi_h4 >= InpH4RSIOverbought);
+        else
+            exitSignal = (rsi_ctf <= InpRSIExitOS) || (rsi_h4 <= InpH4RSIOversold);
+
+        if(!exitSignal) continue;
+
+        double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+        double vmin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+        double closeVol = MathFloor(MathMax(vmin, vol * InpRSIPartialClose) / step) * step;
+        if(closeVol < vmin || closeVol >= vol) continue;
+        // Ensure minimum remaining volume
+        if((vol - closeVol) < MathMax(vmin, InpMinRemainingVolume))
+            continue;
+
+        bool ok = g_trade.PositionClosePartial(ticket, closeVol);
+        if(InpLogDetailedInfo)
+            Print(StringFormat("[RSI EXIT] %s ticket=%I64u vol=%.2f rsi_ctf=%.1f rsi_h4=%.1f pips=%.1f",
+                               ok ? "PARTIAL-CLOSE" : "FAILED",
+                               ticket, closeVol, rsi_ctf, rsi_h4, profitPips));
+        // Set cooldown timestamp
+        if(ok)
+        {
+            ObjectDelete(g_chartID, cooldownKey);
+            ObjectCreate(g_chartID, cooldownKey, OBJ_LABEL, 0, 0, 0);
+            ObjectSetString(g_chartID, cooldownKey, OBJPROP_TOOLTIP, IntegerToString((long)TimeCurrent()));
+            ObjectSetInteger(g_chartID, cooldownKey, OBJPROP_HIDDEN, true);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
 //| ATR Momentum Detection - Catches expanding volatility            |
 //+------------------------------------------------------------------+
 bool IsATRExpanding()
@@ -2921,6 +3184,20 @@ bool IsNR7()
 //+------------------------------------------------------------------+
 //| Validate input parameters                                         |
 //+------------------------------------------------------------------+
+// Cache RSI values for the current management cycle
+void CacheRsiForCycle()
+{
+    datetime now = TimeCurrent();
+    // Refresh cache at most once per second to keep values coherent
+    if(now == g_lastRsiCacheTime) return;
+
+    g_cachedRsiCTF = GetRSIValue(_Symbol, (ENUM_TIMEFRAMES)Period(), InpRSIPeriod, 0);
+    g_cachedRsiH4  = GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0);
+    // Only cache D1 if enabled to save cycles
+    g_cachedRsiD1  = InpUseD1RSI ? GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0) : EMPTY_VALUE;
+    g_lastRsiCacheTime = now;
+}
+
 bool ValidateInputParameters()
 {
     bool isValid = true;
@@ -3093,6 +3370,64 @@ bool ValidateInputParameters()
         if(InpTFAdxThreshold < 15.0 || InpTFAdxThreshold > 40.0)
         {
             Print("ERROR: InpTFAdxThreshold must be between 15.0 and 40.0. Current: ", InpTFAdxThreshold);
+            isValid = false;
+        }
+    }
+    
+    // RSI Risk Management Settings
+    if(InpEnableMTFRSI)
+    {
+        if(InpH4RSIOverbought < 60.0 || InpH4RSIOverbought > 85.0)
+        {
+            Print("ERROR: InpH4RSIOverbought must be between 60.0 and 85.0. Current: ", InpH4RSIOverbought);
+            isValid = false;
+        }
+        
+        if(InpH4RSIOversold < 15.0 || InpH4RSIOversold > 40.0)
+        {
+            Print("ERROR: InpH4RSIOversold must be between 15.0 and 40.0. Current: ", InpH4RSIOversold);
+            isValid = false;
+        }
+        
+        if(InpUseD1RSI)
+        {
+            if(InpD1RSIOverbought < 65.0 || InpD1RSIOverbought > 85.0)
+            {
+                Print("ERROR: InpD1RSIOverbought must be between 65.0 and 85.0. Current: ", InpD1RSIOverbought);
+                isValid = false;
+            }
+            
+            if(InpD1RSIOversold < 15.0 || InpD1RSIOversold > 35.0)
+            {
+                Print("ERROR: InpD1RSIOversold must be between 15.0 and 35.0. Current: ", InpD1RSIOversold);
+                isValid = false;
+            }
+        }
+    }
+    
+    if(InpEnableRSIExits)
+    {
+        if(InpRSIExitOB < 60.0 || InpRSIExitOB > 85.0)
+        {
+            Print("ERROR: InpRSIExitOB must be between 60.0 and 85.0. Current: ", InpRSIExitOB);
+            isValid = false;
+        }
+        
+        if(InpRSIExitOS < 15.0 || InpRSIExitOS > 40.0)
+        {
+            Print("ERROR: InpRSIExitOS must be between 15.0 and 40.0. Current: ", InpRSIExitOS);
+            isValid = false;
+        }
+        
+        if(InpRSIPartialClose < 0.1 || InpRSIPartialClose > 0.9)
+        {
+            Print("ERROR: InpRSIPartialClose must be between 0.1 and 0.9. Current: ", InpRSIPartialClose);
+            isValid = false;
+        }
+        
+        if(InpRSIExitMinProfitPips < 0 || InpRSIExitMinProfitPips > 100)
+        {
+            Print("ERROR: InpRSIExitMinProfitPips must be between 0 and 100. Current: ", InpRSIExitMinProfitPips);
             isValid = false;
         }
     }
@@ -3414,6 +3749,17 @@ void ExecuteTriangleTrade(const STriangleSignal &signal, const RegimeSnapshot &c
     string comment = StringFormat("[GRANDE-TRIANGLE-%s] %s", 
                                  GetRegimeString(currentRegime.regime),
                                  g_triangleTrading.GetSignalTypeString());
+    // Append concise sentiment tag if sentiment aligns
+    bool triangleSenti = false;
+    if(g_newsSentiment.GetCurrentSignal() != "")
+    {
+        if(signal.orderType == ORDER_TYPE_BUY)
+            triangleSenti = g_newsSentiment.ShouldEnterLong();
+        else if(signal.orderType == ORDER_TYPE_SELL)
+            triangleSenti = g_newsSentiment.ShouldEnterShort();
+        if(triangleSenti)
+            comment += "|SENTI";
+    }
     
     if(InpLogDetailedInfo)
     {
@@ -3441,7 +3787,7 @@ void ExecuteTriangleTrade(const STriangleSignal &signal, const RegimeSnapshot &c
     }
     
     // Always-on concise summary for monitoring
-    Print(StringFormat("[TRIANGLE] %s %s @%s SL=%s TP=%s lot=%.2f rr=%.2f pattern=%s",
+    Print(StringFormat("[TRIANGLE] %s %s @%s SL=%s TP=%s lot=%.2f rr=%.2f pattern=%s%s",
                        (success ? "FILLED" : "FAILED"),
                        g_triangleTrading.GetSignalTypeString(),
                        DoubleToString(signal.entryPrice, _Digits),
@@ -3449,7 +3795,8 @@ void ExecuteTriangleTrade(const STriangleSignal &signal, const RegimeSnapshot &c
                        DoubleToString(signal.takeProfit, _Digits),
                        lotSize,
                        (MathAbs(signal.takeProfit - signal.entryPrice) / MathMax(1e-10, MathAbs(signal.entryPrice - signal.stopLoss))),
-                       g_triangleDetector.GetPatternTypeString()));
+                       g_triangleDetector.GetPatternTypeString(),
+                       (triangleSenti?" senti=YES":"")));
     
     if(success)
     {

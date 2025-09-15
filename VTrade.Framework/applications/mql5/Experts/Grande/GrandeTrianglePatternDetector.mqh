@@ -233,7 +233,13 @@ bool CGrandeTrianglePatternDetector::Initialize(string symbol, const TriangleCon
     ArrayResize(m_times, 0);
     ArrayResize(m_swingPoints, 0);
     
-    Print("✅ GrandeTrianglePatternDetector initialized for ", m_symbol);
+    // Prevent duplicate init logs across multiple detector instances
+    static bool s_initLogPrinted = false;
+    if(!s_initLogPrinted)
+    {
+        Print("✅ GrandeTrianglePatternDetector initialized for ", m_symbol);
+        s_initLogPrinted = true;
+    }
     return true;
 }
 

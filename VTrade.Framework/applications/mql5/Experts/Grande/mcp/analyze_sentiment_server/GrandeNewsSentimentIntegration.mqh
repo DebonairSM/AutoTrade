@@ -8,7 +8,7 @@
 #property version   "1.00"
 #property strict
 
-#include <GrandeTradingSystem.mqh>
+
 
 //+------------------------------------------------------------------+
 //| News Sentiment Integration Class                                |

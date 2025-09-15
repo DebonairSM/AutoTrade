@@ -1,0 +1,76 @@
+{
+  "signal": "BUY",
+  "strength": 0.37157534246575336,
+  "confidence": 0.72,
+  "reasoning": "Based on 5 articles from 2 sources. Avg sentiment: 0.372, Confidence: 0.720",
+  "article_count": 5,
+  "sources": [
+    "Investing.com",
+    "TradingView"
+  ],
+  "articles": [
+    {
+      "title": "EUR/USD Analysis: ECB Policy Shift Drives Euro Higher",
+      "description": "The European Central Bank's recent policy shift has driven the euro higher against the dollar, with EUR/USD reaching new monthly highs.",
+      "source": "Investing.com",
+      "published_at": "2025-09-15T11:53:14.870315",
+      "url": "https://investing.com/eur-usd-analysis",
+      "sentiment_score": 0.7,
+      "sentiment_label": "Positive",
+      "confidence": 0.8,
+      "relevance": 85
+    },
+    {
+      "title": "GBP/USD Technical Analysis: Key Resistance at 1.2800",
+      "description": "The British pound faces strong resistance at the 1.2800 level against the US dollar, with traders watching for a breakout.",
+      "source": "Investing.com",
+      "published_at": "2025-09-15T09:53:14.870343",
+      "url": "https://investing.com/gbp-usd-technical",
+      "sentiment_score": 0.2,
+      "sentiment_label": "Neutral",
+      "confidence": 0.6,
+      "relevance": 70
+    },
+    {
+      "title": "USD/JPY Forecast: Bank of Japan Intervention Concerns",
+      "description": "The USD/JPY pair is under pressure as traders worry about potential Bank of Japan intervention at current levels.",
+      "source": "Investing.com",
+      "published_at": "2025-09-15T07:53:14.870350",
+      "url": "https://investing.com/usd-jpy-forecast",
+      "sentiment_score": -0.3,
+      "sentiment_label": "Negative",
+      "confidence": 0.7,
+      "relevance": 80
+    },
+    {
+      "title": "Market Analysis: Major Currency Pairs Show Divergence",
+      "description": "Major currency pairs are showing significant divergence as central bank policies continue to diverge globally.",
+      "source": "TradingView",
+      "published_at": "2025-09-15T11:53:14.870466",
+      "url": "https://tradingview.com/news/currency-divergence",
+      "sentiment_score": 0.1,
+      "sentiment_label": "Neutral",
+      "confidence": 0.6,
+      "relevance": 75
+    },
+    {
+      "title": "Technical Analysis: EUR/USD Bullish Breakout Confirmed",
+      "description": "Technical analysis confirms a bullish breakout for EUR/USD with strong momentum indicators supporting further upside.",
+      "source": "TradingView",
+      "published_at": "2025-09-15T10:53:14.870470",
+      "url": "https://tradingview.com/analysis/eur-usd-breakout",
+      "sentiment_score": 0.8,
+      "sentiment_label": "Very Positive",
+      "confidence": 0.9,
+      "relevance": 90
+    }
+  ],
+  "timestamp": "2025-09-15T11:53:14.870654",
+  "symbols": [
+    "EURUSD",
+    "GBPUSD",
+    "USDJPY",
+    "AUDUSD",
+    "USDCAD"
+  ]
+}

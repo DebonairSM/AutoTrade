@@ -1171,13 +1171,26 @@ bool CGrandeRiskManager::UpdateTrailingStops()
                 if(error == 10025) { /* no change */ }
                 else if(error == 4756)
                 {
-                    if(InpLogDebugInfo)
+                    // Enhanced error 4756 handling with backoff
+                    static datetime last4756Error = 0;
+                    static ulong last4756Ticket = 0;
+                    
+                    // Rate limit error 4756 warnings to avoid spam
+                    if(TimeCurrent() - last4756Error >= 60 || last4756Ticket != pos.ticket)
+                    {
                         LogRiskEvent("WARNING", StringFormat(
-                            "TRAIL FAIL invalid stops ticket=%d bid=%.*f ask=%.*f newSL=%.*f",
+                            "TRAIL FAIL error 4756 ticket=%d bid=%.*f ask=%.*f newSL=%.*f minDist=%.*f",
                             pos.ticket,
                             _Digits, currentBid,
                             _Digits, currentAsk,
-                            _Digits, newStopLoss));
+                            _Digits, newStopLoss,
+                            _Digits, minStopDistance));
+                        last4756Error = TimeCurrent();
+                        last4756Ticket = pos.ticket;
+                    }
+                    
+                    // Set a backoff period for this specific position to avoid repeated failures
+                    // This will be handled by the existing rate limiting logic
                 }
                 else if(error == 10018) // TRADE_RETCODE_MARKET_CLOSED
                 {
@@ -1592,6 +1605,14 @@ bool CGrandeRiskManager::ValidateStopLevels(string symbol, double sl, double tp,
     double currentAsk = SymbolInfoDouble(symbol, SYMBOL_ASK);
     double currentPrice = (type == POSITION_TYPE_BUY) ? currentBid : currentAsk;
     
+    // Additional validation: ensure we have valid market prices
+    if(currentBid <= 0 || currentAsk <= 0)
+    {
+        LogRiskEvent("WARNING", StringFormat("Invalid market prices for %s - BID: %.5f, ASK: %.5f", 
+                      symbol, currentBid, currentAsk));
+        return false;
+    }
+    
     // Calculate minimum distance with multiplier for safety
     if(stopLevel <= 0) 
         stopLevel = 150; // Default minimum distance
@@ -1599,6 +1620,9 @@ bool CGrandeRiskManager::ValidateStopLevels(string symbol, double sl, double tp,
         stopLevel = (int)(stopLevel * m_config.min_stop_distance_multiplier);
     
     double minDistance = stopLevel * point;
+    
+    // Additional safety margin for error 4756 prevention
+    minDistance = MathMax(minDistance, 10 * point);
     
     // Validate stop loss
     if(sl > 0)
@@ -1620,6 +1644,15 @@ bool CGrandeRiskManager::ValidateStopLevels(string symbol, double sl, double tp,
         if(type == POSITION_TYPE_SELL && sl <= currentAsk)
         {
             LogRiskEvent("WARNING", StringFormat("Invalid SL direction for SELL: SL=%.5f <= ASK=%.5f", sl, currentAsk));
+            return false;
+        }
+        
+        // Additional validation: ensure SL is not too far from current price (broker limit)
+        double maxSlDistance = 1000 * point; // 1000 points maximum
+        if(slDistance > maxSlDistance)
+        {
+            LogRiskEvent("WARNING", StringFormat("SL too far: %.5f (max: %.5f) for %s", 
+                          slDistance, maxSlDistance, symbol));
             return false;
         }
     }
@@ -1646,6 +1679,31 @@ bool CGrandeRiskManager::ValidateStopLevels(string symbol, double sl, double tp,
             LogRiskEvent("WARNING", StringFormat("Invalid TP direction for SELL: TP=%.5f >= ASK=%.5f", tp, currentAsk));
             return false;
         }
+        
+        // Additional validation: ensure TP is not too far from current price (broker limit)
+        double maxTpDistance = 1000 * point; // 1000 points maximum
+        if(tpDistance > maxTpDistance)
+        {
+            LogRiskEvent("WARNING", StringFormat("TP too far: %.5f (max: %.5f) for %s", 
+                          tpDistance, maxTpDistance, symbol));
+            return false;
+        }
+    }
+    
+    // Additional validation: check if both SL and TP are set and valid
+    if(sl > 0 && tp > 0)
+    {
+        // Ensure SL and TP are in correct order
+        if(type == POSITION_TYPE_BUY && sl >= tp)
+        {
+            LogRiskEvent("WARNING", StringFormat("Invalid SL/TP order for BUY: SL=%.5f >= TP=%.5f", sl, tp));
+            return false;
+        }
+        if(type == POSITION_TYPE_SELL && sl <= tp)
+        {
+            LogRiskEvent("WARNING", StringFormat("Invalid SL/TP order for SELL: SL=%.5f <= TP=%.5f", sl, tp));
+            return false;
+        }
     }
     
     return true;
@@ -1664,8 +1722,76 @@ bool CGrandeRiskManager::ModifyPositionWithValidation(ulong ticket, double sl, d
         return false;
     }
     
-    // Use CTrade PositionModify method with enhanced error handling
-    return m_trade.PositionModify(ticket, sl, tp);
+    // Enhanced error handling for PositionModify
+    ResetLastError();
+    bool result = m_trade.PositionModify(ticket, sl, tp);
+    
+    if(!result)
+    {
+        int error = m_trade.ResultRetcode();
+        int lastError = GetLastError();
+        
+        // Handle specific error cases
+        if(error == 4756) // ERR_TRADE_SEND_FAILED
+        {
+            // Additional validation for error 4756
+            double currentBid = SymbolInfoDouble(symbol, SYMBOL_BID);
+            double currentAsk = SymbolInfoDouble(symbol, SYMBOL_ASK);
+            double currentPrice = (type == POSITION_TYPE_BUY) ? currentBid : currentAsk;
+            
+            // Check if stop levels are still valid at execution time
+            double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+            int stopLevel = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+            if(stopLevel <= 0) stopLevel = 150;
+            
+            double minDistance = stopLevel * point;
+            bool slValid = (sl <= 0) || (MathAbs(currentPrice - sl) >= minDistance);
+            bool tpValid = (tp <= 0) || (MathAbs(tp - currentPrice) >= minDistance);
+            
+            if(!slValid || !tpValid)
+            {
+                LogRiskEvent("WARNING", StringFormat("PositionModify failed - stop levels invalid at execution time. Ticket: %d, SL: %.5f, TP: %.5f, MinDist: %.5f", 
+                              ticket, sl, tp, minDistance));
+                return false;
+            }
+            
+            // Check if position still exists and is modifiable
+            if(!PositionSelectByTicket(ticket))
+            {
+                LogRiskEvent("WARNING", StringFormat("PositionModify failed - position %d no longer exists", ticket));
+                return false;
+            }
+            
+            // Check if position is in a modifiable state
+            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            if(posType != type)
+            {
+                LogRiskEvent("WARNING", StringFormat("PositionModify failed - position type mismatch. Expected: %d, Actual: %d", 
+                              type, posType));
+                return false;
+            }
+            
+            // Log the specific error for debugging
+            LogRiskEvent("ERROR", StringFormat("PositionModify failed with error 4756 for ticket %d. SL: %.5f, TP: %.5f, LastError: %d", 
+                          ticket, sl, tp, lastError));
+        }
+        else if(error == 10025) // TRADE_RETCODE_NO_CHANGES
+        {
+            // No changes needed - treat as success
+            return true;
+        }
+        else if(error == 10018) // TRADE_RETCODE_MARKET_CLOSED
+        {
+            LogRiskEvent("WARNING", StringFormat("PositionModify failed - market closed for ticket %d", ticket));
+        }
+        else
+        {
+            LogRiskEvent("ERROR", StringFormat("PositionModify failed for ticket %d. Error: %d, LastError: %d", 
+                          ticket, error, lastError));
+        }
+    }
+    
+    return result;
 }
 
 //+------------------------------------------------------------------+
