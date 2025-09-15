@@ -6,6 +6,28 @@ The **Grande Trading System** has been successfully transformed from an analytic
 
 ---
 
+## 📚 Consolidated Documentation
+
+This file is now the single source of truth for the Grande Trading System. It consolidates critical guidance, fixes, and operating instructions.
+
+### Table of contents
+- Implementation Completed
+- Technical Implementation
+- Configuration & Customization
+- Ready for Deployment
+- Next Development Phase
+- Project Metrics
+- Triangle Pattern Trading (integrated)
+- Logging & Transparency (integrated)
+- Key Fixes Incorporated
+- Optimization Quick Start
+- News Integration
+
+Related documents
+- See `OPTIMIZATION_GUIDE.md` for full optimizer playbook
+- See `NEWS_SIGNAL_SYSTEM_README.md` for MCP/news integration
+- See `FINAL_VALIDATION_CHECKLIST.md` and `PUBLICATION_READY_VERIFICATION.md` for QA details
+
 ## ✅ **IMPLEMENTATION COMPLETED**
 
 ### **1. Signal Generation Layer** ✅
@@ -179,6 +201,40 @@ The **Grande Trading System** has been successfully transformed from an analytic
 ```
 
 ---
+
+## 🔺 **Triangle Pattern Trading (integrated)**
+The triangle pattern subsystem is fully integrated into core trading logic.
+
+- Detection: Ascending, Descending, Symmetrical triangles and Wedges
+- Validation: Volume confirmation, slope consistency, touch counts
+- Trading: Breakout probability, R:R validation, position sizing via risk manager
+- Inputs: `InpEnableTriangleTrading`, `InpTriangleMinConfidence`, `InpTriangleMinBreakoutProb`, `InpTriangleRequireVolume`, `InpTriangleRiskPct`, `InpTriangleAllowEarlyEntry`
+
+Effect: Signals flow through standard risk checks, conflict prevention, and position management.
+
+## 🧾 **Logging & Transparency (integrated)**
+Clean, actionable logs by default; deep diagnostics on demand.
+
+- Default (recommended): `InpLogDetailedInfo=false`, `InpLogDebugInfo=false`
+- Analysis mode: `InpLogDetailedInfo=true` (criteria breakdowns)
+- Debug mode: `InpLogDebugInfo=true` (system diagnostics)
+
+## 🛠 **Key Fixes Incorporated**
+- Breakout log noise gated under `InpLogDetailedInfo` (no spam in normal mode)
+- Risk oscillation fix: persistent breakeven detection and rate-limited trailing updates
+- First-touch date + R/S classification: reclassification by current price before display/report
+- Performance: balanced swing detection and reduced reclassification overhead
+
+## ⚙️ **Optimization Quick Start**
+1. Use constrained template first (`GrandeOptimization_Constrained.set`)
+2. Optimize with Genetic Algorithm; 1–2 years data
+3. Tune RSI exit/filters conservatively; validate out-of-sample
+4. See `OPTIMIZATION_GUIDE.md` for full ranges, phases, and pitfalls
+
+## 📰 **News Integration**
+The news-to-signal subsystem and MCP sentiment server are documented in `NEWS_SIGNAL_SYSTEM_README.md`.
+
+Note: Legacy "Real Free News" doc was removed; follow the canonical README above for setup and free sources.
 
 ## 🚀 **READY FOR DEPLOYMENT**
 
