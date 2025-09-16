@@ -108,6 +108,28 @@ public:
     }
     
     //+------------------------------------------------------------------+
+    //| Check if MT5 Economic Calendar is available                     |
+    //+------------------------------------------------------------------+
+    bool CheckCalendarAvailability(string filter_currencies = "USD,EUR,GBP,JPY")
+    {
+        ulong change_id = 0;
+        MqlCalendarValue values[]; ArrayResize(values, 0);
+        ResetLastError();
+        int count = CalendarValueLast(change_id, values, "", filter_currencies);
+        int err = GetLastError();
+        if(count > 0)
+            return true;
+        if(err == 4807 || err == 4806 || err == 4804 || err == 4805 || err == 4808)
+        {
+            Print("[CAL-AI] WARNING: MT5 Economic Calendar not accessible (err=", err, "). Enable 'Enable news' in Tools > Options > Server and wait for calendar sync, then restart terminal.");
+            return false;
+        }
+        // count == 0 and no error: likely no recent values cached yet
+        Print("[CAL-AI] NOTICE: Economic Calendar returned 0 items. If you expect events, enable news and allow time to sync.");
+        return false;
+    }
+    
+    //+------------------------------------------------------------------+
     //| Get News from MT5 News Feed                                     |
     //+------------------------------------------------------------------+
     bool GetMT5NewsFeed()

@@ -415,6 +415,12 @@ int OnInit()
             Print("[Grande] Calendar reader initialized for ", _Symbol);
         }
         g_lastCalendarUpdate = 0;
+        
+        // One-time calendar availability warning
+        if(!g_calendarReader.CheckCalendarAvailability())
+        {
+            Print("[Grande] ⚠️ Economic Calendar appears disabled or unavailable. Go to Tools > Options > Server and ensure 'Enable news' is checked. Then restart MT5 to allow calendar sync.");
+        }
     }
     
     // Create and initialize risk manager
