@@ -3367,6 +3367,13 @@ bool ValidateInputParameters()
             isValid = false;
         }
         
+        // Validate ADX period for Trend Follower
+        if(InpTFAdxPeriod < 5 || InpTFAdxPeriod > 50)
+        {
+            Print("ERROR: InpTFAdxPeriod must be between 5 and 50. Current: ", InpTFAdxPeriod);
+            isValid = false;
+        }
+        
         if(InpTFAdxThreshold < 15.0 || InpTFAdxThreshold > 40.0)
         {
             Print("ERROR: InpTFAdxThreshold must be between 15.0 and 40.0. Current: ", InpTFAdxThreshold);
