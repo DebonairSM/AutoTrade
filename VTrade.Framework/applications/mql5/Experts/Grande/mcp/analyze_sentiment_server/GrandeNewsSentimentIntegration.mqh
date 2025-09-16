@@ -336,11 +336,12 @@ bool CNewsSentimentIntegration::ParseSentimentData(string json_data)
     // Simple JSON parsing for MQL5 (in production, use a proper JSON library)
     // This is a simplified version - in practice, you'd use a JSON parsing library
     
-    // Extract signal
-    int signal_start = StringFind(json_data, "\"signal\": \"");
+    // Extract signal (string)
+    string pattern_signal = "\"signal\": \"";
+    int signal_start = StringFind(json_data, pattern_signal);
     if (signal_start >= 0)
     {
-        signal_start += 10;
+        signal_start += StringLen(pattern_signal);
         int signal_end = StringFind(json_data, "\"", signal_start);
         if (signal_end > signal_start)
         {
@@ -348,12 +349,20 @@ bool CNewsSentimentIntegration::ParseSentimentData(string json_data)
         }
     }
     
-    // Extract strength
-    int strength_start = StringFind(json_data, "\"strength\": ");
+    // Helper lambda-like pattern: find end at comma, otherwise closing brace
+    // Note: MQL5 doesn't support lambdas; we inline logic per field
+    
+    // Extract strength (number)
+    string pattern_strength = "\"strength\": ";
+    int strength_start = StringFind(json_data, pattern_strength);
     if (strength_start >= 0)
     {
-        strength_start += 12;
+        strength_start += StringLen(pattern_strength);
         int strength_end = StringFind(json_data, ",", strength_start);
+        if (strength_end < 0)
+            strength_end = StringFind(json_data, "}", strength_start);
+        if (strength_end < 0)
+            strength_end = StringLen(json_data);
         if (strength_end > strength_start)
         {
             string strength_str = StringSubstr(json_data, strength_start, strength_end - strength_start);
@@ -361,12 +370,17 @@ bool CNewsSentimentIntegration::ParseSentimentData(string json_data)
         }
     }
     
-    // Extract confidence
-    int confidence_start = StringFind(json_data, "\"confidence\": ");
+    // Extract confidence (number)
+    string pattern_confidence = "\"confidence\": ";
+    int confidence_start = StringFind(json_data, pattern_confidence);
     if (confidence_start >= 0)
     {
-        confidence_start += 14;
+        confidence_start += StringLen(pattern_confidence);
         int confidence_end = StringFind(json_data, ",", confidence_start);
+        if (confidence_end < 0)
+            confidence_end = StringFind(json_data, "}", confidence_start);
+        if (confidence_end < 0)
+            confidence_end = StringLen(json_data);
         if (confidence_end > confidence_start)
         {
             string confidence_str = StringSubstr(json_data, confidence_start, confidence_end - confidence_start);
@@ -374,12 +388,17 @@ bool CNewsSentimentIntegration::ParseSentimentData(string json_data)
         }
     }
     
-    // Extract article count
-    int article_start = StringFind(json_data, "\"article_count\": ");
+    // Extract article count (number)
+    string pattern_article = "\"article_count\": ";
+    int article_start = StringFind(json_data, pattern_article);
     if (article_start >= 0)
     {
-        article_start += 18;
+        article_start += StringLen(pattern_article);
         int article_end = StringFind(json_data, ",", article_start);
+        if (article_end < 0)
+            article_end = StringFind(json_data, "}", article_start);
+        if (article_end < 0)
+            article_end = StringLen(json_data);
         if (article_end > article_start)
         {
             string article_str = StringSubstr(json_data, article_start, article_end - article_start);
@@ -387,12 +406,17 @@ bool CNewsSentimentIntegration::ParseSentimentData(string json_data)
         }
     }
     
-    // Extract average sentiment
-    int avg_start = StringFind(json_data, "\"avg_sentiment\": ");
+    // Extract average sentiment (number)
+    string pattern_avg = "\"avg_sentiment\": ";
+    int avg_start = StringFind(json_data, pattern_avg);
     if (avg_start >= 0)
     {
-        avg_start += 17;
+        avg_start += StringLen(pattern_avg);
         int avg_end = StringFind(json_data, ",", avg_start);
+        if (avg_end < 0)
+            avg_end = StringFind(json_data, "}", avg_start);
+        if (avg_end < 0)
+            avg_end = StringLen(json_data);
         if (avg_end > avg_start)
         {
             string avg_str = StringSubstr(json_data, avg_start, avg_end - avg_start);
@@ -400,11 +424,12 @@ bool CNewsSentimentIntegration::ParseSentimentData(string json_data)
         }
     }
     
-    // Extract reasoning
-    int reasoning_start = StringFind(json_data, "\"reasoning\": \"");
+    // Extract reasoning (string)
+    string pattern_reasoning = "\"reasoning\": \"";
+    int reasoning_start = StringFind(json_data, pattern_reasoning);
     if (reasoning_start >= 0)
     {
-        reasoning_start += 13;
+        reasoning_start += StringLen(pattern_reasoning);
         int reasoning_end = StringFind(json_data, "\"", reasoning_start);
         if (reasoning_end > reasoning_start)
         {
@@ -412,7 +437,8 @@ bool CNewsSentimentIntegration::ParseSentimentData(string json_data)
         }
     }
     
-    return true;
+    // Basic validation: require at least one article parsed
+    return (m_current_sentiment.article_count > 0 && m_current_sentiment.signal != "");
 }
 
 //+------------------------------------------------------------------+

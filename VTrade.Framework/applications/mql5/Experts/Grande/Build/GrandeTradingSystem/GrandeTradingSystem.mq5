@@ -1463,12 +1463,23 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
             return;
     }
     
-    // Check for errors after trade execution
-    int error = GetLastError();
-    if(error != 0)
+    // Check for non-trade errors after analysis (avoid mislabeling indicator/data errors as trade failures)
+    int lastErr = GetLastError();
+    if(lastErr != 0)
     {
-        Print("[Grande] ERROR: Trade execution function failed. Error: ", error);
-        Print("[Grande] INFO: System will continue monitoring for next opportunity");
+        // Indicator/market data readiness errors are common right after init or TF change
+        bool isIndicatorDataError = (lastErr >= 4801 && lastErr <= 4812); // ERR_INDICATOR_*
+        bool isMarketDataError    = (lastErr >= 4301 && lastErr <= 4307); // ERR_MARKET_*
+        if(isIndicatorDataError || isMarketDataError)
+        {
+            if(InpLogDetailedInfo)
+                Print("[Grande] INFO: Data not ready (err=", lastErr, ") — monitoring continues");
+        }
+        else
+        {
+            Print("[Grande] WARN: Non-trade error after analysis. Err=", lastErr);
+        }
+        ResetLastError();
     }
     
     if(InpLogDetailedInfo)
@@ -2973,21 +2984,49 @@ long GetAverageVolume(int period)
 //+------------------------------------------------------------------+
 double GetRSIValue(string symbol, ENUM_TIMEFRAMES tf, int period, int shift=0)
 {
+    ResetLastError();
+    SymbolSelect(symbol, true);
+
     int handle = iRSI(symbol, tf, period, PRICE_CLOSE);
     if(handle == INVALID_HANDLE)
     {
-        Print("[Grande] ERROR: Invalid RSI handle for tf=", (int)tf);
+        Print("[Grande] ERROR: Invalid RSI handle for tf=", (int)tf, " Err=", GetLastError());
         return -1;
     }
+
+    // Wait briefly for history/indicator to be ready (first run on new tf can lag)
+    int attempts = 10;
+    for(int a = 0; a < attempts; ++a)
+    {
+        if(SeriesInfoInteger(symbol, tf, SERIES_SYNCHRONIZED) && BarsCalculated(handle) > 0)
+            break;
+        Sleep(25);
+    }
+
     double buf[];
     ArraySetAsSeries(buf, true);
-    int copied = CopyBuffer(handle, 0, shift, 1, buf);
+
+    int copied = -1;
+    int tryCount = 5;
+    for(int t = 0; t < tryCount; ++t)
+    {
+        copied = CopyBuffer(handle, 0, shift, 1, buf);
+        if(copied >= 1)
+            break;
+        // Try nudging history load for the timeframe
+        MqlRates rates[];
+        CopyRates(symbol, tf, 0, 2, rates);
+        Sleep(25);
+    }
+
+    int lastErr = GetLastError();
     IndicatorRelease(handle);
     if(copied < 1)
     {
-        Print("[Grande] WARNING: Failed to copy RSI data for tf=", (int)tf);
+        Print("[Grande] WARNING: Failed to copy RSI data for tf=", (int)tf, " Err=", lastErr);
         return -1;
     }
+
     return buf[0];
 }
 
