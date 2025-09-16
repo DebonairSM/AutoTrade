@@ -88,22 +88,21 @@ public:
         // Clear previous events
         m_event_count = 0;
         
-        // Get current time and future time
-        datetime current_time = TimeCurrent();
-        datetime future_time = current_time + (hours_ahead * 3600);
+        datetime tm_start = TimeCurrent();
+        datetime tm_end   = tm_start + (hours_ahead * 3600);
         
-        // Get economic calendar events
-        // Note: This is a simplified implementation
-        // In practice, you'd use MT5's economic calendar functions
-        
-        // Simulate getting events (replace with actual MT5 calendar calls)
-        if(!SimulateEconomicEvents(current_time, future_time))
+        // Try real MT5 Economic Calendar first; fall back to simulation
+        if(!FetchMT5CalendarEvents(tm_start, tm_end, "USD,EUR,GBP,JPY"))
         {
-            Print("[GrandeMT5News] WARNING: Using simulated events");
+            Print("[GrandeMT5News] WARNING: Using simulated events (calendar unavailable)");
+            SimulateEconomicEvents(tm_start, tm_end);
         }
         
         m_last_update = TimeCurrent();
         Print("[GrandeMT5News] Retrieved ", m_event_count, " economic events");
+        
+        // Persist for MCP analysis
+        ExportEventsToJSON();
         
         return m_event_count > 0;
     }
@@ -234,10 +233,143 @@ public:
         Print("========================");
     }
     
+    //+------------------------------------------------------------------+
+    //| Export Events to JSON for MCP Analysis                          |
+    //+------------------------------------------------------------------+
+    bool ExportEventsToJSON()
+    {
+        // Write to Common Files so external tools and other terminals can read
+        string fname = "economic_events.json";
+        int fh = FileOpen(fname, FILE_WRITE | FILE_TXT | FILE_COMMON);
+        if(fh == INVALID_HANDLE)
+        {
+            Print("[GrandeMT5News] ERROR: Unable to open file for writing: ", fname);
+            return false;
+        }
+        
+        FileWriteString(fh, "{\n  \"events\": [\n");
+        for(int i = 0; i < m_event_count; i++)
+        {
+            string line = StringFormat(
+                "    {\"time_utc\": \"%s\", \"currency\": \"%s\", \"name\": \"%s\", \"actual\": \"%s\", \"forecast\": \"%s\", \"previous\": \"%s\", \"impact\": \"%s\"}%s\n",
+                TimeToString(m_news_events[i].time, TIME_DATE|TIME_SECONDS),
+                m_news_events[i].currency,
+                m_news_events[i].event,
+                m_news_events[i].actual,
+                m_news_events[i].forecast,
+                m_news_events[i].previous,
+                GetImpactString(m_news_events[i].impact),
+                (i < m_event_count - 1 ? "," : "")
+            );
+            FileWriteString(fh, line);
+        }
+        FileWriteString(fh, "  ]\n}\n");
+        FileClose(fh);
+        Print("[GrandeMT5News] Exported events to Common\\Files\\", fname);
+        return true;
+    }
+
 private:
     //+------------------------------------------------------------------+
     //| Private Helper Methods                                           |
     //+------------------------------------------------------------------+
+    bool FetchMT5CalendarEvents(datetime start_time, datetime end_time, string filter_currencies)
+    {
+        // values[]: latest values for events in [start_time, end_time] filtered by currencies
+        MqlCalendarValue values[];
+        ArrayResize(values, 0);
+        
+        // change_id=0 (no incremental filter); pull latest values for filter
+        ulong change_id = 0;
+        int count = CalendarValueLast(change_id, values, "", filter_currencies);
+        if(count <= 0)
+        {
+            int err = GetLastError();
+            Print("[GrandeMT5News] CalendarValueLast returned ", count, " (err=", err, ")");
+            if(err == 4807 || err == 4806 || err == 4804 || err == 0)
+            {
+                Print("[GrandeMT5News] Hint: Enable Economic Calendar in Terminal (Tools > Options > Terminal: Allow News), ensure calendar data is available, then restart terminal.");
+            }
+            ResetLastError();
+            // Try per-currency fallback using common separators
+            string cur = filter_currencies;
+            StringReplace(cur, ";", ",");
+            string parts[]; ArrayResize(parts, 0);
+            int n = StringSplit(cur, ",", parts);
+            int totalProcessed = 0;
+            for(int p = 0; p < n; ++p)
+            {
+                string c = StringTrim(parts[p]);
+                if(StringLen(c) == 0) continue;
+                ArrayResize(values, 0);
+                ulong cid = 0;
+                int k = CalendarValueLast(cid, values, "", c);
+                if(k > 0)
+                {
+                    totalProcessed += ProcessCalendarValues(values, k);
+                }
+            }
+            return (totalProcessed > 0);
+        }
+        
+        // Process batch
+        int processed = ProcessCalendarValues(values, count);
+        return (processed > 0);
+    }
+    
+    // Process returned values into our NewsEvent buffer
+    int ProcessCalendarValues(MqlCalendarValue &values[], int count)
+    {
+        int added = 0;
+        for(int i = 0; i < count; i++)
+        {
+            MqlCalendarEvent ev;
+            if(!CalendarEventById(values[i].event_id, ev))
+                continue;
+            
+            int impact = NEWS_IMPACT_LOW;
+            switch(ev.importance)
+            {
+                case 0: impact = NEWS_IMPACT_LOW; break;
+                case 1: impact = NEWS_IMPACT_MEDIUM; break;
+                case 2: impact = NEWS_IMPACT_HIGH; break;
+                default: impact = ev.importance >= 3 ? NEWS_IMPACT_CRITICAL : NEWS_IMPACT_LOW; break;
+            }
+            if(impact < NEWS_IMPACT_HIGH)
+                continue;
+            
+            string currency = "";
+            MqlCalendarCountry cc;
+            if(CalendarCountryById(ev.country_id, cc))
+                currency = cc.currency;
+            
+            string s_actual   = FormatCalendarValue(values[i].actual_value, ev.digits);
+            string s_forecast = FormatCalendarValue(values[i].forecast_value, ev.digits);
+            string s_previous = FormatCalendarValue(values[i].prev_value, ev.digits);
+            
+            AddEvent(values[i].time, currency, ev.name, s_actual, s_forecast, s_previous, impact, ev.source_url);
+            added++;
+        }
+        return added;
+    }
+
+    // Trim helper
+    string StringTrim(const string s)
+    {
+        int a = 0, b = StringLen(s);
+        while(a < b && (StringGetCharacter(s, a) == ' ' || StringGetCharacter(s, a) == '\t')) a++;
+        while(b > a && (StringGetCharacter(s, b-1) == ' ' || StringGetCharacter(s, b-1) == '\t')) b--;
+        if(b <= a) return "";
+        return StringSubstr(s, a, b - a);
+    }
+    string FormatCalendarValue(long v, uint digits)
+    {
+        if(v == LONG_MIN)
+            return "N/A";
+        double d = (double)v / 1000000.0;
+        return DoubleToString(d, (int)digits);
+    }
+
     bool SimulateEconomicEvents(datetime start_time, datetime end_time)
     {
         // Simulate some common economic events

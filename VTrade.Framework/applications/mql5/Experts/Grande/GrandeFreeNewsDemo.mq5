@@ -11,6 +11,7 @@
 
 #include "GrandeMT5NewsReader.mqh"
 #include "GrandeForexComNews.mqh"
+#include "mcp/analyze_sentiment_server/GrandeNewsSentimentIntegration.mqh"
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                  |
@@ -20,6 +21,11 @@ input bool InpUseMT5Calendar = true;           // Use MT5 Economic Calendar
 input bool InpUseForexComNews = true;          // Use Forex.com News
 input bool InpUseSimulatedNews = true;         // Use Simulated News Data
 input int InpNewsUpdateMinutes = 15;           // News Update Interval (minutes)
+
+input group "=== Calendar AI Analysis ==="
+input bool InpUseCalendarAI = true;            // Use AI Calendar Analysis
+input int InpCalendarLookaheadHours = 24;      // Calendar Lookahead (hours)
+input string InpCalendarCurrencies = "USD,EUR,GBP,JPY"; // Calendar Currencies
 
 input group "=== Signal Settings ==="
 input double InpMinSentimentScore = 0.3;       // Minimum Sentiment Score
@@ -32,6 +38,7 @@ input bool InpAutoGenerateSignals = true;      // Auto Generate Signals
 //+------------------------------------------------------------------+
 CGrandeMT5NewsReader g_mt5_news;
 CGrandeForexComNews g_forexcom_news;
+CNewsSentimentIntegration g_calendar_ai;
 datetime g_last_news_update;
 int g_signals_generated;
 int g_successful_signals;
@@ -55,6 +62,19 @@ int OnInit()
     {
         Print("ERROR: Failed to initialize Forex.com news reader");
         return INIT_FAILED;
+    }
+    
+    // Initialize calendar AI analysis
+    if(InpUseCalendarAI)
+    {
+        if(!g_calendar_ai.Initialize())
+        {
+            Print("WARNING: Failed to initialize calendar AI analysis - continuing without it");
+        }
+        else
+        {
+            Print("✅ Calendar AI analysis initialized successfully");
+        }
     }
     
     // Initialize variables
@@ -151,7 +171,7 @@ void UpdateNewsAndGenerateSignals()
     // Get MT5 Economic Calendar events
     if(InpUseMT5Calendar)
     {
-        if(g_mt5_news.GetEconomicCalendarEvents(24))
+        if(g_mt5_news.GetEconomicCalendarEvents(InpCalendarLookaheadHours))
         {
             double mt5_sentiment = g_mt5_news.AnalyzeNewsSentiment();
             int mt5_events = g_mt5_news.GetEventCount();
@@ -166,6 +186,42 @@ void UpdateNewsAndGenerateSignals()
                 {
                     Print("MT5 Calendar: ", mt5_events, " events, sentiment: ", DoubleToString(mt5_sentiment, 3));
                     g_mt5_news.PrintNewsSummary();
+                }
+            }
+        }
+    }
+    
+    // Run Calendar AI Analysis
+    if(InpUseCalendarAI)
+    {
+        if(g_calendar_ai.RunCalendarAnalysis())
+        {
+            string calendar_signal = g_calendar_ai.GetCalendarSignal();
+            double calendar_score = g_calendar_ai.GetCalendarScore();
+            double calendar_confidence = g_calendar_ai.GetCalendarConfidence();
+            int event_count = g_calendar_ai.GetEventCount();
+            
+            if(InpShowDetailedLogs)
+            {
+                Print("=== CALENDAR AI ANALYSIS ===");
+                Print("Signal: ", calendar_signal);
+                Print("Score: ", DoubleToString(calendar_score, 3));
+                Print("Confidence: ", DoubleToString(calendar_confidence, 3));
+                Print("Events Analyzed: ", event_count);
+                Print("Reasoning: ", g_calendar_ai.GetCalendarReasoning());
+                Print("=============================");
+            }
+            
+            // Use calendar AI signal for trading decisions
+            if(calendar_confidence >= 0.6)
+            {
+                if(calendar_signal == "STRONG_BUY" || calendar_signal == "BUY")
+                {
+                    Print("📈 CALENDAR AI SIGNAL: ", calendar_signal, " (Confidence: ", DoubleToString(calendar_confidence, 2), ")");
+                }
+                else if(calendar_signal == "STRONG_SELL" || calendar_signal == "SELL")
+                {
+                    Print("📉 CALENDAR AI SIGNAL: ", calendar_signal, " (Confidence: ", DoubleToString(calendar_confidence, 2), ")");
                 }
             }
         }

@@ -16,6 +16,7 @@
 #include "GrandeTrianglePatternDetector.mqh"
 #include "GrandeTriangleTradingRules.mqh"
 #include "mcp/analyze_sentiment_server/GrandeNewsSentimentIntegration.mqh"
+#include "GrandeMT5NewsReader.mqh"
 #include "..\VSol\AdvancedTrendFollower.mqh"
 #include "..\VSol\GrandeRiskManager.mqh"
 #include <Trade\Trade.mqh>
@@ -140,6 +141,12 @@ input int    InpRegimeUpdateSeconds = 5;         // Regime Update Interval (seco
 input int    InpKeyLevelUpdateSeconds = 300;     // Key Level Update Interval (seconds)
 input int    InpRiskUpdateSeconds   = 2;         // Risk Update Interval (seconds)
 
+input group "=== Calendar AI Settings ==="
+input bool   InpEnableCalendarAI        = true;  // Enable Calendar AI analysis
+input int    InpCalendarUpdateMinutes   = 15;    // Calendar AI update interval (minutes)
+input int    InpCalendarLookaheadHours  = 24;    // Lookahead window for calendar events (hours)
+input double InpCalendarMinConfidence   = 0.60;  // Log highlight threshold for confidence
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                 |
 //+------------------------------------------------------------------+
@@ -150,6 +157,7 @@ CGrandeTriangleTradingRules*  g_triangleTrading;
 CAdvancedTrendFollower*       g_trendFollower;
 CGrandeRiskManager*           g_riskManager;
 CNewsSentimentIntegration     g_newsSentiment;
+CGrandeMT5NewsReader          g_calendarReader;
 CTrade                        g_trade;
 RegimeConfig                  g_regimeConfig;
 RiskConfig                    g_riskConfig;
@@ -160,6 +168,7 @@ datetime                      g_lastTriangleUpdate;
 datetime                      g_lastDisplayUpdate;
 long                          g_chartID;
 datetime                      g_lastRiskUpdate;
+datetime                      g_lastCalendarUpdate;
 
 // Cached RSI values per management cycle
 datetime                      g_lastRsiCacheTime;
@@ -392,6 +401,21 @@ int OnInit()
             Print("[Grande] WARNING: News sentiment server unavailable; continuing without sentiment integration");
     }
     g_newsSentiment.SetAnalysisInterval(300);
+    
+    // Initialize Calendar AI (non-fatal if unavailable)
+    if(InpEnableCalendarAI)
+    {
+        if(!g_calendarReader.Initialize(_Symbol))
+        {
+            if(InpLogDebugInfo)
+                Print("[Grande] WARNING: Calendar reader initialization failed; calendar AI will attempt to proceed with existing files");
+        }
+        else if(InpLogDebugInfo)
+        {
+            Print("[Grande] Calendar reader initialized for ", _Symbol);
+        }
+        g_lastCalendarUpdate = 0;
+    }
     
     // Create and initialize risk manager
     g_riskManager = new CGrandeRiskManager();
@@ -639,6 +663,53 @@ void OnTimer()
         {
             Print("[Grande] Warning: Trend Follower refresh failed");
         }
+    }
+    
+    // Calendar AI analysis (periodic)
+    if(InpEnableCalendarAI && currentTime - g_lastCalendarUpdate >= InpCalendarUpdateMinutes * 60)
+    {
+        bool eventsOk = g_calendarReader.GetEconomicCalendarEvents(InpCalendarLookaheadHours);
+        if(!eventsOk)
+        {
+            Print("[CAL-AI] Calendar fetch empty/failed. Check MT5 Economic Calendar availability and permissions.");
+        }
+        else
+        {
+            // Export to Common\\Files is handled within GetEconomicCalendarEvents()
+            // Attempt to run/load calendar AI analysis
+            bool analyzed = g_newsSentiment.RunCalendarAnalysis();
+            if(!analyzed)
+            {
+                // Fallback: try to load any existing analysis file
+                analyzed = g_newsSentiment.LoadLatestCalendarAnalysis();
+            }
+            
+            string sig  = g_newsSentiment.GetCalendarSignal();
+            double sc   = g_newsSentiment.GetCalendarScore();
+            double conf = g_newsSentiment.GetCalendarConfidence();
+            int evc     = g_newsSentiment.GetEventCount();
+            
+            if(sig != "")
+            {
+                Print(StringFormat("[CAL-AI] signal=%s score=%.2f conf=%.2f events=%d", sig, sc, conf, evc));
+                if(conf >= InpCalendarMinConfidence)
+                {
+                    Print(StringFormat("[CAL-AI] ✅ High-confidence calendar %s (conf %.2f ≥ %.2f)", sig, conf, InpCalendarMinConfidence));
+                }
+                else
+                {
+                    Print(StringFormat("[CAL-AI] ℹ️ Low-confidence calendar signal (%.2f < %.2f) — informational only", conf, InpCalendarMinConfidence));
+                }
+                string reason = g_newsSentiment.GetCalendarReasoning();
+                if(StringLen(reason) > 0)
+                    Print("[CAL-AI] Reason: ", reason);
+            }
+            else
+            {
+                Print("[CAL-AI] No calendar analysis available yet. Ensure MCP server is running and Common\\Files\\integrated_calendar_analysis.json exists.");
+            }
+        }
+        g_lastCalendarUpdate = currentTime;
     }
     
     // Update display elements
@@ -931,6 +1002,18 @@ void UpdateSystemStatusPanel()
         }
     }
     
+    // Calendar AI status
+    string calendarInfo = "Disabled";
+    string calendarEventsInfo = "-";
+    if(InpEnableCalendarAI)
+    {
+        string calSig = g_newsSentiment.GetCalendarSignal();
+        double calConf = g_newsSentiment.GetCalendarConfidence();
+        int calEv = g_newsSentiment.GetEventCount();
+        calendarInfo = StringFormat("%s (conf %.2f)", (StringLen(calSig) > 0 ? calSig : "N/A"), calConf);
+        calendarEventsInfo = IntegerToString(calEv);
+    }
+    
     // Get drawdown info
     string drawdownInfo = "0.00%";
     if(g_riskManager != NULL)
@@ -950,6 +1033,8 @@ void UpdateSystemStatusPanel()
         "Drawdown: %s\n" +
         "─────────────────────────────\n" +
         "Trend Follower: %s\n" +
+        "Calendar AI: %s\n" +
+        "Events: %s\n" +
         "─────────────────────────────\n" +
         "Strongest Level:\n" +
         "%s\n" +
@@ -965,6 +1050,8 @@ void UpdateSystemStatusPanel()
         positionsInfo,
         drawdownInfo,
         trendFollowerInfo,
+        calendarInfo,
+        calendarEventsInfo,
         strongestLevelInfo,
         InpRegimeUpdateSeconds,
         InpKeyLevelUpdateSeconds

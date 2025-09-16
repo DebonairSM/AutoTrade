@@ -211,6 +211,117 @@ async def analyze_sentiment(text: str, ctx: Context) -> Dict[str, Any]:
         return {"error": "Upstream failure"}
 
 
+@mcp.tool()
+async def analyze_calendar_events(events: Any, ctx: Context) -> Dict[str, Any]:
+    """Interpret economic calendar events. Input: list[dict] or {'events': [...]}.
+       Returns { signal, score[-1..1], confidence[0..1], reasoning, event_count, per_event }"""
+    try:
+        if isinstance(events, dict) and "events" in events:
+            items = events.get("events", [])
+        elif isinstance(events, list):
+            items = events
+        elif isinstance(events, str):
+            import json as _json
+            obj = _json.loads(events)
+            items = obj.get("events", obj) if isinstance(obj, dict) else obj
+        else:
+            items = []
+    except Exception as e:
+        await ctx.error(f"Invalid events payload: {e}")
+        items = []
+
+    if not items:
+        return {"signal": "NEUTRAL", "score": 0.0, "confidence": 0.1, "reasoning": "No events", "event_count": 0, "per_event": []}
+
+    def impact_w(s: str) -> float:
+        s = (s or "").lower()
+        if "critical" in s:
+            return 1.0
+        if "high" in s:
+            return 0.8
+        if "medium" in s:
+            return 0.4
+        return 0.2
+
+    def dir_sign(name: str) -> int:
+        n = (name or "").lower()
+        # Lower is better = positive currency effect
+        for k in ["unemployment", "jobless", "jobless claims", "jobless-claims", "jobless_claims"]:
+            if k in n: return -1
+        # Higher is typically hawkish = positive
+        for k in ["cpi", "inflation", "ppi", "interest rate", "rate decision", "rates"]:
+            if k in n: return 1
+        return 1  # default
+
+    per = []
+    total_w = 0.0
+    agg = 0.0
+    conf_sum = 0.0
+
+    for ev in items:
+        name = str(ev.get("name", ""))
+        imp = str(ev.get("impact", ""))
+        w = impact_w(imp)
+        # normalize surprise
+        actual = ev.get("actual")
+        forecast = ev.get("forecast")
+        try:
+            a = float(actual) if actual not in (None, "", "N/A") else None
+            f = float(forecast) if forecast not in (None, "", "N/A") else None
+        except Exception:
+            a, f = None, None
+        surprise = 0.0
+        if a is not None and f is not None:
+            denom = max(abs(f), 1e-9)
+            surprise = (a - f) / denom
+        # clamp surprise to [-2,2] and map
+        if surprise > 2.0: surprise = 2.0
+        if surprise < -2.0: surprise = -2.0
+
+        sgn = dir_sign(name)
+        score = sgn * surprise
+        # soft clip to [-1,1]
+        if score > 1.0: score = 1.0
+        if score < -1.0: score = -1.0
+
+        agg += w * score
+        total_w += w
+        conf_sum += 0.6 + 0.4 * w  # heuristic confidence upweighted by impact
+
+        per.append({
+            "name": name,
+            "impact": imp,
+            "surprise": surprise,
+            "direction_score": score,
+            "weight": w
+        })
+
+    avg = agg / total_w if total_w > 0 else 0.0
+    confidence = min(1.0, max(0.0, conf_sum / max(len(items), 1)))
+
+    if avg >= 0.6 and confidence >= 0.6:
+        sig = "STRONG_BUY"
+    elif avg >= 0.2:
+        sig = "BUY"
+    elif avg <= -0.6 and confidence >= 0.6:
+        sig = "STRONG_SELL"
+    elif avg <= -0.2:
+        sig = "SELL"
+    else:
+        sig = "NEUTRAL"
+
+    reasoning = f"{len(items)} high-impact events. Weighted score={avg:.3f}, confidence={confidence:.2f}."
+
+    return {
+        "signal": sig,
+        "score": float(avg),
+        "confidence": float(confidence),
+        "reasoning": reasoning,
+        "event_count": len(items),
+        "per_event": per
+    }
+
+
 def main() -> None:
     # Default to stdio transport; switch by setting MCP_TRANSPORT=streamable-http
     transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()

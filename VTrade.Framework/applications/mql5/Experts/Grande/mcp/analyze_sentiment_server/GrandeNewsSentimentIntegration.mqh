@@ -18,6 +18,7 @@ class CNewsSentimentIntegration
 private:
     string            m_sentiment_server_url;
     string            m_news_analysis_file;
+    string            m_calendar_analysis_file;
     datetime          m_last_analysis_time;
     int               m_analysis_interval; // seconds
     
@@ -34,7 +35,18 @@ private:
         datetime      timestamp;        // Analysis timestamp
     };
     
+    struct CalendarSentimentData
+    {
+        string        signal;           // STRONG_BUY/BUY/NEUTRAL/SELL/STRONG_SELL
+        double        score;            // -1..1
+        double        confidence;       // 0..1
+        string        reasoning;        // Explanation
+        int           event_count;      // Events analyzed
+        datetime      timestamp;        // Analysis time
+    };
+    
     NewsSentimentData m_current_sentiment;
+    CalendarSentimentData m_calendar_sentiment;
     
 public:
     CNewsSentimentIntegration();
@@ -49,6 +61,10 @@ public:
     bool              LoadLatestAnalysis();
     bool              IsAnalysisFresh();
     
+    // Calendar analysis
+    bool              RunCalendarAnalysis();
+    bool              LoadLatestCalendarAnalysis();
+    
     // Sentiment data access
     string            GetCurrentSignal() { return m_current_sentiment.signal; }
     double            GetCurrentStrength() { return m_current_sentiment.strength; }
@@ -56,6 +72,13 @@ public:
     string            GetCurrentReasoning() { return m_current_sentiment.reasoning; }
     int               GetArticleCount() { return m_current_sentiment.article_count; }
     double            GetAverageSentiment() { return m_current_sentiment.avg_sentiment; }
+    
+    // Calendar data access
+    string            GetCalendarSignal() { return m_calendar_sentiment.signal; }
+    double            GetCalendarScore() { return m_calendar_sentiment.score; }
+    double            GetCalendarConfidence() { return m_calendar_sentiment.confidence; }
+    string            GetCalendarReasoning() { return m_calendar_sentiment.reasoning; }
+    int               GetEventCount() { return m_calendar_sentiment.event_count; }
     
     // Trading signal integration
     bool              ShouldEnterLong();
@@ -70,6 +93,8 @@ public:
     
 private:
     bool              ParseSentimentData(string json_data);
+    bool              ParseCalendarSentimentData(string json_data);
+    bool              AnalyzeCalendarInline();
     string            ExecutePythonScript(string script_path);
     bool              ValidateSentimentData();
 };
@@ -81,6 +106,7 @@ CNewsSentimentIntegration::CNewsSentimentIntegration()
 {
     m_sentiment_server_url = "http://localhost:8000";
     m_news_analysis_file = "integrated_news_analysis.json";
+    m_calendar_analysis_file = "integrated_calendar_analysis.json";
     m_last_analysis_time = 0;
     m_analysis_interval = 300; // 5 minutes default
     
@@ -92,6 +118,14 @@ CNewsSentimentIntegration::CNewsSentimentIntegration()
     m_current_sentiment.article_count = 0;
     m_current_sentiment.avg_sentiment = 0.0;
     m_current_sentiment.timestamp = 0;
+
+    // Initialize calendar data
+    m_calendar_sentiment.signal = "NEUTRAL";
+    m_calendar_sentiment.score = 0.0;
+    m_calendar_sentiment.confidence = 0.0;
+    m_calendar_sentiment.reasoning = "No calendar analysis available";
+    m_calendar_sentiment.event_count = 0;
+    m_calendar_sentiment.timestamp = 0;
 }
 
 //+------------------------------------------------------------------+
@@ -193,6 +227,50 @@ bool CNewsSentimentIntegration::LoadLatestAnalysis()
     }
     
     return false;
+}
+
+//+------------------------------------------------------------------+
+//| Run calendar analysis using the integrated system               |
+//+------------------------------------------------------------------+
+bool CNewsSentimentIntegration::RunCalendarAnalysis()
+{
+    Print("Grande Calendar Sentiment: Running calendar analysis...");
+    string script_path = "mcp/analyze_sentiment_server/integrated_calendar_system.py";
+    string result = ExecutePythonScript(script_path);
+    if(result == "")
+    {
+        Print("ERROR: Failed to execute calendar analysis script");
+        // Try inline fallback analysis if Python execution isn't available
+        if(AnalyzeCalendarInline())
+            return true;
+        return false;
+    }
+    // Load results
+    if(!LoadLatestCalendarAnalysis())
+    {
+        // Fallback to inline analysis if no external analysis file was produced
+        return AnalyzeCalendarInline();
+    }
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Load the latest calendar analysis results                        |
+//+------------------------------------------------------------------+
+bool CNewsSentimentIntegration::LoadLatestCalendarAnalysis()
+{
+    // Try Common then Local
+    string file_path = m_calendar_analysis_file;
+    int fh = FileOpen(file_path, FILE_READ|FILE_TXT|FILE_COMMON);
+    if(fh == INVALID_HANDLE)
+        fh = FileOpen(file_path, FILE_READ|FILE_TXT);
+    if(fh == INVALID_HANDLE)
+        return false;
+    string json_data = "";
+    while(!FileIsEnding(fh))
+        json_data += FileReadString(fh);
+    FileClose(fh);
+    return ParseCalendarSentimentData(json_data);
 }
 
 //+------------------------------------------------------------------+
@@ -439,6 +517,104 @@ bool CNewsSentimentIntegration::ParseSentimentData(string json_data)
     
     // Basic validation: require at least one article parsed
     return (m_current_sentiment.article_count > 0 && m_current_sentiment.signal != "");
+}
+
+//+------------------------------------------------------------------+
+//| Parse calendar sentiment data from JSON string                   |
+//+------------------------------------------------------------------+
+bool CNewsSentimentIntegration::ParseCalendarSentimentData(string json_data)
+{
+    // signal
+    string patt_sig = "\"signal\": \"";
+    int p = StringFind(json_data, patt_sig);
+    if(p >= 0)
+    {
+        p += StringLen(patt_sig);
+        int q = StringFind(json_data, "\"", p);
+        if(q > p) m_calendar_sentiment.signal = StringSubstr(json_data, p, q - p);
+    }
+    // score
+    string patt_score = "\"score\": ";
+    p = StringFind(json_data, patt_score);
+    if(p >= 0)
+    {
+        p += StringLen(patt_score);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.score = StringToDouble(s);
+    }
+    // confidence
+    string patt_conf = "\"confidence\": ";
+    p = StringFind(json_data, patt_conf);
+    if(p >= 0)
+    {
+        p += StringLen(patt_conf);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.confidence = StringToDouble(s);
+    }
+    // event_count
+    string patt_cnt = "\"event_count\": ";
+    p = StringFind(json_data, patt_cnt);
+    if(p >= 0)
+    {
+        p += StringLen(patt_cnt);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.event_count = (int)StringToInteger(s);
+    }
+    // reasoning
+    string patt_reas = "\"reasoning\": \"";
+    p = StringFind(json_data, patt_reas);
+    if(p >= 0)
+    {
+        p += StringLen(patt_reas);
+        int q = StringFind(json_data, "\"", p);
+        if(q > p) m_calendar_sentiment.reasoning = StringSubstr(json_data, p, q - p);
+    }
+    m_calendar_sentiment.timestamp = TimeCurrent();
+    return m_calendar_sentiment.event_count > 0 && m_calendar_sentiment.signal != "";
+}
+
+//+------------------------------------------------------------------+
+//| Inline calendar analysis fallback (no external MCP)              |
+//+------------------------------------------------------------------+
+bool CNewsSentimentIntegration::AnalyzeCalendarInline()
+{
+    // Read events JSON and compute a simple weighted signal
+    int fh = FileOpen("economic_events.json", FILE_READ|FILE_TXT|FILE_COMMON);
+    if(fh == INVALID_HANDLE)
+        fh = FileOpen("economic_events.json", FILE_READ|FILE_TXT);
+    if(fh == INVALID_HANDLE)
+        return false;
+    string data = "";
+    while(!FileIsEnding(fh))
+        data += FileReadString(fh);
+    FileClose(fh);
+    
+    // Count events and produce neutral fallback
+    int cnt = 0;
+    int pos = 0;
+    while(true)
+    {
+        int at = StringFind(data, "\"impact\":", pos);
+        if(at < 0) break;
+        cnt++;
+        pos = at + 9;
+    }
+    m_calendar_sentiment.signal = "NEUTRAL";
+    m_calendar_sentiment.score = 0.0;
+    m_calendar_sentiment.confidence = (cnt > 0 ? 0.30 : 0.10);
+    m_calendar_sentiment.reasoning = (cnt > 0 ? "Inline fallback computed neutral signal" : "No events for inline analysis");
+    m_calendar_sentiment.event_count = cnt;
+    m_calendar_sentiment.timestamp = TimeCurrent();
+    return true;
 }
 
 //+------------------------------------------------------------------+
