@@ -382,21 +382,23 @@ async def main():
     print("📊 Generating trading signals...")
     print()
     
-    # Check if sentiment server is running
+    # Check if sentiment server is running (non-fatal; proceed with fallback if not)
+    server_status = 'connected'
     try:
         result = subprocess.run([
             "docker", "ps", "--filter", "name=grande-sentiment-mcp", "--format", "{{.Status}}"
         ], capture_output=True, text=True, check=True)
         
         if "Up" not in result.stdout:
-            print("❌ Sentiment server is not running!")
-            print("Please start it with: docker compose up -d")
-            return 1
+            print("❌ Sentiment server is not running! Continuing with fallback analysis...")
+            print("Tip: Start it with: docker compose up -d")
+            server_status = 'not_running'
         else:
             print(f"✅ Sentiment server status: {result.stdout.strip()}")
+            server_status = 'connected'
     except Exception as e:
-        print(f"❌ Error checking sentiment server: {e}")
-        return 1
+        print(f"❌ Error checking sentiment server: {e}. Continuing with fallback analysis...")
+        server_status = 'unknown'
     
     print()
     
@@ -405,6 +407,11 @@ async def main():
     
     try:
         result = await system.run_integrated_analysis()
+        # Reflect server status discovered above
+        try:
+            result['sentiment_server_status'] = server_status
+        except Exception:
+            pass
         
         # Display results
         print("\n" + "="*60)
@@ -436,11 +443,29 @@ async def main():
         print("✅ Trading signal generated")
         print("="*60)
         
-        # Save results
-        with open('integrated_news_analysis.json', 'w') as f:
-            json.dump(result, f, indent=2)
-        
-        print(f"\n💾 Results saved to: integrated_news_analysis.json")
+        # Save results to MT5 Common Files directory when available (works with Docker bind mounts too)
+        common_env = os.environ.get('MT5_COMMON_FILES_DIR', '')
+        if common_env:
+            output_path = os.path.join(common_env, 'integrated_news_analysis.json')
+        else:
+            # Default Windows common path; allow override via env above
+            default_common = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming', 'MetaQuotes', 'Terminal', 'Common', 'Files')
+            try:
+                os.makedirs(default_common, exist_ok=True)
+            except Exception:
+                pass
+            output_path = os.path.join(default_common, 'integrated_news_analysis.json')
+
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=2)
+            print(f"\n💾 Results saved to: {output_path}")
+        except Exception as e:
+            # Fallback to current working directory if common path fails
+            fallback_path = os.path.abspath('integrated_news_analysis.json')
+            with open(fallback_path, 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=2)
+            print(f"\n⚠️ Could not write to Common Files ({e}). Saved to: {fallback_path}")
         
         return 0
         

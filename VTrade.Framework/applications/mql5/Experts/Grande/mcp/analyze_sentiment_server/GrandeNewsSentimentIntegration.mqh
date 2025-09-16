@@ -162,12 +162,19 @@ bool CNewsSentimentIntegration::LoadLatestAnalysis()
 {
     string file_path = m_news_analysis_file;
     
-    // Check if file exists
-    int file_handle = FileOpen(file_path, FILE_READ|FILE_TXT);
+    // Try to open from the Common Files directory first (shared across terminals)
+    int file_handle = FileOpen(file_path, FILE_READ|FILE_TXT|FILE_COMMON);
     if (file_handle == INVALID_HANDLE)
     {
-        Print("WARNING: News analysis file not found: ", file_path);
-        return false;
+        // Fallback to local MQL5\\Files directory
+        file_handle = FileOpen(file_path, FILE_READ|FILE_TXT);
+        if (file_handle == INVALID_HANDLE)
+        {
+            string common_dir = TerminalInfoString(TERMINAL_COMMONDATA_PATH) + "\\Files\\";
+            Print("WARNING: News analysis file not found in Common or Local Files: ", file_path);
+            Print("Expected Common path: ", common_dir, file_path);
+            return false;
+        }
     }
     
     // Read the entire file

@@ -25,7 +25,7 @@
 //+------------------------------------------------------------------+
 input group "=== Market Regime Settings ==="
 input double InpADXTrendThreshold = 25.0;        // ADX Threshold for Trending
-input double InpADXBreakoutMin = 20.0;           // ADX Minimum for Breakout Setup
+input double InpADXBreakoutMin = 18.0;           // ADX Minimum for Breakout Setup
 input int    InpATRPeriod = 14;                  // ATR Period
 input int    InpATRAvgPeriod = 90;               // ATR Average Period
 input double InpHighVolMultiplier = 2.0;         // High Volatility Multiplier
@@ -53,24 +53,24 @@ input bool   InpTriangleAllowEarlyEntry = false; // Allow Early Entry (Pre-break
 input group "=== Risk Management Settings ==="
 input double InpRiskPctTrend = 2.5;              // Risk % for Trend Trades
 input double InpRiskPctRange = 1.0;              // Risk % for Range Trades
-input double InpRiskPctBreakout = 3.0;           // Risk % for Breakout Trades
+input double InpRiskPctBreakout = 4.5;           // Risk % for Breakout Trades
 input double InpMaxRiskPerTrade = 5.0;           // Maximum Risk % per Trade
-input double InpMaxDrawdownPct = 25.0;           // Maximum Account Drawdown %
+input double InpMaxDrawdownPct = 30.0;           // Maximum Account Drawdown %
 input double InpEquityPeakReset = 5.0;           // Reset Peak after X% Recovery
-input int    InpMaxPositions = 5;                // Maximum Concurrent Positions
+input int    InpMaxPositions = 7;                // Maximum Concurrent Positions
 
 input group "=== Stop Loss & Take Profit ==="
 input double InpSLATRMultiplier = 1.2;           // Stop Loss ATR Multiplier
 input double InpTPRewardRatio = 3.0;             // Take Profit Reward Ratio (R:R)
 input double InpBreakevenATR = 1.0;              // Move to Breakeven after X ATR
-input double InpPartialCloseATR = 2.0;           // Partial Close after X ATR
+input double InpPartialCloseATR = 1.5;           // Partial Close after X ATR
 input double InpBreakevenBuffer = 0.5;           // Breakeven Buffer (pips)
 
 input group "=== Position Management ==="
 input bool   InpEnableTrailingStop = true;       // Enable Trailing Stops
-input double InpTrailingATRMultiplier = 0.8;     // Trailing Stop ATR Multiplier
+input double InpTrailingATRMultiplier = 0.6;     // Trailing Stop ATR Multiplier
 input bool   InpEnablePartialCloses = true;      // Enable Partial Profit Taking
-input double InpPartialClosePercent = 50.0;      // % of Position to Close
+input double InpPartialClosePercent = 33.0;      // % of Position to Close
 input bool   InpEnableBreakeven = true;          // Enable Breakeven Stops
 input ENUM_TIMEFRAMES InpManagementTimeframe = PERIOD_H1; // Only manage on this TF when gated
 input bool   InpManageOnlyOnTimeframe = true;    // Gate management to InpManagementTimeframe
