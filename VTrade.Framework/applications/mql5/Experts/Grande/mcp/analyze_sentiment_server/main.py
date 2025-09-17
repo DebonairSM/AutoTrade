@@ -214,7 +214,13 @@ async def analyze_sentiment(text: str, ctx: Context) -> Dict[str, Any]:
 @mcp.tool()
 async def analyze_calendar_events(events: Any, ctx: Context) -> Dict[str, Any]:
     """Interpret economic calendar events. Input: list[dict] or {'events': [...]}.
-       Returns { signal, score[-1..1], confidence[0..1], reasoning, event_count, per_event }"""
+       Returns { signal, score[-1..1], confidence[0..1], reasoning, event_count, per_event }
+
+       Modes (env CALENDAR_ANALYZER):
+       - "heuristic" (default): rule-based direction and surprise
+       - "finbert": generate per-event text and classify with the same sentiment provider
+         (FinBERT if SENTIMENT_PROVIDER=finbert_local), then weight by impact and surprise.
+    """
     try:
         if isinstance(events, dict) and "events" in events:
             items = events.get("events", [])
@@ -253,6 +259,10 @@ async def analyze_calendar_events(events: Any, ctx: Context) -> Dict[str, Any]:
             if k in n: return 1
         return 1  # default
 
+    # Select analyzer mode
+    mode = os.environ.get("CALENDAR_ANALYZER", "heuristic").strip().lower()
+    use_finbert = mode.startswith("finbert")
+
     per = []
     total_w = 0.0
     agg = 0.0
@@ -261,10 +271,13 @@ async def analyze_calendar_events(events: Any, ctx: Context) -> Dict[str, Any]:
     for ev in items:
         name = str(ev.get("name", ""))
         imp = str(ev.get("impact", ""))
+        currency = str(ev.get("currency", ""))
+        time_utc = str(ev.get("time_utc", ""))
         w = impact_w(imp)
         # normalize surprise
         actual = ev.get("actual")
         forecast = ev.get("forecast")
+        previous = ev.get("previous")
         try:
             a = float(actual) if actual not in (None, "", "N/A") else None
             f = float(forecast) if forecast not in (None, "", "N/A") else None
@@ -278,23 +291,77 @@ async def analyze_calendar_events(events: Any, ctx: Context) -> Dict[str, Any]:
         if surprise > 2.0: surprise = 2.0
         if surprise < -2.0: surprise = -2.0
 
-        sgn = dir_sign(name)
-        score = sgn * surprise
-        # soft clip to [-1,1]
-        if score > 1.0: score = 1.0
-        if score < -1.0: score = -1.0
+        if not use_finbert:
+            # Heuristic path (existing behavior)
+            sgn = dir_sign(name)
+            score = sgn * surprise
+            # soft clip to [-1,1]
+            if score > 1.0: score = 1.0
+            if score < -1.0: score = -1.0
 
-        agg += w * score
-        total_w += w
-        conf_sum += 0.6 + 0.4 * w  # heuristic confidence upweighted by impact
+            agg += w * score
+            total_w += w
+            conf_sum += 0.6 + 0.4 * w  # heuristic confidence upweighted by impact
 
-        per.append({
-            "name": name,
-            "impact": imp,
-            "surprise": surprise,
-            "direction_score": score,
-            "weight": w
-        })
+            per.append({
+                "name": name,
+                "impact": imp,
+                "surprise": surprise,
+                "direction_score": score,
+                "weight": w
+            })
+        else:
+            # FinBERT-powered classification on an informative sentence
+            # Magnitude factor from surprise if available
+            magnitude = abs(surprise) if (a is not None and f is not None) else 0.4
+            if magnitude > 1.0:
+                magnitude = 1.0
+            # Provide directional hint for this indicator without forcing a label
+            sgn_hint = dir_sign(name)
+            hint_txt = "higher tends to strengthen the currency" if sgn_hint > 0 else "higher tends to weaken the currency"
+            text = (
+                f"{currency} {name} at {time_utc}: Actual {actual}, Forecast {forecast}, Previous {previous}. "
+                f"Impact {imp}. Surprise {surprise:+.2f} (normalized). Historically, {hint_txt}."
+            )
+            try:
+                # Reuse the same sentiment provider (FinBERT if configured) via our tool function
+                resp = await analyze_sentiment(text, ctx)
+                fb_score = float(resp.get("score", 0.0))  # [-1,1]
+                fb_conf = float(resp.get("confidence", 0.5))
+                # Adjust by magnitude and weight by impact
+                score = fb_score * magnitude
+                agg += w * score
+                total_w += w
+                # confidence blended with impact
+                conf_sum += fb_conf * (0.5 + 0.5 * w)
+                per.append({
+                    "name": name,
+                    "impact": imp,
+                    "surprise": surprise,
+                    "weight": w,
+                    "text": text,
+                    "finbert_score": fb_score,
+                    "finbert_confidence": fb_conf,
+                    "adjusted_score": score
+                })
+            except Exception as e:
+                await ctx.error(f"FinBERT calendar classification failed: {e}")
+                # Fallback to minimal heuristic for this event
+                sgn = dir_sign(name)
+                score = sgn * surprise
+                if score > 1.0: score = 1.0
+                if score < -1.0: score = -1.0
+                agg += w * score
+                total_w += w
+                conf_sum += 0.5 * (0.5 + 0.5 * w)
+                per.append({
+                    "name": name,
+                    "impact": imp,
+                    "surprise": surprise,
+                    "direction_score": score,
+                    "weight": w,
+                    "fallback": True
+                })
 
     avg = agg / total_w if total_w > 0 else 0.0
     confidence = min(1.0, max(0.0, conf_sum / max(len(items), 1)))
@@ -310,7 +377,8 @@ async def analyze_calendar_events(events: Any, ctx: Context) -> Dict[str, Any]:
     else:
         sig = "NEUTRAL"
 
-    reasoning = f"{len(items)} high-impact events. Weighted score={avg:.3f}, confidence={confidence:.2f}."
+    analyzer = "FinBERT" if use_finbert else "Heuristic"
+    reasoning = f"{len(items)} events via {analyzer}. Weighted score={avg:.3f}, confidence={confidence:.2f}."
 
     return {
         "signal": sig,
@@ -318,7 +386,8 @@ async def analyze_calendar_events(events: Any, ctx: Context) -> Dict[str, Any]:
         "confidence": float(confidence),
         "reasoning": reasoning,
         "event_count": len(items),
-        "per_event": per
+        "per_event": per,
+        "analyzer": analyzer
     }
 
 

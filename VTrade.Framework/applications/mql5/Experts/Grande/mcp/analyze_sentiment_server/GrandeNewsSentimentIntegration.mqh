@@ -9,6 +9,11 @@
 #property strict
 
 
+// DLL import for launching external process (enable "Allow DLL imports" in EA settings)
+#import "shell32.dll"
+int ShellExecuteW(int hwnd, string Operation, string File, string Parameters, string Directory, int ShowCmd);
+#import
+
 
 //+------------------------------------------------------------------+
 //| News Sentiment Integration Class                                |
@@ -165,27 +170,8 @@ bool CNewsSentimentIntegration::Initialize(string server_url = "http://localhost
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::RunNewsAnalysis()
 {
-    Print("Grande News Sentiment: Running news analysis...");
-    
-    // Execute the integrated news system
-    string script_path = "mcp/analyze_sentiment_server/integrated_news_system.py";
-    string result = ExecutePythonScript(script_path);
-    
-    if (result == "")
-    {
-        Print("ERROR: Failed to execute news analysis script");
-        return false;
-    }
-    
-    // Load the results
-    if (LoadLatestAnalysis())
-    {
-        m_last_analysis_time = TimeCurrent();
-        Print("Grande News Sentiment: Analysis completed successfully");
-        PrintSentimentInfo();
-        return true;
-    }
-    
+    // News analysis removed in finbert-only cleanup; keep method as no-op for compatibility
+    Print("Grande News Sentiment: News analysis is disabled in this build.");
     return false;
 }
 
@@ -235,7 +221,7 @@ bool CNewsSentimentIntegration::LoadLatestAnalysis()
 bool CNewsSentimentIntegration::RunCalendarAnalysis()
 {
     Print("Grande Calendar Sentiment: Running calendar analysis...");
-    string script_path = "mcp/analyze_sentiment_server/integrated_calendar_system.py";
+    string script_path = "mcp/analyze_sentiment_server/finbert_calendar_analyzer.py";
     string result = ExecutePythonScript(script_path);
     if(result == "")
     {
@@ -245,8 +231,19 @@ bool CNewsSentimentIntegration::RunCalendarAnalysis()
             return true;
         return false;
     }
-    // Load results
-    if(!LoadLatestCalendarAnalysis())
+    
+    // Wait briefly for the analyzer to produce output in Common\Files
+    bool loaded = false;
+    for(int attempt = 0; attempt < 20; ++attempt) // up to ~10 seconds total
+    {
+        if(LoadLatestCalendarAnalysis())
+        {
+            loaded = true;
+            break;
+        }
+        Sleep(500);
+    }
+    if(!loaded)
     {
         // Fallback to inline analysis if no external analysis file was produced
         return AnalyzeCalendarInline();
@@ -622,10 +619,26 @@ bool CNewsSentimentIntegration::AnalyzeCalendarInline()
 //+------------------------------------------------------------------+
 string CNewsSentimentIntegration::ExecutePythonScript(string script_path)
 {
-    // This would execute the Python script
-    // In MQL5, you'd typically use ShellExecute or similar
-    // For now, we'll return a success indicator
-    return "success";
+    // Attempt to launch Python to run the analyzer script.
+    // Primary: cmd /C python "<script_path>"
+    string working_dir = TerminalInfoString(TERMINAL_DATA_PATH) + "\\MQL5\\Experts\\Grande";
+    string args_primary = StringFormat("/C python \"%s\"", script_path);
+    int rc = ShellExecuteW(0, "open", "cmd.exe", args_primary, working_dir, 0);
+    if(rc > 32)
+        return "success";
+    
+    // Fallback: use py launcher
+    string args_fallback = StringFormat("/C py -3 \"%s\"", script_path);
+    rc = ShellExecuteW(0, "open", "cmd.exe", args_fallback, working_dir, 0);
+    if(rc > 32)
+        return "success";
+    
+    // Final fallback: try invoking python directly without cmd wrapper
+    rc = ShellExecuteW(0, "open", "python", StringFormat("\"%s\"", script_path), working_dir, 0);
+    if(rc > 32)
+        return "success";
+    
+    return "";
 }
 
 //+------------------------------------------------------------------+
