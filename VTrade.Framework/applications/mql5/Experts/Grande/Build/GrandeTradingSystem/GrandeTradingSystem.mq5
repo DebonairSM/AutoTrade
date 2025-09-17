@@ -16,7 +16,7 @@
 #include "GrandeTrianglePatternDetector.mqh"
 #include "GrandeTriangleTradingRules.mqh"
 #include "mcp/analyze_sentiment_server/GrandeNewsSentimentIntegration.mqh"
-#include "GrandeMT5NewsReader.mqh"
+#include "GrandeMT5CalendarReader.mqh"
 #include "..\VSol\AdvancedTrendFollower.mqh"
 #include "..\VSol\GrandeRiskManager.mqh"
 #include <Trade\Trade.mqh>

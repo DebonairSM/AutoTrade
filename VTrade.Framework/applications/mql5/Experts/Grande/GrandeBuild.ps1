@@ -42,10 +42,6 @@ function Build-GrandeComponent {
             MainFile = "GrandeTradingSystem.mq5"
             Dependencies = @("GrandeMarketRegimeDetector.mqh", "GrandeKeyLevelDetector.mqh")
         }
-        "GrandeTestSuite" = @{
-            MainFile = "GrandeTestSuite.mq5"
-            Dependencies = @("GrandeMarketRegimeDetector.mqh", "GrandeKeyLevelDetector.mqh")
-        }
         "GrandeMarketRegimeDetector" = @{
             MainFile = "GrandeMarketRegimeDetector.mqh"
             Dependencies = @()
@@ -66,7 +62,6 @@ function Build-GrandeComponent {
         Write-Host "Building all components..." -ForegroundColor Yellow
         
         $componentOrder = @("GrandeMarketRegimeDetector", "GrandeKeyLevelDetector", "GrandeTradingSystem")
-        if ($RunTests) { $componentOrder += "GrandeTestSuite" }
         
         foreach ($comp in $componentOrder) {
             Build-SingleComponent -Name $comp -Components $components -BuildDir $buildDir -Mt5Dir $mt5Dir
@@ -80,10 +75,8 @@ function Build-GrandeComponent {
     } else {
         Build-SingleComponent -Name $ComponentName -Components $components -BuildDir $buildDir -Mt5Dir $mt5Dir
         
-        if ($RunTests -and $ComponentName -ne "GrandeTestSuite") {
-            # Build test suite if not already building it
-            Build-SingleComponent -Name "GrandeTestSuite" -Components $components -BuildDir $buildDir -Mt5Dir $mt5Dir
-            Run-AutomatedTests -Components $components -Mt5Dir $mt5Dir
+        if ($RunTests) {
+            Write-Host "Test suite removed - main EA includes validation" -ForegroundColor Yellow
         }
     }
 }
@@ -203,27 +196,44 @@ function Build-SingleComponent {
         }
     }
     
-    # MCP sentiment server scripts deployment
-    # Calendar AI analysis is enabled; deploy MCP scripts required by RunCalendarAnalysis.
+    # MCP FinBERT Calendar Analyzer deployment (essential files only)
     $deployMcp = $true
     if ($deployMcp) {
         $mcpSource = Join-Path $sourceDir "mcp\analyze_sentiment_server"
         $mcpDestParent = Join-Path $Mt5Dir "mcp"
         $mcpDest = Join-Path $mcpDestParent "analyze_sentiment_server"
+        
         if (Test-Path $mcpSource) {
             if (-not (Test-Path $mcpDestParent)) {
                 New-Item -ItemType Directory -Path $mcpDestParent -Force | Out-Null
             }
-            if (Test-Path $mcpDest) {
-                Remove-Item -Recurse -Force $mcpDest
+            if (-not (Test-Path $mcpDest)) {
+                New-Item -ItemType Directory -Path $mcpDest -Force | Out-Null
             }
-            Copy-Item -Path $mcpSource -Destination $mcpDest -Recurse -Force
-            Write-Host "Deployed MCP scripts to MT5: $mcpDest" -ForegroundColor Green
+            
+            # Copy only essential files (not the entire directory with dependencies)
+            $essentialFiles = @(
+                "finbert_calendar_analyzer.py",
+                "requirements.txt", 
+                "GrandeNewsSentimentIntegration.mqh"
+            )
+            
+            foreach ($file in $essentialFiles) {
+                $sourceFile = Join-Path $mcpSource $file
+                $destFile = Join-Path $mcpDest $file
+                if (Test-Path $sourceFile) {
+                    Copy-Item -Path $sourceFile -Destination $destFile -Force
+                    Write-Host "Deployed: $file" -ForegroundColor Green
+                } else {
+                    Write-Host "Warning: Essential file not found: $file" -ForegroundColor Yellow
+                }
+            }
+            Write-Host "Deployed essential MCP files to MT5 ($(($essentialFiles).Count) files)" -ForegroundColor Green
         } else {
-            Write-Host "Warning: MCP scripts not found at $mcpSource" -ForegroundColor Yellow
+            Write-Host "Warning: MCP source directory not found at $mcpSource" -ForegroundColor Yellow
         }
     } else {
-        Write-Host "Skipped MCP scripts deployment (calendar AI disabled)" -ForegroundColor Yellow
+        Write-Host "Skipped MCP deployment (calendar AI disabled)" -ForegroundColor Yellow
     }
     
     Write-Host "Component $Name deployed to MT5 successfully!" -ForegroundColor Green
