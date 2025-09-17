@@ -17,6 +17,7 @@
 #include "GrandeTriangleTradingRules.mqh"
 #include "mcp/analyze_sentiment_server/GrandeNewsSentimentIntegration.mqh"
 #include "GrandeMT5CalendarReader.mqh"
+#include "GrandeIntelligentReporter.mqh"
 #include "..\VSol\AdvancedTrendFollower.mqh"
 #include "..\VSol\GrandeRiskManager.mqh"
 #include <Trade\Trade.mqh>
@@ -164,6 +165,7 @@ CGrandeTrianglePatternDetector* g_triangleDetector;
 CGrandeTriangleTradingRules*  g_triangleTrading;
 CAdvancedTrendFollower*       g_trendFollower;
 CGrandeRiskManager*           g_riskManager;
+CGrandeIntelligentReporter*   g_reporter;
 CNewsSentimentIntegration     g_newsSentiment;
 CGrandeMT5NewsReader          g_calendarReader;
 CTrade                        g_trade;
@@ -476,6 +478,43 @@ int OnInit()
     if(InpLogDebugInfo)
         Print("[Grande] Risk Manager initialized and integrated");
     
+    // Create and initialize intelligent reporter
+    g_reporter = new CGrandeIntelligentReporter();
+    if(g_reporter == NULL)
+    {
+        Print("ERROR: Failed to create Intelligent Reporter");
+        delete g_regimeDetector;
+        delete g_keyLevelDetector;
+        if(g_trendFollower != NULL) delete g_trendFollower;
+        delete g_riskManager;
+        g_regimeDetector = NULL;
+        g_keyLevelDetector = NULL;
+        g_trendFollower = NULL;
+        g_riskManager = NULL;
+        return INIT_FAILED;
+    }
+    
+    if(!g_reporter.Initialize(_Symbol, 60)) // 60-minute reporting interval
+    {
+        Print("ERROR: Failed to initialize Intelligent Reporter");
+        delete g_regimeDetector;
+        delete g_keyLevelDetector;
+        if(g_trendFollower != NULL) delete g_trendFollower;
+        delete g_riskManager;
+        delete g_reporter;
+        g_regimeDetector = NULL;
+        g_keyLevelDetector = NULL;
+        g_trendFollower = NULL;
+        g_riskManager = NULL;
+        g_reporter = NULL;
+        return INIT_FAILED;
+    }
+    
+    Print("[Grande] 📊 Intelligent Reporter initialized - Hourly reports enabled");
+    
+    // Generate immediate startup report after short delay to collect initial data
+    EventSetTimer(5); // Set 5 second timer for initial report
+    
     // Set up chart display - always setup for any visual features
     SetupChartDisplay();
     
@@ -560,6 +599,12 @@ void OnDeinit(const int reason)
         g_riskManager = NULL;
     }
     
+    if(g_reporter != NULL)
+    {
+        delete g_reporter;
+        g_reporter = NULL;
+    }
+    
     // Clean up chart objects
     CleanupChartObjects();
     
@@ -585,6 +630,25 @@ void OnTick()
 void OnTimer()
 {
     datetime currentTime = TimeCurrent();
+    
+    // Generate initial report 5 seconds after startup
+    static bool initialReportGenerated = false;
+    static datetime startupTime = TimeCurrent();
+    if(!initialReportGenerated && g_reporter != NULL && (currentTime - startupTime >= 5))
+    {
+        Print("[Grande] 📊 Generating initial intelligence report...");
+        g_reporter.GenerateHourlyReport();
+        g_reporter.GenerateFinBERTDataset();
+        Print("[Grande] ✅ Initial report generated - Check Experts tab and Files folder");
+        initialReportGenerated = true;
+    }
+    
+    // Check if hourly report is due
+    if(g_reporter != NULL && g_reporter.IsReportDue())
+    {
+        g_reporter.GenerateHourlyReport();
+        g_reporter.GenerateFinBERTDataset(); // Also save data for FinBERT
+    }
     
     // Periodic risk manager updates (trailing stop, breakeven, etc.)
     if(g_riskManager != NULL && currentTime - g_lastRiskUpdate >= InpRiskUpdateSeconds)
@@ -837,6 +901,29 @@ void PerformInitialAnalysis()
 
     // Show startup snapshot with actionable insights
     ShowStartupSnapshot();
+    
+    // Generate quick initial report with available data
+    if(g_reporter != NULL)
+    {
+        Print("\n⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️");
+        Print("📊 INTELLIGENT REPORTER - INITIAL SNAPSHOT");
+        Print("⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️\n");
+        Print("🔹 System initialized - Reports will be generated:");
+        Print("   ▶️ Immediately: In 5 seconds (initial data collection)");
+        Print("   ▶️ Hourly: Every 60 minutes automatically");
+        Print("   ▶️ On-Demand: Press 'I' key anytime\n");
+        Print("📁 Reports saved to: Files\\GrandeReport_", _Symbol, "_", TimeToString(TimeCurrent(), TIME_DATE), ".txt");
+        Print("🤖 FinBERT data saved to: Files\\FinBERT_Data_", _Symbol, "_", TimeToString(TimeCurrent(), TIME_DATE), ".csv\n");
+        Print("🔑 KEYBOARD SHORTCUTS:");
+        Print("   [I] - Generate immediate intelligence report");
+        Print("   [R] - Force regime update");
+        Print("   [L] - Force key level update");
+        Print("   [S] - Show trend follower status");
+        Print("   [F] - Toggle trend follower panel");
+        Print("   [E] - Enable/Disable trading");
+        Print("   [X] - Close all positions\n");
+        Print("⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️⚛️\n");
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -1219,6 +1306,20 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
                 UpdateDisplayElements();
             }
         }
+        else if(lparam == 'I' || lparam == 'i') // Press 'I' to generate immediate intelligence report
+        {
+            if(g_reporter != NULL)
+            {
+                Print("[Grande] 📊 Generating immediate intelligence report...");
+                g_reporter.GenerateHourlyReport();
+                g_reporter.GenerateFinBERTDataset();
+                Print("[Grande] ✅ Report generated - Check Experts tab and Files folder");
+            }
+            else
+            {
+                Print("[Grande] Reporter not available");
+            }
+        }
         else if(lparam == 'T' || lparam == 't') // Press 'T' to test visuals
         {
             if(InpLogDebugInfo)
@@ -1515,6 +1616,23 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         Print(logPrefix + "Spread: ", SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), " points");
     }
     
+    // Prepare decision tracking data
+    STradeDecision decision;
+    decision.timestamp = TimeCurrent();
+    decision.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    decision.atr = rs.atr_current;
+    decision.adx_h1 = rs.adx_h1;
+    decision.adx_h4 = rs.adx_h4;
+    decision.adx_d1 = rs.adx_d1;
+    decision.regime = g_regimeDetector.RegimeToString(rs.regime);
+    decision.regime_confidence = rs.confidence;
+    decision.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    decision.open_positions = PositionsTotal();
+    if(g_keyLevelDetector != NULL)
+        decision.key_levels_count = g_keyLevelDetector.GetKeyLevelCount();
+    else
+        decision.key_levels_count = 0;
+    
     // Check risk management first
     if(g_riskManager != NULL)
     {
@@ -1523,6 +1641,15 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
             if(InpLogDetailedInfo)
                 Print(logPrefix + "❌ BLOCKED: Maximum drawdown limit reached (", 
                       DoubleToString(InpMaxDrawdownPct, 1), "%)");
+            
+            // Track rejection
+            if(g_reporter != NULL)
+            {
+                decision.signal_type = "PRE_SIGNAL_CHECK";
+                decision.decision = "BLOCKED";
+                decision.rejection_reason = "Maximum drawdown limit reached";
+                g_reporter.RecordDecision(decision);
+            }
             return;
         }
             
@@ -1531,6 +1658,15 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
             if(InpLogDetailedInfo)
                 Print(logPrefix + "❌ BLOCKED: Maximum positions limit reached (", 
                       InpMaxPositions, " positions)");
+            
+            // Track rejection
+            if(g_reporter != NULL)
+            {
+                decision.signal_type = "PRE_SIGNAL_CHECK";
+                decision.decision = "BLOCKED";
+                decision.rejection_reason = "Maximum positions limit reached";
+                g_reporter.RecordDecision(decision);
+            }
             return;
         }
     }
@@ -1540,6 +1676,15 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ BLOCKED: Position already open for symbol/magic");
+        
+        // Track rejection
+        if(g_reporter != NULL)
+        {
+            decision.signal_type = "PRE_SIGNAL_CHECK";
+            decision.decision = "BLOCKED";
+            decision.rejection_reason = "Position already open for symbol/magic";
+            g_reporter.RecordDecision(decision);
+        }
         return;
     }
     
@@ -1628,6 +1773,20 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     string logPrefix = "[TREND SIGNAL] ";
     string direction = bullish ? "BULLISH" : "BEARISH";
     
+    // Prepare tracking for trade execution
+    STradeDecision execution;
+    execution.timestamp = TimeCurrent();
+    execution.signal_type = bullish ? "TREND_BULL" : "TREND_BEAR";
+    execution.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    execution.atr = rs.atr_current;
+    execution.adx_h1 = rs.adx_h1;
+    execution.adx_h4 = rs.adx_h4;
+    execution.adx_d1 = rs.adx_d1;
+    execution.regime = g_regimeDetector.RegimeToString(rs.regime);
+    execution.regime_confidence = rs.confidence;
+    execution.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    execution.open_positions = PositionsTotal();
+    
     if(InpLogDetailedInfo)
     {
         Print(logPrefix + "Analyzing ", direction, " trend signal...");
@@ -1675,6 +1834,11 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ TRADE BLOCKED: Invalid lot size (", DoubleToString(lot, 2), ")");
+        
+        execution.decision = "BLOCKED";
+        execution.rejection_reason = StringFormat("Invalid lot size: %.2f", lot);
+        execution.calculated_lot = lot;
+        if(g_reporter != NULL) g_reporter.RecordDecision(execution);
         return;
     }
     
@@ -1815,16 +1979,36 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
                        (MathAbs(tp-price)/MathMax(1e-10, MathAbs(price-sl))),
                        (sentimentSupports?" senti=YES":"")));
 
-    if(InpLogDetailedInfo)
+    // Track execution result
+    execution.calculated_lot = lot;
+    execution.risk_percent = InpRiskPctTrend;
+    
+    if(tradeResult)
     {
-        if(tradeResult)
+        execution.decision = "EXECUTED";
+        execution.rejection_reason = "";
+        execution.additional_notes = StringFormat("Order #%lld filled at %.5f", 
+                                                 g_trade.ResultOrder(), 
+                                                 g_trade.ResultPrice());
+        if(g_reporter != NULL) g_reporter.RecordDecision(execution);
+        
+        if(InpLogDetailedInfo)
         {
             Print(logPrefix + "🎯 TRADE EXECUTED SUCCESSFULLY!");
             Print(logPrefix + "  Ticket: ", g_trade.ResultOrder());
             Print(logPrefix + "  Execution Price: ", DoubleToString(g_trade.ResultPrice(), _Digits));
             Print(logPrefix + "  Slippage: ", DoubleToString(MathAbs(g_trade.ResultPrice() - price) / _Point, 1), " pips");
         }
-        else
+    }
+    else
+    {
+        execution.decision = "FAILED";
+        execution.rejection_reason = StringFormat("Execution failed - Error %d: %s",
+                                                 g_trade.ResultRetcode(),
+                                                 g_trade.ResultRetcodeDescription());
+        if(g_reporter != NULL) g_reporter.RecordDecision(execution);
+        
+        if(InpLogDetailedInfo)
         {
             Print(logPrefix + "❌ TRADE EXECUTION FAILED!");
             Print(logPrefix + "  Error Code: ", g_trade.ResultRetcode());
@@ -2199,6 +2383,22 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
 {
     string logPrefix = "[SIGNAL ANALYSIS] ";
     string direction = bullish ? "BULLISH" : "BEARISH";
+    string signal_type = bullish ? "TREND_BULL" : "TREND_BEAR";
+    string rejection_reason = "";
+    
+    // Prepare tracking data
+    STradeDecision decision;
+    decision.timestamp = TimeCurrent();
+    decision.signal_type = signal_type;
+    decision.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    decision.atr = rs.atr_current;
+    decision.adx_h1 = rs.adx_h1;
+    decision.adx_h4 = rs.adx_h4;
+    decision.adx_d1 = rs.adx_d1;
+    decision.regime = g_regimeDetector.RegimeToString(rs.regime);
+    decision.regime_confidence = rs.confidence;
+    decision.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    decision.open_positions = PositionsTotal();
     
     if(InpLogDetailedInfo)
         Print(logPrefix + "Evaluating ", direction, " trend signal criteria...");
@@ -2220,6 +2420,11 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         {
             if(InpLogDetailedInfo)
                 Print(logPrefix + "❌ SIGNAL BLOCKED: Trend Follower rejected ", direction, " signal");
+            
+            rejection_reason = "Trend Follower multi-timeframe analysis rejected signal";
+            decision.decision = "REJECTED";
+            decision.rejection_reason = rejection_reason;
+            if(g_reporter != NULL) g_reporter.RecordDecision(decision);
             return false;
         }
     }
@@ -2349,6 +2554,13 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ SIGNAL BLOCKED: EMA alignment not suitable for ", direction, " trend");
+        
+        rejection_reason = StringFormat("EMA alignment failed - H1: EMA50 %s EMA200, H4: EMA50 %s EMA200",
+                                       (ema50_h1 > ema200_h1 ? ">" : "<"),
+                                       (ema50_h4 > ema200_h4 ? ">" : "<"));
+        decision.decision = "REJECTED";
+        decision.rejection_reason = rejection_reason;
+        if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
     
@@ -2396,6 +2608,13 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ SIGNAL BLOCKED: Price too far from EMA20 (pullback > 1×ATR)");
+        
+        rejection_reason = StringFormat("Pullback too far - Distance: %.1f pips, Limit: %.1f pips",
+                                       pullbackDistance / _Point,
+                                       rs.atr_current / _Point);
+        decision.decision = "REJECTED";
+        decision.rejection_reason = rejection_reason;
+        if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
     
@@ -2406,18 +2625,30 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         double rsi_h4 = (g_cachedRsiH4 != EMPTY_VALUE ? g_cachedRsiH4 : GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0));
         if(rsi_h4 < 0) return false;
 
-        if(bullish && rsi_h4 >= InpH4RSIOverbought)
-        {
-            if(InpLogDetailedInfo) 
-                Print(logPrefix + "❌ SIGNAL BLOCKED: H4 RSI overbought (", DoubleToString(rsi_h4, 2), ")");
-            return false;
-        }
-        if(!bullish && rsi_h4 <= InpH4RSIOversold)
-        {
-            if(InpLogDetailedInfo) 
-                Print(logPrefix + "❌ SIGNAL BLOCKED: H4 RSI oversold (", DoubleToString(rsi_h4, 2), ")");
-            return false;
-        }
+            if(bullish && rsi_h4 >= InpH4RSIOverbought)
+            {
+                if(InpLogDetailedInfo) 
+                    Print(logPrefix + "❌ SIGNAL BLOCKED: H4 RSI overbought (", DoubleToString(rsi_h4, 2), ")");
+                
+                rejection_reason = StringFormat("H4 RSI overbought - %.1f (threshold %.1f)", rsi_h4, InpH4RSIOverbought);
+                decision.decision = "REJECTED";
+                decision.rejection_reason = rejection_reason;
+                decision.rsi_h4 = rsi_h4;
+                if(g_reporter != NULL) g_reporter.RecordDecision(decision);
+                return false;
+            }
+            if(!bullish && rsi_h4 <= InpH4RSIOversold)
+            {
+                if(InpLogDetailedInfo) 
+                    Print(logPrefix + "❌ SIGNAL BLOCKED: H4 RSI oversold (", DoubleToString(rsi_h4, 2), ")");
+                
+                rejection_reason = StringFormat("H4 RSI oversold - %.1f (threshold %.1f)", rsi_h4, InpH4RSIOversold);
+                decision.decision = "REJECTED";
+                decision.rejection_reason = rejection_reason;
+                decision.rsi_h4 = rsi_h4;
+                if(g_reporter != NULL) g_reporter.RecordDecision(decision);
+                return false;
+            }
 
         if(InpUseD1RSI)
         {
@@ -2501,6 +2732,13 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ SIGNAL BLOCKED: RSI momentum not aligned with ", direction, " trend");
+        
+        rejection_reason = StringFormat("RSI conditions failed - Current: %.1f (need 40-60 and %s)",
+                                       rsi, bullish ? "rising" : "falling");
+        decision.decision = "REJECTED";
+        decision.rejection_reason = rejection_reason;
+        decision.rsi_current = rsi;
+        if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
     
@@ -2515,6 +2753,12 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         Print(logPrefix + "  ✅ RSI Momentum (40-60 range with correct direction)");
     }
     
+    // Track successful signal
+    decision.decision = "PASSED";
+    decision.rejection_reason = "";
+    decision.rsi_current = rsi;
+    if(g_reporter != NULL) g_reporter.RecordDecision(decision);
+    
     return true;
 }
 
@@ -2524,6 +2768,20 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
 bool Signal_BREAKOUT(const RegimeSnapshot &rs)
 {
     string logPrefix = "[BREAKOUT CRITERIA] ";
+    
+    // Prepare tracking data
+    STradeDecision decision;
+    decision.timestamp = TimeCurrent();
+    decision.signal_type = "BREAKOUT";
+    decision.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    decision.atr = rs.atr_current;
+    decision.adx_h1 = rs.adx_h1;
+    decision.adx_h4 = rs.adx_h4;
+    decision.adx_d1 = rs.adx_d1;
+    decision.regime = g_regimeDetector.RegimeToString(rs.regime);
+    decision.regime_confidence = rs.confidence;
+    decision.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    decision.open_positions = PositionsTotal();
     
     if(InpLogDetailedInfo)
         Print(logPrefix + "Evaluating breakout signal criteria...");
@@ -2566,6 +2824,10 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
                                nr7 ? "Y" : "N",
                                atrExpanding ? "Y" : "N"));
         }
+        
+        decision.decision = "REJECTED";
+        decision.rejection_reason = "No valid pattern (no inside bar, NR7, or ATR expansion)";
+        if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
     
@@ -2576,6 +2838,10 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ CRITERIA FAILED: No strong key levels available");
         Print("[BREAKOUT] FAIL: no strong key levels");
+        
+        decision.decision = "REJECTED";
+        decision.rejection_reason = "No strong key levels detected";
+        if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
     
@@ -2604,6 +2870,13 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
                                DoubleToString(distanceToLevel / _Point, 1),
                                DoubleToString(maxDistance / _Point, 1)));
         }
+        
+        decision.decision = "REJECTED";
+        decision.rejection_reason = StringFormat("Price too far from key level - %.1f pips (max: %.1f pips)",
+                                                distanceToLevel / _Point, maxDistance / _Point);
+        decision.nearest_resistance = strongestLevel.isResistance ? strongestLevel.price : 0;
+        decision.nearest_support = !strongestLevel.isResistance ? strongestLevel.price : 0;
+        if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
     
@@ -2630,6 +2903,11 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
             Print(StringFormat("[BREAKOUT] FAIL volume ratio=%sx need>=1.20x",
                                DoubleToString(volumeRatio, 2)));
         }
+        
+        decision.decision = "REJECTED";
+        decision.rejection_reason = StringFormat("Insufficient volume - %.2fx (need >= 1.2x)", volumeRatio);
+        decision.volume_ratio = volumeRatio;
+        if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
     
@@ -2649,6 +2927,14 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
                        DoubleToString(maxDistance / _Point, 1),
                        DoubleToString(volumeRatio, 2)));
     
+    // Track successful signal
+    decision.decision = "PASSED";
+    decision.rejection_reason = "";
+    decision.volume_ratio = volumeRatio;
+    decision.nearest_resistance = strongestLevel.isResistance ? strongestLevel.price : 0;
+    decision.nearest_support = !strongestLevel.isResistance ? strongestLevel.price : 0;
+    if(g_reporter != NULL) g_reporter.RecordDecision(decision);
+    
     return true;
 }
 
@@ -2659,6 +2945,20 @@ bool Signal_RANGE(const RegimeSnapshot &rs)
 {
     string logPrefix = "[RANGE CRITERIA] ";
     
+    // Prepare tracking data
+    STradeDecision decision;
+    decision.timestamp = TimeCurrent();
+    decision.signal_type = "RANGE";
+    decision.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    decision.atr = rs.atr_current;
+    decision.adx_h1 = rs.adx_h1;
+    decision.adx_h4 = rs.adx_h4;
+    decision.adx_d1 = rs.adx_d1;
+    decision.regime = g_regimeDetector.RegimeToString(rs.regime);
+    decision.regime_confidence = rs.confidence;
+    decision.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    decision.open_positions = PositionsTotal();
+    
     if(InpLogDetailedInfo)
         Print(logPrefix + "Evaluating range signal criteria...");
     
@@ -2668,6 +2968,10 @@ bool Signal_RANGE(const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ CRITERIA FAILED: Cannot identify range boundaries");
+        
+        decision.decision = "REJECTED";
+        decision.rejection_reason = "Cannot identify clear range boundaries";
+        if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
     
@@ -2691,6 +2995,13 @@ bool Signal_RANGE(const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ CRITERIA FAILED: Range too narrow (need ≥1.5×spread)");
+        
+        decision.decision = "REJECTED";
+        decision.rejection_reason = StringFormat("Range too narrow - %.1f pips (need >= %.1f pips)",
+                                                rangeWidth / _Point, minRangeWidth / _Point);
+        decision.nearest_resistance = resistanceLevel.price;
+        decision.nearest_support = supportLevel.price;
+        if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
     
@@ -2709,6 +3020,10 @@ bool Signal_RANGE(const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ CRITERIA FAILED: Market trending too strongly (ADX ≥ 20)");
+        
+        decision.decision = "REJECTED";
+        decision.rejection_reason = StringFormat("Market trending - ADX: %.1f (need < 20)", rs.adx_h1);
+        if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
     
@@ -2781,6 +3096,12 @@ bool Signal_RANGE(const RegimeSnapshot &rs)
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ CRITERIA FAILED: No valid range entry signal");
+        
+        decision.decision = "REJECTED";
+        decision.rejection_reason = "Price not at range boundaries with stochastic confirmation";
+        decision.nearest_resistance = resistanceLevel.price;
+        decision.nearest_support = supportLevel.price;
+        if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
     
@@ -2791,6 +3112,14 @@ bool Signal_RANGE(const RegimeSnapshot &rs)
         Print(logPrefix + "  ✅ Low trend strength (ADX < 20)");
         Print(logPrefix + "  ✅ Valid entry signal: ", entryReason);
     }
+    
+    // Track successful signal
+    decision.decision = "PASSED";
+    decision.rejection_reason = "";
+    decision.nearest_resistance = resistanceLevel.price;
+    decision.nearest_support = supportLevel.price;
+    decision.additional_notes = entryReason;
+    if(g_reporter != NULL) g_reporter.RecordDecision(decision);
     
     return true;
 }
