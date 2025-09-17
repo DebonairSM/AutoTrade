@@ -634,6 +634,10 @@ void CGrandeIntelligentReporter::PrintReportToExperts(void)
     if(m_reject_rsi > 0) Print("RSI Conditions: ", m_reject_rsi);
     if(m_reject_volume > 0) Print("Volume: ", m_reject_volume);
     if(m_reject_risk > 0) Print("Risk Management: ", m_reject_risk);
+    if(m_reject_trend_follower > 0) Print("Trend Follower: ", m_reject_trend_follower);
+    if(m_reject_pattern > 0) Print("Pattern: ", m_reject_pattern);
+    if(m_reject_key_levels > 0) Print("Key Levels: ", m_reject_key_levels);
+    if(m_reject_other > 0) Print("Other: ", m_reject_other);
     
     if(m_decision_count > 0)
     {
@@ -731,22 +735,36 @@ void CGrandeIntelligentReporter::UpdateStatistics(const STradeDecision &decision
     m_total_signals++;
     
     if(decision.decision == "EXECUTED")
+    {
         m_signals_executed++;
+    }
     else if(decision.decision == "REJECTED")
     {
         m_signals_rejected++;
         CategorizeRejection(decision.rejection_reason);
     }
+    else if(decision.decision == "PASSED")
+    {
+        // Handle PASSED signals (these are successful signal evaluations that passed all criteria)
+    }
     
     // Count signal types
     if(StringFind(decision.signal_type, "TREND") >= 0)
+    {
         m_trend_signals++;
+    }
     else if(StringFind(decision.signal_type, "BREAKOUT") >= 0)
+    {
         m_breakout_signals++;
+    }
     else if(StringFind(decision.signal_type, "RANGE") >= 0)
+    {
         m_range_signals++;
+    }
     else if(StringFind(decision.signal_type, "TRIANGLE") >= 0)
+    {
         m_triangle_signals++;
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -754,31 +772,63 @@ void CGrandeIntelligentReporter::UpdateStatistics(const STradeDecision &decision
 //+------------------------------------------------------------------+
 void CGrandeIntelligentReporter::CategorizeRejection(const string &reason)
 {
+    if(reason == "")
+    {
+        m_reject_other++;
+        return;
+    }
+    
     string reason_lower = reason;
     StringToLower(reason_lower);
     
     if(StringFind(reason_lower, "ema") >= 0 || StringFind(reason_lower, "alignment") >= 0)
+    {
         m_reject_ema_alignment++;
+    }
     else if(StringFind(reason_lower, "pullback") >= 0 || StringFind(reason_lower, "distance") >= 0)
+    {
         m_reject_pullback++;
+    }
     else if(StringFind(reason_lower, "rsi") >= 0)
+    {
         m_reject_rsi++;
+    }
     else if(StringFind(reason_lower, "volume") >= 0)
+    {
         m_reject_volume++;
-    else if(StringFind(reason_lower, "level") >= 0)
+    }
+    else if(StringFind(reason_lower, "level") >= 0 || StringFind(reason_lower, "boundaries") >= 0)
+    {
         m_reject_key_levels++;
+    }
     else if(StringFind(reason_lower, "risk") >= 0)
+    {
         m_reject_risk++;
+    }
     else if(StringFind(reason_lower, "drawdown") >= 0)
+    {
         m_reject_drawdown++;
+    }
     else if(StringFind(reason_lower, "position") >= 0)
+    {
         m_reject_max_positions++;
-    else if(StringFind(reason_lower, "trend follower") >= 0)
+    }
+    else if(StringFind(reason_lower, "trend follower") >= 0 || StringFind(reason_lower, "multi-timeframe") >= 0)
+    {
         m_reject_trend_follower++;
+    }
     else if(StringFind(reason_lower, "pattern") >= 0 || StringFind(reason_lower, "inside") >= 0)
+    {
         m_reject_pattern++;
-    else
+    }
+    else if(StringFind(reason_lower, "narrow") >= 0 || StringFind(reason_lower, "trending") >= 0)
+    {
         m_reject_other++;
+    }
+    else
+    {
+        m_reject_other++;
+    }
 }
 
 //+------------------------------------------------------------------+

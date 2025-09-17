@@ -166,6 +166,7 @@ CGrandeTriangleTradingRules*  g_triangleTrading;
 CAdvancedTrendFollower*       g_trendFollower;
 CGrandeRiskManager*           g_riskManager;
 CGrandeIntelligentReporter*   g_reporter;
+// CMultiTimeframeAnalyzer*      g_mtfAnalyzer;  // Temporarily disabled
 CNewsSentimentIntegration     g_newsSentiment;
 CGrandeMT5NewsReader          g_calendarReader;
 CTrade                        g_trade;
@@ -512,6 +513,10 @@ int OnInit()
     
     Print("[Grande] 📊 Intelligent Reporter initialized - Hourly reports enabled");
     
+    // Create and initialize multi-timeframe analyzer
+    // Temporarily disabled for immediate RSI fix
+    // TODO: Re-enable after fixing compilation errors
+    
     // Generate immediate startup report after short delay to collect initial data
     EventSetTimer(5); // Set 5 second timer for initial report
     
@@ -604,6 +609,8 @@ void OnDeinit(const int reason)
         delete g_reporter;
         g_reporter = NULL;
     }
+    
+    // Multi-timeframe analyzer cleanup - temporarily disabled
     
     // Clean up chart objects
     CleanupChartObjects();
@@ -2463,6 +2470,10 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         Print(logPrefix + "1. Trend Follower: DISABLED (proceeding with original logic)");
     }
     
+    // === MULTI-TIMEFRAME CONSENSUS CHECK ===
+    // Temporarily disabled for immediate RSI fix
+    // TODO: Re-enable after fixing compilation errors
+    
     // === ORIGINAL GRANDE EMA ALIGNMENT LOGIC ===
     // 50 & 200 EMA alignment across H1 + H4
     int ema50_h1_handle = iMA(_Symbol, PERIOD_H1, InpEMA50Period, 0, MODE_EMA, PRICE_CLOSE);
@@ -2648,69 +2659,115 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         return false;
     }
     
-    // Higher-timeframe RSI exhaustion gate
+    // Higher-timeframe RSI exhaustion gate - ENHANCED with regime awareness
+    // Declare RSI thresholds at function scope for logging
+    double rsi_overbought_threshold = InpH4RSIOverbought;  // Default 68.0
+    double rsi_oversold_threshold = InpH4RSIOversold;      // Default 32.0
+    
     if(InpEnableMTFRSI)
     {
         // Use cached values if available
         double rsi_h4 = (g_cachedRsiH4 != EMPTY_VALUE ? g_cachedRsiH4 : GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0));
         if(rsi_h4 < 0) return false;
 
-            if(bullish && rsi_h4 >= InpH4RSIOverbought)
-            {
-                if(InpLogDetailedInfo) 
-                    Print(logPrefix + "❌ SIGNAL BLOCKED: H4 RSI overbought (", DoubleToString(rsi_h4, 2), ")");
-                
-                rejection_reason = StringFormat("H4 RSI overbought - %.1f (threshold %.1f)", rsi_h4, InpH4RSIOverbought);
-                decision.decision = "REJECTED";
-                decision.rejection_reason = rejection_reason;
-                decision.rsi_h4 = rsi_h4;
-                if(g_reporter != NULL) g_reporter.RecordDecision(decision);
-                return false;
-            }
-            if(!bullish && rsi_h4 <= InpH4RSIOversold)
-            {
-                if(InpLogDetailedInfo) 
-                    Print(logPrefix + "❌ SIGNAL BLOCKED: H4 RSI oversold (", DoubleToString(rsi_h4, 2), ")");
-                
-                rejection_reason = StringFormat("H4 RSI oversold - %.1f (threshold %.1f)", rsi_h4, InpH4RSIOversold);
-                decision.decision = "REJECTED";
-                decision.rejection_reason = rejection_reason;
-                decision.rsi_h4 = rsi_h4;
-                if(g_reporter != NULL) g_reporter.RecordDecision(decision);
-                return false;
-            }
+        // === REGIME-AWARE RSI THRESHOLDS ===
+        // In strong trends (ADX > 30), allow higher RSI extremes
+        
+        // Adjust thresholds based on trend strength and regime
+        if(rs.adx_h4 > 30.0)  // Strong trend
+        {
+            rsi_overbought_threshold = 80.0;  // Allow up to 80 in strong trends
+            rsi_oversold_threshold = 20.0;    // Allow down to 20 in strong trends
+            
+            if(InpLogDetailedInfo)
+                Print(logPrefix + "🔧 RSI thresholds adjusted for strong trend (ADX: ", DoubleToString(rs.adx_h4, 1), ")");
+        }
+        else if(rs.regime == REGIME_BREAKOUT_SETUP)  // Breakout setup
+        {
+            rsi_overbought_threshold = 75.0;  // Slightly higher for breakouts
+            rsi_oversold_threshold = 25.0;
+            
+            if(InpLogDetailedInfo)
+                Print(logPrefix + "🔧 RSI thresholds adjusted for breakout setup");
+        }
+        else if(rs.regime == REGIME_RANGING)  // Ranging market
+        {
+            rsi_overbought_threshold = 65.0;  // Stricter for ranging
+            rsi_oversold_threshold = 35.0;
+            
+            if(InpLogDetailedInfo)
+                Print(logPrefix + "🔧 RSI thresholds adjusted for ranging market");
+        }
 
+        if(bullish && rsi_h4 >= rsi_overbought_threshold)
+        {
+            if(InpLogDetailedInfo) 
+                Print(logPrefix + "❌ SIGNAL BLOCKED: H4 RSI overbought (", DoubleToString(rsi_h4, 2), " > ", DoubleToString(rsi_overbought_threshold, 1), ")");
+            
+            rejection_reason = StringFormat("H4 RSI overbought - %.1f (threshold %.1f, regime: %s)", rsi_h4, rsi_overbought_threshold, g_regimeDetector.RegimeToString(rs.regime));
+            decision.decision = "REJECTED";
+            decision.rejection_reason = rejection_reason;
+            decision.rsi_h4 = rsi_h4;
+            if(g_reporter != NULL) g_reporter.RecordDecision(decision);
+            return false;
+        }
+        if(!bullish && rsi_h4 <= rsi_oversold_threshold)
+        {
+            if(InpLogDetailedInfo) 
+                Print(logPrefix + "❌ SIGNAL BLOCKED: H4 RSI oversold (", DoubleToString(rsi_h4, 2), " < ", DoubleToString(rsi_oversold_threshold, 1), ")");
+            
+            rejection_reason = StringFormat("H4 RSI oversold - %.1f (threshold %.1f, regime: %s)", rsi_h4, rsi_oversold_threshold, g_regimeDetector.RegimeToString(rs.regime));
+            decision.decision = "REJECTED";
+            decision.rejection_reason = rejection_reason;
+            decision.rsi_h4 = rsi_h4;
+            if(g_reporter != NULL) g_reporter.RecordDecision(decision);
+            return false;
+        }
+
+        // Declare D1 RSI thresholds at function scope for logging
+        double d1_rsi_overbought_threshold = InpD1RSIOverbought;  // Default 70.0
+        double d1_rsi_oversold_threshold = InpD1RSIOversold;      // Default 30.0
+        
         if(InpUseD1RSI)
         {
             double rsi_d1 = (g_cachedRsiD1 != EMPTY_VALUE ? g_cachedRsiD1 : GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0));
             if(rsi_d1 < 0) return false;
 
-            if(bullish && rsi_d1 >= InpD1RSIOverbought)
+            // Apply same regime-aware logic to D1 RSI
+            if(rs.adx_d1 > 25.0)  // Strong daily trend
+            {
+                d1_rsi_overbought_threshold = 85.0;  // Allow higher extremes on D1
+                d1_rsi_oversold_threshold = 15.0;
+            }
+
+            if(bullish && rsi_d1 >= d1_rsi_overbought_threshold)
             {
                 if(InpLogDetailedInfo) 
-                    Print(logPrefix + "❌ SIGNAL BLOCKED: D1 RSI overbought (", DoubleToString(rsi_d1, 2), ")");
+                    Print(logPrefix + "❌ SIGNAL BLOCKED: D1 RSI overbought (", DoubleToString(rsi_d1, 2), " > ", DoubleToString(d1_rsi_overbought_threshold, 1), ")");
                 return false;
             }
-            if(!bullish && rsi_d1 <= InpD1RSIOversold)
+            if(!bullish && rsi_d1 <= d1_rsi_oversold_threshold)
             {
                 if(InpLogDetailedInfo) 
-                    Print(logPrefix + "❌ SIGNAL BLOCKED: D1 RSI oversold (", DoubleToString(rsi_d1, 2), ")");
+                    Print(logPrefix + "❌ SIGNAL BLOCKED: D1 RSI oversold (", DoubleToString(rsi_d1, 2), " < ", DoubleToString(d1_rsi_oversold_threshold, 1), ")");
                 return false;
             }
         }
         
         if(InpLogDetailedInfo)
         {
-            Print(logPrefix + "5. Multi-Timeframe RSI Analysis:");
+            Print(logPrefix + "5. Multi-Timeframe RSI Analysis (Regime-Aware):");
             Print(logPrefix + "  H4 RSI: ", DoubleToString(rsi_h4, 2), " (", 
-                  (bullish ? (rsi_h4 < InpH4RSIOverbought ? "✅ NOT OVERBOUGHT" : "❌ OVERBOUGHT") :
-                            (rsi_h4 > InpH4RSIOversold ? "✅ NOT OVERSOLD" : "❌ OVERSOLD")), ")");
+                  (bullish ? (rsi_h4 < rsi_overbought_threshold ? "✅ NOT OVERBOUGHT" : "❌ OVERBOUGHT") :
+                            (rsi_h4 > rsi_oversold_threshold ? "✅ NOT OVERSOLD" : "❌ OVERSOLD")), ")");
+            Print(logPrefix + "  H4 Thresholds: OB=", DoubleToString(rsi_overbought_threshold, 1), " OS=", DoubleToString(rsi_oversold_threshold, 1));
             if(InpUseD1RSI)
             {
                 double rsi_d1 = (g_cachedRsiD1 != EMPTY_VALUE ? g_cachedRsiD1 : GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0));
                 Print(logPrefix + "  D1 RSI: ", DoubleToString(rsi_d1, 2), " (", 
-                      (bullish ? (rsi_d1 < InpD1RSIOverbought ? "✅ NOT OVERBOUGHT" : "❌ OVERBOUGHT") :
-                                (rsi_d1 > InpD1RSIOversold ? "✅ NOT OVERSOLD" : "❌ OVERSOLD")), ")");
+                      (bullish ? (rsi_d1 < d1_rsi_overbought_threshold ? "✅ NOT OVERBOUGHT" : "❌ OVERBOUGHT") :
+                                (rsi_d1 > d1_rsi_oversold_threshold ? "✅ NOT OVERSOLD" : "❌ OVERSOLD")), ")");
+                Print(logPrefix + "  D1 Thresholds: OB=", DoubleToString(d1_rsi_overbought_threshold, 1), " OS=", DoubleToString(d1_rsi_oversold_threshold, 1));
             }
         }
     }
@@ -2853,22 +2910,36 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
         Print(logPrefix + "  ATR Expansion: ", atrExpanding ? "✅ MOMENTUM BUILDING" : "❌ NO MOMENTUM");
     }
     
-    // Accept breakout if ANY of these conditions are met: Inside Bar, NR7, or ATR Expansion
-    if(!insideBar && !nr7 && !atrExpanding) 
+    // Check for momentum surge (big candle detection)
+    double currentCandle = MathAbs(SymbolInfoDouble(_Symbol, SYMBOL_BID) - iOpen(_Symbol, PERIOD_CURRENT, 0));
+    double averageRange = rs.atr_current;
+    bool momentumSurge = (currentCandle > averageRange * 1.5);  // Current candle is 1.5x ATR
+    
+    // Accept breakout if ANY of these conditions are met: Inside Bar, NR7, ATR Expansion, or Momentum Surge
+    if(!insideBar && !nr7 && !atrExpanding && !momentumSurge) 
     {
         if(InpLogDetailedInfo)
         {
-            Print(logPrefix + "❌ CRITERIA FAILED: No inside bar, NR7 pattern, or ATR expansion detected");
-            Print(StringFormat("[BREAKOUT] FAIL pattern (IB:%s NR7:%s ATRexp:%s)",
+            Print(logPrefix + "❌ CRITERIA FAILED: No valid pattern detected");
+            Print(StringFormat("[BREAKOUT] FAIL pattern (IB:%s NR7:%s ATRexp:%s Surge:%s)",
                                insideBar ? "Y" : "N",
                                nr7 ? "Y" : "N",
-                               atrExpanding ? "Y" : "N"));
+                               atrExpanding ? "Y" : "N",
+                               momentumSurge ? "Y" : "N"));
         }
         
         decision.decision = "REJECTED";
-        decision.rejection_reason = "No valid pattern (no inside bar, NR7, or ATR expansion)";
+        decision.rejection_reason = "No valid pattern (no inside bar, NR7, ATR expansion, or momentum surge)";
         if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
+    }
+    
+    // Log if momentum surge detected
+    if(momentumSurge)
+    {
+        Print(logPrefix + "🚀 MOMENTUM SURGE DETECTED! Current candle: ", 
+              DoubleToString(currentCandle/_Point, 1), " pips (", 
+              DoubleToString(currentCandle/averageRange, 2), "x ATR)");
     }
     
     // Check if near strong key level
@@ -2887,7 +2958,15 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double distanceToLevel = MathAbs(currentPrice - strongestLevel.price);
-    double maxDistance = rs.atr_current * 0.5;  // Expanded from 0.2 to catch more breakouts
+    
+    // Adaptive distance based on timeframe - longer timeframes need more room
+    double atrMultiplier = 0.5;  // Default for lower timeframes
+    if(Period() >= PERIOD_H1)
+        atrMultiplier = 1.0;  // H1 needs more room (was causing 290+ pip rejections)
+    if(Period() >= PERIOD_H4)
+        atrMultiplier = 1.5;  // H4 needs even more room
+    
+    double maxDistance = rs.atr_current * atrMultiplier;
     bool nearKeyLevel = (distanceToLevel <= maxDistance);
     
     if(InpLogDetailedInfo)
@@ -3713,9 +3792,16 @@ bool IsATRExpanding()
     }
     averageATR /= 10.0;
     
-    // Check if current ATR is 50% higher than average (momentum building)
+    // Check if current ATR is higher than average (momentum building)
+    // Adaptive threshold based on timeframe - lower timeframes need less expansion
+    double requiredExpansion = 1.5;  // Default 50% expansion
+    if(Period() <= PERIOD_M15)
+        requiredExpansion = 1.2;  // M15 only needs 20% expansion
+    else if(Period() <= PERIOD_M30)
+        requiredExpansion = 1.3;  // M30 needs 30% expansion
+    
     double expansionRatio = currentATR / averageATR;
-    bool isExpanding = (expansionRatio >= 1.5);
+    bool isExpanding = (expansionRatio >= requiredExpansion);
     
     if(InpLogDetailedInfo)
     {
