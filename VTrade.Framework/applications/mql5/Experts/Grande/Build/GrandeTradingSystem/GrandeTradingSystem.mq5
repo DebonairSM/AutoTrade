@@ -146,6 +146,14 @@ input bool   InpEnableCalendarAI        = true;  // Enable Calendar AI analysis
 input int    InpCalendarUpdateMinutes   = 15;    // Calendar AI update interval (minutes)
 input int    InpCalendarLookaheadHours  = 24;    // Lookahead window for calendar events (hours)
 input double InpCalendarMinConfidence   = 0.60;  // Log highlight threshold for confidence
+input bool   InpCalendarOnlyOnTimeframe = true;  // Run calendar only on a specific timeframe
+input ENUM_TIMEFRAMES InpCalendarRunTimeframe = PERIOD_H1; // Timeframe to run calendar
+
+// DISABLED: News Service (commented out - only using free economic calendar data)
+// input group "=== News Sentiment Settings ==="
+// input bool   InpEnableNewsSentiment    = false; // Enable News Sentiment Analysis (DISABLED - requires paid APIs)
+// input int    InpNewsUpdateMinutes      = 30;    // News analysis update interval (minutes)
+// input double InpNewsMinConfidence      = 0.70;  // Minimum confidence for news signals
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                 |
@@ -216,7 +224,8 @@ int OnInit()
     // Initialize trade object
     g_trade.SetExpertMagicNumber(InpMagicNumber);
     g_trade.SetDeviationInPoints(InpSlippage);
-    g_trade.SetTypeFilling(ORDER_FILLING_FOK);
+    // Configure supported filling mode for this symbol
+    ConfigureTradeFillingMode();
     
     // Configure risk management settings
     g_riskConfig.risk_percent_trend = InpRiskPctTrend;
@@ -394,6 +403,8 @@ int OnInit()
             Print("[Grande] Advanced Trend Follower initialized and integrated");
     }
     
+    // DISABLED: News Sentiment Integration (commented out - only using free economic calendar data)
+    /*
     // Initialize News Sentiment (non-fatal if unavailable)
     if(!g_newsSentiment.Initialize())
     {
@@ -401,6 +412,9 @@ int OnInit()
             Print("[Grande] WARNING: News sentiment server unavailable; continuing without sentiment integration");
     }
     g_newsSentiment.SetAnalysisInterval(300);
+    */
+    if(InpLogDebugInfo)
+        Print("[Grande] News Sentiment Integration: DISABLED (using free economic calendar only)");
     
     // Initialize Calendar AI (non-fatal if unavailable)
     if(InpEnableCalendarAI)
@@ -416,10 +430,18 @@ int OnInit()
         }
         g_lastCalendarUpdate = 0;
         
-        // One-time calendar availability warning
-        if(!g_calendarReader.CheckCalendarAvailability())
+        // One-time calendar availability warning only on configured run timeframe
+        bool calendarRunsHere = (!InpCalendarOnlyOnTimeframe || Period() == InpCalendarRunTimeframe);
+        if(calendarRunsHere)
         {
-            Print("[Grande] ⚠️ Economic Calendar appears disabled or unavailable. Go to Tools > Options > Server and ensure 'Enable news' is checked. Then restart MT5 to allow calendar sync.");
+            if(!g_calendarReader.CheckCalendarAvailability())
+            {
+                Print("[Grande] ⚠️ Economic Calendar appears disabled or unavailable. Go to Tools > Options > Server and ensure 'Enable news' is checked. Then restart MT5 to allow calendar sync.");
+            }
+        }
+        else if(InpLogDebugInfo)
+        {
+            Print("[CAL-AI] Skipping calendar availability check on this timeframe (configured to run on ", (int)InpCalendarRunTimeframe, ")");
         }
     }
     
@@ -672,12 +694,21 @@ void OnTimer()
     }
     
     // Calendar AI analysis (periodic)
-    if(InpEnableCalendarAI && currentTime - g_lastCalendarUpdate >= InpCalendarUpdateMinutes * 60)
+    if(InpEnableCalendarAI 
+       && (!InpCalendarOnlyOnTimeframe || Period() == InpCalendarRunTimeframe)
+       && currentTime - g_lastCalendarUpdate >= InpCalendarUpdateMinutes * 60)
     {
         bool eventsOk = g_calendarReader.GetEconomicCalendarEvents(InpCalendarLookaheadHours);
         if(!eventsOk)
         {
-            Print("[CAL-AI] Calendar fetch empty/failed. Check MT5 Economic Calendar availability and permissions.");
+            if(g_calendarReader.IsCalendarAvailable())
+            {
+                Print("[CAL-AI] Calendar available but no qualifying events in current window — not an error.");
+            }
+            else
+            {
+                Print("[CAL-AI] Calendar fetch failed — MT5 calendar unavailable. Verify Tools > Options > Terminal: Allow News and restart terminal.");
+            }
         }
         else
         {
@@ -712,7 +743,7 @@ void OnTimer()
             }
             else
             {
-                Print("[CAL-AI] No calendar analysis available yet. Ensure MCP server is running and Common\\Files\\integrated_calendar_analysis.json exists.");
+                Print("[CAL-AI] Calendar analysis unavailable. Ensure MCP server and Docker FinBERT are running.");
             }
         }
         g_lastCalendarUpdate = currentTime;
@@ -757,6 +788,13 @@ void SetupChartDisplay()
 void ShowStartupSnapshot();
 bool FindNearestKeyLevels(const double currentPrice, SKeyLevel &outSupport, SKeyLevel &outResistance);
 string BuildGoldenNugget(const RegimeSnapshot &rs, const SKeyLevel &support, const SKeyLevel &resistance);
+// New helpers forward declarations
+bool HasOpenPositionForSymbolAndMagic(const string symbol, const int magic);
+double NormalizeVolumeToStep(const string symbol, double volume);
+void NormalizeStops(const bool isBuy, const double entryPrice, double &sl, double &tp);
+bool IsPendingPriceValid(const bool isBuyStop, const double levelPrice);
+bool HasSimilarPendingOrderForBreakout(const bool isBuyStop, const double levelPrice, const int tolerancePoints);
+void ConfigureTradeFillingMode();
 
 //+------------------------------------------------------------------+
 //| Perform initial analysis                                          |
@@ -1008,7 +1046,7 @@ void UpdateSystemStatusPanel()
         }
     }
     
-    // Calendar AI status
+    // Calendar AI status (using AI results)
     string calendarInfo = "Disabled";
     string calendarEventsInfo = "-";
     if(InpEnableCalendarAI)
@@ -1497,11 +1535,11 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         }
     }
     
-    // Check if we already have positions
-    if(PositionsTotal() > 0)
+    // Check if we already have position for this symbol & magic (avoid blocking other symbols)
+    if(HasOpenPositionForSymbolAndMagic(_Symbol, InpMagicNumber))
     {
         if(InpLogDetailedInfo)
-            Print(logPrefix + "❌ BLOCKED: Already have ", PositionsTotal(), " open position(s)");
+            Print(logPrefix + "❌ BLOCKED: Position already open for symbol/magic");
         return;
     }
     
@@ -1516,6 +1554,8 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         Print(logPrefix + "ATR Average: ", DoubleToString(rs.atr_avg, _Digits));
     }
     
+    // DISABLED: News sentiment refresh (commented out - only using free economic calendar data)
+    /*
     // Optionally refresh sentiment before decisions (rate-limited)
     static datetime s_lastSentimentRun = 0;
     if(TimeCurrent() - s_lastSentimentRun > 300 && !g_newsSentiment.IsAnalysisFresh())
@@ -1529,6 +1569,7 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         }
         s_lastSentimentRun = TimeCurrent();
     }
+    */
 
     // Execute trading strategy with comprehensive error handling
     ResetLastError();
@@ -1626,6 +1667,9 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
         if(InpLogDetailedInfo)
             Print(logPrefix + "  Lot Size (Fallback): ", DoubleToString(lot, 2));
     }
+
+    // Normalize lot to symbol volume step and bounds
+    lot = NormalizeVolumeToStep(_Symbol, lot);
     
     if(lot <= 0) 
     {
@@ -1648,6 +1692,9 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
         sl = StopLoss_TREND(bullish, rs); // Fallback to old method
         tp = TakeProfit_TREND(bullish, rs);
     }
+
+    // Ensure SL/TP respect broker min stop distance and correct side
+    NormalizeStops(bullish, price, sl, tp);
     
     // Cap TP at nearest STRONG key level (leave a buffer) and mark TP lock in comment
     string tpLockTag = "";
@@ -1720,9 +1767,11 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     if(tpLockTag != "")
         comment += tpLockTag;
     
+    // DISABLED: News sentiment support (commented out - only using free economic calendar data)
+    bool sentimentSupports = false; // Always false since news sentiment is disabled
+    /*
     // Append concise sentiment tag if sentiment agrees with direction
     // Keep order comment short due to broker limits (~31-63 chars typical)
-    bool sentimentSupports = false;
     if(g_newsSentiment.GetCurrentSignal() != "")
     {
         if(bullish)
@@ -1734,6 +1783,7 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
             comment += "|SENTI";
         }
     }
+    */
     
     if(InpLogDetailedInfo)
     {
@@ -1900,6 +1950,26 @@ void BreakoutTrade(const RegimeSnapshot &rs)
         Print(logPrefix + "→ PLACING STOP ORDER...");
     }
     
+    // Validate pending trigger distance vs current price and deduplicate
+    bool isBuyStop = strongestLevel.isResistance;
+    if(!IsPendingPriceValid(isBuyStop, breakoutLevel))
+    {
+        Print(StringFormat("[BREAKOUT] BLOCK: invalid trigger vs price/min distance (level=%s)", DoubleToString(breakoutLevel, _Digits)));
+        return;
+    }
+
+    // Normalize lot and stops for pending order
+    lot = NormalizeVolumeToStep(_Symbol, lot);
+    NormalizeStops(isBuyStop, breakoutLevel, breakoutSL, breakoutTP);
+
+    // Skip if a similar pending already exists (within 3 points)
+    if(HasSimilarPendingOrderForBreakout(isBuyStop, breakoutLevel, 3))
+    {
+        if(InpLogDetailedInfo)
+            Print("[BREAKOUT] Skip: similar pending already exists near level");
+        return;
+    }
+
     // Place stop order
     bool tradeResult = false;
     if(strongestLevel.isResistance)
@@ -3888,8 +3958,10 @@ void ExecuteTriangleTrade(const STriangleSignal &signal, const RegimeSnapshot &c
     string comment = StringFormat("[GRANDE-TRIANGLE-%s] %s", 
                                  GetRegimeString(currentRegime.regime),
                                  g_triangleTrading.GetSignalTypeString());
+    // DISABLED: News sentiment support for triangle trades (commented out - only using free economic calendar data)
+    bool triangleSenti = false; // Always false since news sentiment is disabled
+    /*
     // Append concise sentiment tag if sentiment aligns
-    bool triangleSenti = false;
     if(g_newsSentiment.GetCurrentSignal() != "")
     {
         if(signal.orderType == ORDER_TYPE_BUY)
@@ -3897,8 +3969,11 @@ void ExecuteTriangleTrade(const STriangleSignal &signal, const RegimeSnapshot &c
         else if(signal.orderType == ORDER_TYPE_SELL)
             triangleSenti = g_newsSentiment.ShouldEnterShort();
         if(triangleSenti)
+        {
             comment += "|SENTI";
+        }
     }
+    */
     
     if(InpLogDetailedInfo)
     {
@@ -4076,4 +4151,121 @@ void RegisterTriangleTrade(const STriangleSignal &signal)
         Print("  Signal Strength: ", DoubleToString(signal.signalStrength * 100, 1), "%");
         Print("  Breakout Confirmed: ", signal.breakoutConfirmed ? "YES" : "NO");
     }
+}
+
+//+------------------------------------------------------------------+
+//| New helpers: symbol/magic checks, normalization, stops, pending  |
+//+------------------------------------------------------------------+
+bool HasOpenPositionForSymbolAndMagic(const string symbol, const int magic)
+{
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        if(!PositionSelectByTicket(ticket)) continue;
+        if(PositionGetString(POSITION_SYMBOL) != symbol) continue;
+        if((int)PositionGetInteger(POSITION_MAGIC) != magic) continue;
+        return true;
+    }
+    return false;
+}
+
+double NormalizeVolumeToStep(const string symbol, double volume)
+{
+    double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+    double vmin = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double vmax = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+    if(step <= 0.0) step = 0.01;
+    if(vmin <= 0.0) vmin = step;
+    if(vmax <= 0.0) vmax = volume;
+    if(volume < vmin) volume = vmin;
+    if(volume > vmax) volume = vmax;
+    double normalized = MathFloor((volume + 1e-12) / step) * step;
+    // make sure we don't round to zero
+    if(normalized < vmin) normalized = vmin;
+    return NormalizeDouble(normalized, 2);
+}
+
+void NormalizeStops(const bool isBuy, const double entryPrice, double &sl, double &tp)
+{
+    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    int stopLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    double minDistance = (stopLevel > 0 ? stopLevel : 0) * point;
+
+    // Correct side sanity
+    if(isBuy)
+    {
+        if(sl >= entryPrice) sl = entryPrice - minDistance;
+        if(tp <= entryPrice) tp = entryPrice + minDistance;
+    }
+    else
+    {
+        if(sl <= entryPrice) sl = entryPrice + minDistance;
+        if(tp >= entryPrice) tp = entryPrice - minDistance;
+    }
+
+    // Enforce minimum distances
+    if(minDistance > 0)
+    {
+        if(isBuy)
+        {
+            if((entryPrice - sl) < minDistance) sl = entryPrice - minDistance;
+            if((tp - entryPrice) < minDistance) tp = entryPrice + minDistance;
+        }
+        else
+        {
+            if((sl - entryPrice) < minDistance) sl = entryPrice + minDistance;
+            if((entryPrice - tp) < minDistance) tp = entryPrice - minDistance;
+        }
+    }
+
+    sl = NormalizeDouble(sl, digits);
+    tp = NormalizeDouble(tp, digits);
+}
+
+bool IsPendingPriceValid(const bool isBuyStop, const double levelPrice)
+{
+    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    int stopLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    double minDistance = (stopLevel > 0 ? stopLevel : 0) * point;
+
+    if(isBuyStop)
+        return (levelPrice > ask + minDistance);
+    else
+        return (levelPrice < bid - minDistance);
+}
+
+bool HasSimilarPendingOrderForBreakout(const bool isBuyStop, const double levelPrice, const int tolerancePoints)
+{
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    double tol = MathMax(1, tolerancePoints) * point;
+    int total = OrdersTotal();
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(ticket == 0) continue;
+        if(!OrderSelect(ticket))
+            continue;
+        if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+        long type = OrderGetInteger(ORDER_TYPE);
+        if(isBuyStop && type != ORDER_TYPE_BUY_STOP) continue;
+        if(!isBuyStop && type != ORDER_TYPE_SELL_STOP) continue;
+        if((int)OrderGetInteger(ORDER_MAGIC) != InpMagicNumber) continue;
+        double price = OrderGetDouble(ORDER_PRICE_OPEN);
+        if(MathAbs(price - levelPrice) <= tol)
+            return true;
+    }
+    return false;
+}
+
+void ConfigureTradeFillingMode()
+{
+    // Prefer FOK, fall back to RETURN if required
+    long filling = (long)SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
+    // If symbol supports FOK or IOC, set accordingly. Otherwise, RETURN is safest.
+    // SYMBOL_FILLING_MODE returns bitmask in some brokers; be conservative.
+    g_trade.SetTypeFilling(ORDER_FILLING_FOK);
 }

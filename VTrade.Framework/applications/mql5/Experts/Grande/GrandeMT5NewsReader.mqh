@@ -43,6 +43,7 @@ class CGrandeMT5NewsReader
 private:
     string              m_symbol;
     bool                m_initialized;
+    bool                m_calendar_available;
     NewsEvent           m_news_events[];
     int                 m_event_count;
     datetime            m_last_update;
@@ -52,6 +53,7 @@ public:
     //| Constructor and Destructor                                       |
     //+------------------------------------------------------------------+
     CGrandeMT5NewsReader(void) : m_initialized(false),
+                                 m_calendar_available(false),
                                  m_event_count(0),
                                  m_last_update(0)
     {
@@ -69,6 +71,7 @@ public:
     {
         m_symbol = symbol;
         m_initialized = true;
+        m_calendar_available = false;
         
         Print("[GrandeMT5News] News reader initialized for ", m_symbol);
         return true;
@@ -88,14 +91,47 @@ public:
         // Clear previous events
         m_event_count = 0;
         
-        datetime tm_start = TimeCurrent();
-        datetime tm_end   = tm_start + (hours_ahead * 3600);
+        // Include a lookback window to capture recently published values as well
+        const int HOURS_LOOKBACK = 24;
+        datetime now = TimeGMT();
+        datetime tm_start = now - (HOURS_LOOKBACK * 3600);
+        datetime tm_end   = now + (hours_ahead * 3600);
         
-        // Try real MT5 Economic Calendar first; fall back to simulation
-        if(!FetchMT5CalendarEvents(tm_start, tm_end, "USD,EUR,GBP,JPY"))
+        // Build a currency filter based on the current symbol (fallback to common majors)
+        string filter_currencies = BuildFilterCurrencies();
+        
+        // Probe calendar availability first; avoid simulating if calendar exists but the window/filter has no entries
+        bool calendarReady = CheckCalendarAvailability(filter_currencies);
+        m_calendar_available = calendarReady;
+        
+        // Try real MT5 Economic Calendar first; avoid simulation if calendar is available
+        if(!FetchMT5CalendarEvents(tm_start, tm_end, filter_currencies))
         {
-            Print("[GrandeMT5News] WARNING: Using simulated events (calendar unavailable)");
-            SimulateEconomicEvents(tm_start, tm_end);
+            if(calendarReady)
+            {
+                Print(StringFormat("[GrandeMT5News] INFO: Calendar available but no qualifying events in window (%s → %s) for %s",
+                                   TimeToString(tm_start, TIME_DATE|TIME_SECONDS),
+                                   TimeToString(tm_end, TIME_DATE|TIME_SECONDS),
+                                   filter_currencies));
+                // Fallback: widen to 7-day window using real calendar
+                datetime wide_start = now - (7 * 24 * 3600);
+                datetime wide_end   = now + (7 * 24 * 3600);
+                if(FetchMT5CalendarEvents(wide_start, wide_end, filter_currencies))
+                {
+                    Print(StringFormat("[GrandeMT5News] INFO: Widened to 7-day window (%s → %s); collected %d events",
+                                       TimeToString(wide_start, TIME_DATE|TIME_SECONDS),
+                                       TimeToString(wide_end, TIME_DATE|TIME_SECONDS),
+                                       m_event_count));
+                }
+            }
+            else
+            {
+                Print("[GrandeMT5News] WARNING: MT5 calendar appears unavailable; skipping simulation as requested");
+            }
+        }
+        else
+        {
+            Print("[CAL-AI] Source: MT5 Economic Calendar");
         }
         
         m_last_update = TimeCurrent();
@@ -104,8 +140,16 @@ public:
         // Persist for MCP analysis
         ExportEventsToJSON();
         
+        // Log a concise summary of retrieved events to prove calendar access
+        if(m_event_count > 0)
+        {
+            PrintNewsSummary();
+        }
+        
         return m_event_count > 0;
     }
+
+    bool IsCalendarAvailable() const { return m_calendar_available; }
     
     //+------------------------------------------------------------------+
     //| Check if MT5 Economic Calendar is available                     |
@@ -115,10 +159,119 @@ public:
         ulong change_id = 0;
         MqlCalendarValue values[]; ArrayResize(values, 0);
         ResetLastError();
-        int count = CalendarValueLast(change_id, values, "", filter_currencies);
+        // Broad check without filters first — proves calendar DB is present
+        int count = CalendarValueLast(change_id, values, "", "");
         int err = GetLastError();
         if(count > 0)
+        {
+            // Print a sample event to prove calendar access
+            MqlCalendarEvent ev;
+            if(CalendarEventById(values[0].event_id, ev))
+            {
+                string cur = "";
+                MqlCalendarCountry cc;
+                if(CalendarCountryById(ev.country_id, cc))
+                    cur = cc.currency;
+                string s_actual   = FormatCalendarValue(values[0].actual_value, ev.digits);
+                string s_forecast = FormatCalendarValue(values[0].forecast_value, ev.digits);
+                string s_previous = FormatCalendarValue(values[0].prev_value, ev.digits);
+                int impact = NEWS_IMPACT_LOW;
+                switch(ev.importance)
+                {
+                    case 0: impact = NEWS_IMPACT_LOW; break;
+                    case 1: impact = NEWS_IMPACT_MEDIUM; break;
+                    case 2: impact = NEWS_IMPACT_HIGH; break;
+                    default: impact = ev.importance >= 3 ? NEWS_IMPACT_CRITICAL : NEWS_IMPACT_LOW; break;
+                }
+                Print(StringFormat("[CAL-AI] OK: MT5 calendar accessible. Sample: %s %s at %s | actual=%s forecast=%s prev=%s impact=%s",
+                                   cur,
+                                   ev.name,
+                                   TimeToString(values[0].time, TIME_DATE|TIME_SECONDS),
+                                   s_actual,
+                                   s_forecast,
+                                   s_previous,
+                                   GetImpactString(impact)));
+            }
             return true;
+        }
+        // If broad check returned nothing, try per-currency quick probe
+        string parts[]; ArrayResize(parts, 0);
+        int n = StringSplit(filter_currencies, ",", parts);
+        for(int i = 0; i < n; ++i)
+        {
+            string c = StringTrim(parts[i]);
+            if(StringLen(c) == 0) continue;
+            ArrayResize(values, 0);
+            ulong cid = 0;
+            ResetLastError();
+            int k = CalendarValueLast(cid, values, "", c);
+            if(k > 0)
+            {
+                MqlCalendarEvent ev2;
+                if(CalendarEventById(values[0].event_id, ev2))
+                {
+                    string cur = c;
+                    string s_actual   = FormatCalendarValue(values[0].actual_value, ev2.digits);
+                    string s_forecast = FormatCalendarValue(values[0].forecast_value, ev2.digits);
+                    string s_previous = FormatCalendarValue(values[0].prev_value, ev2.digits);
+                    int impact = NEWS_IMPACT_LOW;
+                    switch(ev2.importance)
+                    {
+                        case 0: impact = NEWS_IMPACT_LOW; break;
+                        case 1: impact = NEWS_IMPACT_MEDIUM; break;
+                        case 2: impact = NEWS_IMPACT_HIGH; break;
+                        default: impact = ev2.importance >= 3 ? NEWS_IMPACT_CRITICAL : NEWS_IMPACT_LOW; break;
+                    }
+                    Print(StringFormat("[CAL-AI] OK: MT5 calendar accessible. Sample: %s %s at %s | actual=%s forecast=%s prev=%s impact=%s",
+                                       cur,
+                                       ev2.name,
+                                       TimeToString(values[0].time, TIME_DATE|TIME_SECONDS),
+                                       s_actual,
+                                       s_forecast,
+                                       s_previous,
+                                       GetImpactString(impact)));
+                }
+                return true;
+            }
+        }
+        
+        // As a final proof attempt, fetch a wide date range without filters and print one sample
+        datetime now = TimeCurrent();
+        datetime start_probe = now - (30 * 24 * 3600);
+        datetime end_probe   = now + (30 * 24 * 3600);
+        ArrayResize(values, 0);
+        ResetLastError();
+        int wide = CalendarValueHistory(values, start_probe, end_probe, "", "");
+        if(wide > 0)
+        {
+            MqlCalendarEvent ev3;
+            if(CalendarEventById(values[0].event_id, ev3))
+            {
+                MqlCalendarCountry cc3; string cur3 = "";
+                if(CalendarCountryById(ev3.country_id, cc3)) cur3 = cc3.currency;
+                string s_actual3   = FormatCalendarValue(values[0].actual_value, ev3.digits);
+                string s_forecast3 = FormatCalendarValue(values[0].forecast_value, ev3.digits);
+                string s_previous3 = FormatCalendarValue(values[0].prev_value, ev3.digits);
+                int impact3 = NEWS_IMPACT_LOW;
+                switch(ev3.importance)
+                {
+                    case 0: impact3 = NEWS_IMPACT_LOW; break;
+                    case 1: impact3 = NEWS_IMPACT_MEDIUM; break;
+                    case 2: impact3 = NEWS_IMPACT_HIGH; break;
+                    default: impact3 = ev3.importance >= 3 ? NEWS_IMPACT_CRITICAL : NEWS_IMPACT_LOW; break;
+                }
+                Print(StringFormat("[CAL-AI] PROOF: MT5 calendar sample: %s %s at %s | actual=%s forecast=%s prev=%s impact=%s",
+                                   cur3,
+                                   ev3.name,
+                                   TimeToString(values[0].time, TIME_DATE|TIME_SECONDS),
+                                   s_actual3,
+                                   s_forecast3,
+                                   s_previous3,
+                                   GetImpactString(impact3)));
+            }
+            return true;
+        }
+        
         if(err == 4807 || err == 4806 || err == 4804 || err == 4805 || err == 4808)
         {
             Print("[CAL-AI] WARNING: MT5 Economic Calendar not accessible (err=", err, "). Enable 'Enable news' in Tools > Options > Server and wait for calendar sync, then restart terminal.");
@@ -262,33 +415,37 @@ public:
     {
         // Write to Common Files so external tools and other terminals can read
         string fname = "economic_events.json";
-        int fh = FileOpen(fname, FILE_WRITE | FILE_TXT | FILE_COMMON);
-        if(fh == INVALID_HANDLE)
+        // Attempt shared-safe write with retries to avoid multi-chart collisions
+        for(int attempt = 0; attempt < 5; ++attempt)
         {
-            Print("[GrandeMT5News] ERROR: Unable to open file for writing: ", fname);
-            return false;
+            int fh = FileOpen(fname, FILE_WRITE | FILE_TXT | FILE_COMMON | FILE_SHARE_WRITE);
+            if(fh != INVALID_HANDLE)
+            {
+                FileWriteString(fh, "{\n  \"events\": [\n");
+                for(int i = 0; i < m_event_count; i++)
+                {
+                    string line = StringFormat(
+                        "    {\"time_utc\": \"%s\", \"currency\": \"%s\", \"name\": \"%s\", \"actual\": \"%s\", \"forecast\": \"%s\", \"previous\": \"%s\", \"impact\": \"%s\"}%s\n",
+                        TimeToString(m_news_events[i].time, TIME_DATE|TIME_SECONDS),
+                        m_news_events[i].currency,
+                        m_news_events[i].event,
+                        m_news_events[i].actual,
+                        m_news_events[i].forecast,
+                        m_news_events[i].previous,
+                        GetImpactString(m_news_events[i].impact),
+                        (i < m_event_count - 1 ? "," : "")
+                    );
+                    FileWriteString(fh, line);
+                }
+                FileWriteString(fh, "  ]\n}\n");
+                FileClose(fh);
+                Print("[GrandeMT5News] Exported events to Common\\Files\\", fname);
+                return true;
+            }
+            Sleep(50); // brief backoff
         }
-        
-        FileWriteString(fh, "{\n  \"events\": [\n");
-        for(int i = 0; i < m_event_count; i++)
-        {
-            string line = StringFormat(
-                "    {\"time_utc\": \"%s\", \"currency\": \"%s\", \"name\": \"%s\", \"actual\": \"%s\", \"forecast\": \"%s\", \"previous\": \"%s\", \"impact\": \"%s\"}%s\n",
-                TimeToString(m_news_events[i].time, TIME_DATE|TIME_SECONDS),
-                m_news_events[i].currency,
-                m_news_events[i].event,
-                m_news_events[i].actual,
-                m_news_events[i].forecast,
-                m_news_events[i].previous,
-                GetImpactString(m_news_events[i].impact),
-                (i < m_event_count - 1 ? "," : "")
-            );
-            FileWriteString(fh, line);
-        }
-        FileWriteString(fh, "  ]\n}\n");
-        FileClose(fh);
-        Print("[GrandeMT5News] Exported events to Common\\Files\\", fname);
-        return true;
+        Print("[GrandeMT5News] ERROR: Unable to open file for writing after retries: ", fname);
+        return false;
     }
 
 private:
@@ -297,46 +454,96 @@ private:
     //+------------------------------------------------------------------+
     bool FetchMT5CalendarEvents(datetime start_time, datetime end_time, string filter_currencies)
     {
-        // values[]: latest values for events in [start_time, end_time] filtered by currencies
-        MqlCalendarValue values[];
-        ArrayResize(values, 0);
-        
-        // change_id=0 (no incremental filter); pull latest values for filter
-        ulong change_id = 0;
-        int count = CalendarValueLast(change_id, values, "", filter_currencies);
-        if(count <= 0)
+        // Primary: query explicit time window via CalendarValueHistory per currency (broader currency list)
+        string cur = filter_currencies + ",USD,EUR,GBP,JPY,AUD,NZD,CAD,CHF,JPY";
+        StringReplace(cur, ";", ",");
+        string parts[]; ArrayResize(parts, 0);
+        int n = StringSplit(cur, ",", parts);
+        int totalProcessed = 0;
+        MqlCalendarValue values[]; ArrayResize(values, 0);
+        for(int p = 0; p < n; ++p)
         {
-            int err = GetLastError();
-            Print("[GrandeMT5News] CalendarValueLast returned ", count, " (err=", err, ")");
-            if(err == 4807 || err == 4806 || err == 4804 || err == 0)
-            {
-                Print("[GrandeMT5News] Hint: Enable Economic Calendar in Terminal (Tools > Options > Terminal: Allow News), ensure calendar data is available, then restart terminal.");
-            }
+            string c = StringTrim(parts[p]);
+            if(StringLen(c) == 0) continue;
+            ArrayResize(values, 0);
             ResetLastError();
-            // Try per-currency fallback using common separators
-            string cur = filter_currencies;
-            StringReplace(cur, ";", ",");
-            string parts[]; ArrayResize(parts, 0);
-            int n = StringSplit(cur, ",", parts);
-            int totalProcessed = 0;
-            for(int p = 0; p < n; ++p)
+            int k = CalendarValueHistory(values, start_time, end_time, "", c);
+            int err = GetLastError();
+            if(k > 0)
             {
-                string c = StringTrim(parts[p]);
-                if(StringLen(c) == 0) continue;
-                ArrayResize(values, 0);
-                ulong cid = 0;
-                int k = CalendarValueLast(cid, values, "", c);
-                if(k > 0)
-                {
-                    totalProcessed += ProcessCalendarValues(values, k);
-                }
+                totalProcessed += ProcessCalendarValues(values, k);
             }
+            else if(err != 0)
+            {
+                Print("[GrandeMT5News] CalendarValueHistory err=", err, " for currency ", c);
+            }
+        }
+        if(totalProcessed > 0)
+            return true;
+
+        // Fallback: use CalendarValueLast (no time window), first with combined filter then per-currency
+        ArrayResize(values, 0);
+        ulong change_id = 0;
+        ResetLastError();
+        int count = CalendarValueLast(change_id, values, "", cur);
+        int lastErr = GetLastError();
+        if(count > 0)
+        {
+            totalProcessed += ProcessCalendarValues(values, count);
             return (totalProcessed > 0);
         }
+        if(lastErr == 4807 || lastErr == 4806 || lastErr == 4804 || lastErr == 4805 || lastErr == 4808)
+        {
+            Print("[GrandeMT5News] WARNING: MT5 calendar access error (err=", lastErr, ") — verify Tools > Options > Terminal: Allow News, then restart terminal.");
+        }
         
-        // Process batch
-        int processed = ProcessCalendarValues(values, count);
-        return (processed > 0);
+        for(int p2 = 0; p2 < n; ++p2)
+        {
+            string cc = StringTrim(parts[p2]);
+            if(StringLen(cc) == 0) continue;
+            ArrayResize(values, 0);
+            ulong cid = 0;
+            int k2 = CalendarValueLast(cid, values, "", cc);
+            if(k2 > 0)
+                totalProcessed += ProcessCalendarValues(values, k2);
+        }
+        if(totalProcessed > 0)
+            return true;
+
+        // Final fallback: enumerate events by currency and fetch value history per event
+        for(int p3 = 0; p3 < n; ++p3)
+        {
+            string c3 = StringTrim(parts[p3]);
+            if(StringLen(c3) == 0) continue;
+            MqlCalendarEvent evs[]; ArrayResize(evs, 0);
+            if(CalendarEventByCurrency(c3, evs) > 0)
+            {
+                for(int e = 0; e < ArraySize(evs); ++e)
+                {
+                    if(evs[e].importance < 1) continue; // include Medium/High/Critical
+                    ArrayResize(values, 0);
+                    int kv = CalendarValueHistoryByEvent(evs[e].id, values, start_time, end_time);
+                    if(kv > 0)
+                        totalProcessed += ProcessCalendarValues(values, kv);
+                }
+            }
+        }
+        return (totalProcessed > 0);
+    }
+    
+    // Build currency filter for the current symbol (e.g., EUR,USD for EURUSD)
+    string BuildFilterCurrencies()
+    {
+        string baseCur = "";
+        string profitCur = "";
+        string tmp = "";
+        if(SymbolInfoString(m_symbol, SYMBOL_CURRENCY_BASE, tmp))
+            baseCur = tmp;
+        if(SymbolInfoString(m_symbol, SYMBOL_CURRENCY_PROFIT, tmp))
+            profitCur = tmp;
+        if(StringLen(baseCur) > 0 && StringLen(profitCur) > 0)
+            return baseCur + "," + profitCur;
+        return "USD,EUR,GBP,JPY";
     }
     
     // Process returned values into our NewsEvent buffer
@@ -357,7 +564,8 @@ private:
                 case 2: impact = NEWS_IMPACT_HIGH; break;
                 default: impact = ev.importance >= 3 ? NEWS_IMPACT_CRITICAL : NEWS_IMPACT_LOW; break;
             }
-            if(impact < NEWS_IMPACT_HIGH)
+            // Include Medium/High/Critical events
+            if(impact < NEWS_IMPACT_MEDIUM)
                 continue;
             
             string currency = "";
@@ -394,17 +602,8 @@ private:
 
     bool SimulateEconomicEvents(datetime start_time, datetime end_time)
     {
-        // Simulate some common economic events
-        // In real implementation, this would use MT5's economic calendar
-        
-        // Add some sample events
-        AddEvent(start_time + 3600, "USD", "Non-Farm Payrolls", "200K", "195K", "180K", NEWS_IMPACT_CRITICAL, "Employment data");
-        AddEvent(start_time + 7200, "EUR", "ECB Interest Rate", "4.25%", "4.25%", "4.00%", NEWS_IMPACT_HIGH, "Central bank rate decision");
-        AddEvent(start_time + 10800, "GBP", "CPI Inflation", "2.1%", "2.0%", "1.8%", NEWS_IMPACT_HIGH, "Consumer price index");
-        AddEvent(start_time + 14400, "USD", "Retail Sales", "0.5%", "0.3%", "0.2%", NEWS_IMPACT_MEDIUM, "Consumer spending data");
-        AddEvent(start_time + 18000, "EUR", "GDP Growth", "0.3%", "0.2%", "0.1%", NEWS_IMPACT_MEDIUM, "Economic growth data");
-        
-        return true;
+        // Simulation disabled to avoid misleading data when calendar is unavailable
+        return false;
     }
     
     bool SimulateNewsFeed()

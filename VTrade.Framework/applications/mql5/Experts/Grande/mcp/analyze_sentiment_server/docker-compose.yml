@@ -7,15 +7,17 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MCP_TRANSPORT=streamable-http
-      - MCP_HOST=0.0.0.0
-      - MCP_PORT=8000
-      - SENTIMENT_PROVIDER=${SENTIMENT_PROVIDER:-openai_compat}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-http://localhost:11434/v1}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-EMPTY}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - CLASSIFIER_URL=${CLASSIFIER_URL:-}
+      - MCP_TRANSPORT=stdio
+      - SENTIMENT_PROVIDER=${SENTIMENT_PROVIDER:-finbert_local}
       - FINBERT_MODEL=${FINBERT_MODEL:-yiyanghkust/finbert-tone}
+      - NEWSAPI_KEY=${NEWSAPI_KEY:-}
+      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
+      - MARKETAUX_API_KEY=${MARKETAUX_API_KEY:-}
+      - MT5_COMMON_FILES_DIR=${MT5_COMMON_FILES_DIR:-/tmp}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-}
+      - CLASSIFIER_URL=${CLASSIFIER_URL:-}
     healthcheck:
       test: ["CMD", "netstat", "-an", "|", "grep", ":8000"]
       interval: 30s

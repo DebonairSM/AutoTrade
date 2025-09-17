@@ -203,6 +203,29 @@ function Build-SingleComponent {
         }
     }
     
+    # MCP sentiment server scripts deployment
+    # Calendar AI analysis is enabled; deploy MCP scripts required by RunCalendarAnalysis.
+    $deployMcp = $true
+    if ($deployMcp) {
+        $mcpSource = Join-Path $sourceDir "mcp\analyze_sentiment_server"
+        $mcpDestParent = Join-Path $Mt5Dir "mcp"
+        $mcpDest = Join-Path $mcpDestParent "analyze_sentiment_server"
+        if (Test-Path $mcpSource) {
+            if (-not (Test-Path $mcpDestParent)) {
+                New-Item -ItemType Directory -Path $mcpDestParent -Force | Out-Null
+            }
+            if (Test-Path $mcpDest) {
+                Remove-Item -Recurse -Force $mcpDest
+            }
+            Copy-Item -Path $mcpSource -Destination $mcpDest -Recurse -Force
+            Write-Host "Deployed MCP scripts to MT5: $mcpDest" -ForegroundColor Green
+        } else {
+            Write-Host "Warning: MCP scripts not found at $mcpSource" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "Skipped MCP scripts deployment (calendar AI disabled)" -ForegroundColor Yellow
+    }
+    
     Write-Host "Component $Name deployed to MT5 successfully!" -ForegroundColor Green
 }
 
