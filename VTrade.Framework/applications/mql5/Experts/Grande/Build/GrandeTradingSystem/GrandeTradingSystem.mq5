@@ -1633,6 +1633,16 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
     else
         decision.key_levels_count = 0;
     
+    // Initialize RSI values - always populate them even if not used for rejection
+    decision.rsi_current = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+    if(decision.rsi_current < 0) decision.rsi_current = 0.0;
+    
+    decision.rsi_h4 = GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0);
+    if(decision.rsi_h4 < 0) decision.rsi_h4 = 0.0;
+    
+    decision.rsi_d1 = GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0);
+    if(decision.rsi_d1 < 0) decision.rsi_d1 = 0.0;
+    
     // Check risk management first
     if(g_riskManager != NULL)
     {
@@ -1786,6 +1796,16 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     execution.regime_confidence = rs.confidence;
     execution.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
     execution.open_positions = PositionsTotal();
+    
+    // Initialize RSI values for tracking
+    execution.rsi_current = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+    if(execution.rsi_current < 0) execution.rsi_current = 0.0;
+    
+    execution.rsi_h4 = GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0);
+    if(execution.rsi_h4 < 0) execution.rsi_h4 = 0.0;
+    
+    execution.rsi_d1 = GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0);
+    if(execution.rsi_d1 < 0) execution.rsi_d1 = 0.0;
     
     if(InpLogDetailedInfo)
     {
@@ -2400,6 +2420,16 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     decision.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
     decision.open_positions = PositionsTotal();
     
+    // Initialize RSI values - always populate them even if not used for rejection
+    decision.rsi_current = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+    if(decision.rsi_current < 0) decision.rsi_current = 0.0;
+    
+    decision.rsi_h4 = GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0);
+    if(decision.rsi_h4 < 0) decision.rsi_h4 = 0.0;
+    
+    decision.rsi_d1 = GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0);
+    if(decision.rsi_d1 < 0) decision.rsi_d1 = 0.0;
+    
     if(InpLogDetailedInfo)
         Print(logPrefix + "Evaluating ", direction, " trend signal criteria...");
     
@@ -2783,6 +2813,16 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     decision.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
     decision.open_positions = PositionsTotal();
     
+    // Initialize RSI values - always populate them even if not used for rejection
+    decision.rsi_current = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+    if(decision.rsi_current < 0) decision.rsi_current = 0.0;
+    
+    decision.rsi_h4 = GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0);
+    if(decision.rsi_h4 < 0) decision.rsi_h4 = 0.0;
+    
+    decision.rsi_d1 = GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0);
+    if(decision.rsi_d1 < 0) decision.rsi_d1 = 0.0;
+    
     if(InpLogDetailedInfo)
         Print(logPrefix + "Evaluating breakout signal criteria...");
     
@@ -2958,6 +2998,16 @@ bool Signal_RANGE(const RegimeSnapshot &rs)
     decision.regime_confidence = rs.confidence;
     decision.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
     decision.open_positions = PositionsTotal();
+    
+    // Initialize RSI values - always populate them even if not used for rejection
+    decision.rsi_current = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+    if(decision.rsi_current < 0) decision.rsi_current = 0.0;
+    
+    decision.rsi_h4 = GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0);
+    if(decision.rsi_h4 < 0) decision.rsi_h4 = 0.0;
+    
+    decision.rsi_d1 = GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0);
+    if(decision.rsi_d1 < 0) decision.rsi_d1 = 0.0;
     
     if(InpLogDetailedInfo)
         Print(logPrefix + "Evaluating range signal criteria...");
