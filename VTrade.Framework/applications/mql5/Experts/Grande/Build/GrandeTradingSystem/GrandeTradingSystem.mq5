@@ -2067,18 +2067,37 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     if(InpLogDetailedInfo)
         Print(logPrefix + "✅ Breakout signal CONFIRMED - proceeding with trade setup");
     
-    // Get strongest key level for breakout
+    // Check if this is a momentum surge trade
+    double currentCandle = MathAbs(SymbolInfoDouble(_Symbol, SYMBOL_BID) - iOpen(_Symbol, PERIOD_CURRENT, 0));
+    bool strongMomentumSurge = (currentCandle > rs.atr_current * 3.0);
+    
+    // Get strongest key level for breakout (unless momentum surge)
     SKeyLevel strongestLevel;
-    if(!g_keyLevelDetector.GetStrongestLevel(strongestLevel))
+    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double breakoutLevel = currentPrice;  // Default to current price for momentum trades
+    
+    if(!strongMomentumSurge)
     {
-        if(InpLogDetailedInfo)
-            Print(logPrefix + "❌ TRADE BLOCKED: No strong key levels found");
-        Print("[BREAKOUT] BLOCK: no strong key levels");
-        return;
+        if(!g_keyLevelDetector.GetStrongestLevel(strongestLevel))
+        {
+            if(InpLogDetailedInfo)
+                Print(logPrefix + "❌ TRADE BLOCKED: No strong key levels found");
+            Print("[BREAKOUT] BLOCK: no strong key levels");
+            return;
+        }
+        breakoutLevel = strongestLevel.price;
+    }
+    else
+    {
+        // For momentum surge, trade at market price
+        Print(logPrefix + "💥 MOMENTUM SURGE TRADE - Trading at market price!");
+        // Determine direction based on candle direction
+        double openPrice = iOpen(_Symbol, PERIOD_CURRENT, 0);
+        strongestLevel.isResistance = (currentPrice > openPrice);  // Buy if price above open
+        strongestLevel.price = currentPrice;
+        strongestLevel.strength = 1.0;
     }
     
-    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double breakoutLevel = strongestLevel.price;
     double stopDistancePips = rs.atr_current * 1.2 / _Point;
     double lot = 0.0;
     
@@ -2161,37 +2180,59 @@ void BreakoutTrade(const RegimeSnapshot &rs)
         Print(logPrefix + "→ PLACING STOP ORDER...");
     }
     
-    // Validate pending trigger distance vs current price and deduplicate
+    // Validate and prepare order (skip validation for momentum surge)
     bool isBuyStop = strongestLevel.isResistance;
-    if(!IsPendingPriceValid(isBuyStop, breakoutLevel))
+    
+    if(!strongMomentumSurge)
     {
-        Print(StringFormat("[BREAKOUT] BLOCK: invalid trigger vs price/min distance (level=%s)", DoubleToString(breakoutLevel, _Digits)));
-        return;
+        // Normal breakout - validate pending order
+        if(!IsPendingPriceValid(isBuyStop, breakoutLevel))
+        {
+            Print(StringFormat("[BREAKOUT] BLOCK: invalid trigger vs price/min distance (level=%s)", DoubleToString(breakoutLevel, _Digits)));
+            return;
+        }
+        
+        // Skip if a similar pending already exists (within 3 points)
+        if(HasSimilarPendingOrderForBreakout(isBuyStop, breakoutLevel, 3))
+        {
+            if(InpLogDetailedInfo)
+                Print("[BREAKOUT] Skip: similar pending already exists near level");
+            return;
+        }
     }
-
-    // Normalize lot and stops for pending order
+    
+    // Normalize lot and stops
     lot = NormalizeVolumeToStep(_Symbol, lot);
     NormalizeStops(isBuyStop, breakoutLevel, breakoutSL, breakoutTP);
 
-    // Skip if a similar pending already exists (within 3 points)
-    if(HasSimilarPendingOrderForBreakout(isBuyStop, breakoutLevel, 3))
-    {
-        if(InpLogDetailedInfo)
-            Print("[BREAKOUT] Skip: similar pending already exists near level");
-        return;
-    }
-
-    // Place stop order
+    // Place order (market order for momentum surge, stop order for normal breakout)
     bool tradeResult = false;
-    if(strongestLevel.isResistance)
-        tradeResult = g_trade.BuyStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
+    if(strongMomentumSurge)
+    {
+        // Momentum surge - place market order immediately
+        if(strongestLevel.isResistance)
+            tradeResult = g_trade.Buy(NormalizeDouble(lot, 2), _Symbol, 0, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
+        else
+            tradeResult = g_trade.Sell(NormalizeDouble(lot, 2), _Symbol, 0, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
+        
+        if(tradeResult)
+            Print(StringFormat("[BREAKOUT-SURGE] 💥 MARKET ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
+        else
+            Print(StringFormat("[BREAKOUT-SURGE] 💥 MARKET ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
+    }
     else
-        tradeResult = g_trade.SellStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
-    // Always-on concise outcome
-    if(tradeResult)
-        Print(StringFormat("[BREAKOUT] ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
-    else
-        Print(StringFormat("[BREAKOUT] ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
+    {
+        // Normal breakout - place stop order
+        if(strongestLevel.isResistance)
+            tradeResult = g_trade.BuyStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
+        else
+            tradeResult = g_trade.SellStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
+        
+        if(tradeResult)
+            Print(StringFormat("[BREAKOUT] ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
+        else
+            Print(StringFormat("[BREAKOUT] ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
+    }
     
     if(InpLogDetailedInfo)
     {
@@ -2935,16 +2976,19 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     }
     
     // Log if momentum surge detected
+    bool strongMomentumSurge = (currentCandle > averageRange * 3.0);  // Strong surge > 3x ATR
     if(momentumSurge)
     {
         Print(logPrefix + "🚀 MOMENTUM SURGE DETECTED! Current candle: ", 
               DoubleToString(currentCandle/_Point, 1), " pips (", 
               DoubleToString(currentCandle/averageRange, 2), "x ATR)");
+        if(strongMomentumSurge)
+            Print(logPrefix + "💥 STRONG SURGE (>3x ATR) - Will bypass some criteria!");
     }
     
-    // Check if near strong key level
+    // Check if near strong key level (unless strong momentum surge)
     SKeyLevel strongestLevel;
-    if(!g_keyLevelDetector.GetStrongestLevel(strongestLevel))
+    if(!strongMomentumSurge && !g_keyLevelDetector.GetStrongestLevel(strongestLevel))
     {
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ CRITERIA FAILED: No strong key levels available");
@@ -2954,6 +2998,17 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
         decision.rejection_reason = "No strong key levels detected";
         if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
+    }
+    else if(strongMomentumSurge && !g_keyLevelDetector.GetStrongestLevel(strongestLevel))
+    {
+        // For strong momentum surge, create a dummy level to continue processing
+        strongestLevel.price = currentCandle > 0 ? 
+            SymbolInfoDouble(_Symbol, SYMBOL_BID) + rs.atr_current : 
+            SymbolInfoDouble(_Symbol, SYMBOL_BID) - rs.atr_current;
+        strongestLevel.isResistance = currentCandle > 0;
+        strongestLevel.strength = 1.0;
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "💥 Strong momentum surge - bypassing key level requirement");
     }
     
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -2980,7 +3035,8 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
         Print(logPrefix + "  Near Key Level: ", nearKeyLevel ? "✅ WITHIN RANGE" : "❌ TOO FAR");
     }
     
-    if(!nearKeyLevel)
+    // Strong momentum surge bypasses key level proximity requirement
+    if(!nearKeyLevel && !strongMomentumSurge)
     {
         if(InpLogDetailedInfo)
         {
@@ -2998,6 +3054,11 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
         if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
     }
+    else if(!nearKeyLevel && strongMomentumSurge)
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "💥 Strong momentum surge - bypassing key level proximity check!");
+    }
     
     // Volume spike ≥ 1.2 × 20-bar MA (relaxed for more opportunities)
     long volume = iTickVolume(_Symbol, PERIOD_CURRENT, 0);
@@ -3014,7 +3075,8 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
         Print(logPrefix + "  Volume Spike (≥1.2x): ", volumeSpike ? "✅ CONFIRMED" : "❌ INSUFFICIENT");
     }
     
-    if(!volumeSpike)
+    // Strong momentum surge can bypass volume requirement
+    if(!volumeSpike && !strongMomentumSurge)
     {
         if(InpLogDetailedInfo)
         {
@@ -3028,6 +3090,11 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
         decision.volume_ratio = volumeRatio;
         if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
+    }
+    else if(!volumeSpike && strongMomentumSurge)
+    {
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "💥 Strong momentum surge - bypassing volume requirement!");
     }
     
     if(InpLogDetailedInfo)
