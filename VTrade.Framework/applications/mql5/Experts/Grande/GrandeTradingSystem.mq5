@@ -137,7 +137,8 @@ input bool   InpShowRegimeTrendArrows = true;    // Show Regime Trend Arrows
 input bool   InpShowADXStrengthMeter = true;     // Show ADX Strength Meter
 input bool   InpShowRegimeAlerts = true;         // Show Regime Change Alerts
 input bool   InpLogDetailedInfo = true;          // Log Detailed Trade Information
-input bool   InpLogDebugInfo = true;             // Log Debug Information (Risk Manager)
+input bool   InpLogVerbose = false;             // Ultra-Verbose Logging (for debugging only)
+input bool   InpLogDebugInfo = false;            // Log Debug Information (Risk Manager)
 input bool   InpLogAllErrors = true;             // Log ALL Errors and Retries (CRITICAL)
 
 input group "=== Update Settings ==="
@@ -699,31 +700,61 @@ void OnTimer()
                 }
                 // Skip risk manager completely for this position
             }
-            // Only call risk manager if not disabled and not in error state
+            // Only call risk manager if not disabled and not in error state  
             else if(!InpDisableRiskManagerTemp)
             {
-                // ALWAYS process manual positions to add SL/TP even if max positions exceeded
-                AddSLTPToManualPositions();
-                
-                if(consecutiveRMErrors < 5)
+                // Check error count BEFORE doing anything
+                if(consecutiveRMErrors >= 5)
                 {
-                    g_riskManager.OnTick();
+                    // EMERGENCY STOP: Risk manager has been erroring repeatedly
+                    static bool emergencyStopShown = false;
+                    if(!emergencyStopShown)
+                    {
+                        Print(StringFormat("[Grande] 🚨 EMERGENCY STOP: Risk Manager disabled after %d consecutive errors", consecutiveRMErrors));
+                        Print("[Grande] 🚨 This prevents log spam and system overload");
+                        Print("[Grande] 🚨 Manual intervention may be required");
+                        emergencyStopShown = true;
+                    }
+                    
+                    // Reset error counter after 5 minutes to allow recovery attempt
+                    static datetime lastErrorReset = 0;
+                    if(TimeCurrent() - lastErrorReset > 300) // 5 minutes
+                    {
+                        consecutiveRMErrors = 0;
+                        lastErrorTicket = 0;
+                        lastErrorReset = TimeCurrent();
+                        emergencyStopShown = false;
+                        Print("[Grande] 🔄 Risk manager error counter reset after 5 minutes - attempting recovery");
+                    }
+                    // Skip ALL risk manager operations
                 }
                 else
                 {
-                    // Skip risk manager for this cycle due to repeated errors
-                    if(lastErrorTicket != 0)
+                    // Safe to proceed with risk manager operations
+                    ResetLastError();
+                    
+                    // ALWAYS process manual positions to add SL/TP even if max positions exceeded
+                    AddSLTPToManualPositions();
+                    
+                    // Check for errors from AddSLTPToManualPositions
+                    int postSLTPError = GetLastError();
+                    if(postSLTPError != 0)
                     {
-                        Print(StringFormat("[Grande] WARNING: Skipping risk manager due to repeated errors on position %I64u", lastErrorTicket));
-                        // Reset error counter after 60 seconds
-                        static datetime lastErrorReset = 0;
-                        if(TimeCurrent() - lastErrorReset > 60)
-                        {
-                            consecutiveRMErrors = 0;
-                            lastErrorTicket = 0;
-                            lastErrorReset = TimeCurrent();
-                            Print("[Grande] INFO: Risk manager error counter reset");
-                        }
+                        Print(StringFormat("[Grande] ⚠️ Error %d in AddSLTPToManualPositions: %s", 
+                              postSLTPError, ErrorDescription(postSLTPError)));
+                    }
+                    
+                    ResetLastError();
+                    
+                    // Call risk manager OnTick
+                    g_riskManager.OnTick();
+                    
+                    // Check for errors from risk manager
+                    int postRMError = GetLastError();
+                    if(postRMError != 0)
+                    {
+                        Print(StringFormat("[Grande] ⚠️ Error %d in Risk Manager OnTick: %s", 
+                              postRMError, ErrorDescription(postRMError)));
                     }
                 }
             }
@@ -759,29 +790,27 @@ void OnTimer()
                 }
             }
             
-            // Do not log on timer by default; optional debug only
-            int rmError = GetLastError();
-            
-            // Track risk manager errors - ALWAYS LOG
-            if(rmError != 0)
+            // Final error check - only count errors if they occurred during our operations
+            int finalError = GetLastError();
+            if(finalError != 0 && consecutiveRMErrors < 5)
             {
                 consecutiveRMErrors++;
-                // ALWAYS log every error
-                Print(StringFormat("[Grande] ⚠️ Risk Manager ERROR %d detected, consecutive errors: %d", rmError, consecutiveRMErrors));
-                Print(StringFormat("[Grande] ⚠️ Last Error Details: Code=%d, Description=%s", 
-                      GetLastError(), ErrorDescription(GetLastError())));
-            }
-            else if(rmError == 0)
-            {
-                // Reset on success only if we had errors before
-                if(consecutiveRMErrors > 0)
+                Print(StringFormat("[Grande] ⚠️ Risk Manager ERROR %d detected, consecutive errors: %d", finalError, consecutiveRMErrors));
+                Print(StringFormat("[Grande] ⚠️ Error Description: %s", ErrorDescription(finalError)));
+                
+                if(consecutiveRMErrors >= 5)
                 {
-                    Print("[Grande] ✅ Risk Manager recovered after ", consecutiveRMErrors, " errors - resetting counter");
-                    consecutiveRMErrors = 0;
+                    Print("[Grande] 🚨 ERROR THRESHOLD REACHED: Risk Manager will be disabled next cycle");
                 }
             }
+            else if(finalError == 0 && consecutiveRMErrors > 0 && consecutiveRMErrors < 5)
+            {
+                // Reset on success only if we had errors before but haven't hit emergency stop
+                Print(StringFormat("[Grande] ✅ Risk Manager recovered after %d errors - resetting counter", consecutiveRMErrors));
+                consecutiveRMErrors = 0;
+            }
             
-            if(rmError == 0 && !g_riskManager.IsTradingEnabled())
+            if(finalError == 0 && g_riskManager != NULL && !g_riskManager.IsTradingEnabled())
             {
                 // Trading disabled by risk checks; simply skip further actions this cycle
             }
@@ -1722,7 +1751,18 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
 {
     string logPrefix = "[TRADE DECISION] ";
     
-    if(InpLogDetailedInfo)
+    // Smart logging - only when no position exists or verbose mode
+    static bool hasLoggedTradeAnalysis = false;
+    bool hasPosition = HasOpenPositionForSymbolAndMagic(_Symbol, InpMagicNumber);
+    
+    if(InpLogDetailedInfo && (!hasPosition && !hasLoggedTradeAnalysis))
+    {
+        Print(logPrefix + "🔍 ANALYZING TRADE OPPORTUNITY (no position open)");
+        Print(logPrefix + "Price: ", DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits), 
+              " | Spread: ", SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), " pts | Regime: ", g_regimeDetector.RegimeToString(rs.regime));
+        hasLoggedTradeAnalysis = true;
+    }
+    else if(InpLogVerbose) // Only in ultra-verbose mode
     {
         Print(logPrefix + "=== ANALYZING TRADE OPPORTUNITY ===");
         Print(logPrefix + "Timestamp: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES));
@@ -1730,6 +1770,10 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         Print(logPrefix + "Current Price: ", DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits));
         Print(logPrefix + "Spread: ", SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), " points");
     }
+    
+    // Reset flag when position is closed
+    if(hasPosition && hasLoggedTradeAnalysis)
+        hasLoggedTradeAnalysis = false;
     
     // Prepare decision tracking data
     STradeDecision decision;
@@ -1799,21 +1843,43 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
     // Check if we already have position for this symbol & magic (avoid blocking other symbols)
     if(HasOpenPositionForSymbolAndMagic(_Symbol, InpMagicNumber))
     {
-        if(InpLogDetailedInfo)
-            Print(logPrefix + "❌ BLOCKED: Position already open for symbol/magic");
+        // Smart logging - only show once until position is closed
+        static bool hasWarnedAboutOpenPosition = false;
+        if(!hasWarnedAboutOpenPosition && InpLogDetailedInfo)
+        {
+            Print(logPrefix + "❌ BLOCKED: Position already open for symbol/magic (suppressing further messages)");
+            hasWarnedAboutOpenPosition = true;
+        }
         
-        // Track rejection
-        if(g_reporter != NULL)
+        // Track rejection (but less frequently to avoid reporter spam)
+        static datetime lastReportTime = 0;
+        if(g_reporter != NULL && (TimeCurrent() - lastReportTime) >= 300) // Report only every 5 minutes
         {
             decision.signal_type = "PRE_SIGNAL_CHECK";
             decision.decision = "BLOCKED";
             decision.rejection_reason = "Position already open for symbol/magic";
             g_reporter.RecordDecision(decision);
+            lastReportTime = TimeCurrent();
         }
         return;
     }
+    else
+    {
+        // Reset warning flag when no position exists
+        static bool hasWarnedAboutOpenPosition = false;
+        hasWarnedAboutOpenPosition = false;
+    }
     
-    if(InpLogDetailedInfo)
+    // Smart logging - only once per session or verbose mode
+    static bool hasLoggedAnalysisStart = false;
+    if(InpLogDetailedInfo && !hasLoggedAnalysisStart)
+    {
+        Print(logPrefix + "✅ Risk checks passed - proceeding with signal analysis");
+        Print(logPrefix + "Market Regime: ", g_regimeDetector.RegimeToString(rs.regime), " (", DoubleToString(rs.confidence, 2), ")");
+        Print(logPrefix + "ADX: H1=", DoubleToString(rs.adx_h1, 0), " H4=", DoubleToString(rs.adx_h4, 0), " | ATR=", DoubleToString(rs.atr_current/_Point, 0), "pts");
+        hasLoggedAnalysisStart = true;
+    }
+    else if(InpLogVerbose) // Full details only in ultra-verbose mode
     {
         Print(logPrefix + "✅ Risk checks passed - proceeding with signal analysis");
         Print(logPrefix + "Market Regime: ", g_regimeDetector.RegimeToString(rs.regime));
@@ -1847,19 +1913,19 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
     switch(rs.regime)
     {
         case REGIME_TREND_BULL:   
-            if(InpLogDetailedInfo) Print(logPrefix + "→ Analyzing BULLISH TREND opportunity...");
+            if(InpLogVerbose) Print(logPrefix + "→ Analyzing BULLISH TREND opportunity...");
             TrendTrade(true, rs);   
             break;
         case REGIME_TREND_BEAR:   
-            if(InpLogDetailedInfo) Print(logPrefix + "→ Analyzing BEARISH TREND opportunity...");
+            if(InpLogVerbose) Print(logPrefix + "→ Analyzing BEARISH TREND opportunity...");
             TrendTrade(false, rs);  
             break;
         case REGIME_BREAKOUT_SETUP: 
-            if(InpLogDetailedInfo) Print(logPrefix + "→ Analyzing BREAKOUT opportunity...");
+            if(InpLogVerbose) Print(logPrefix + "→ Analyzing BREAKOUT opportunity...");
             BreakoutTrade(rs);    
             break;
         case REGIME_RANGING:      
-            if(InpLogDetailedInfo) Print(logPrefix + "→ Analyzing RANGE TRADING opportunity...");
+            if(InpLogVerbose) Print(logPrefix + "→ Analyzing RANGE TRADING opportunity...");
             RangeTrade(rs);         
             break;
         default: 
@@ -1886,7 +1952,7 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         ResetLastError();
     }
     
-    if(InpLogDetailedInfo)
+    if(InpLogVerbose) // Only in ultra-verbose mode
         Print(logPrefix + "=== TRADE ANALYSIS COMPLETE ===\n");
 }
 
@@ -4135,7 +4201,7 @@ void AddSLTPToManualPositions()
         double currentSL = PositionGetDouble(POSITION_SL);
         double currentTP = PositionGetDouble(POSITION_TP);
         
-        if(InpLogDetailedInfo)
+        if(InpLogVerbose) // Only ultra-verbose logging for position details
         {
             ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
             double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -4147,7 +4213,7 @@ void AddSLTPToManualPositions()
         // If position already has both SL and TP, skip it
         if(currentSL != 0 && currentTP != 0)
         {
-            if(InpLogDetailedInfo)
+            if(InpLogVerbose) // Only ultra-verbose
                 Print(StringFormat("[Grande] Position #%I64u already has SL/TP, skipping", ticket));
             continue;
         }
@@ -4246,11 +4312,11 @@ void AddSLTPToManualPositions()
         }
     }
     
-    // Summary log (only if positions were found)
-    if(InpLogDetailedInfo && processedPositions > 0)
+    // Summary log (only if changes were made)
+    if(InpLogDetailedInfo && positionsNeedingSLTP > 0)
     {
-        Print(StringFormat("[Grande] SL/TP Check Summary: %d positions processed, %d needed SL/TP updates", 
-              processedPositions, positionsNeedingSLTP));
+        Print(StringFormat("[Grande] SL/TP Updates: %d positions needed updates (of %d checked)", 
+              positionsNeedingSLTP, processedPositions));
     }
 }
 

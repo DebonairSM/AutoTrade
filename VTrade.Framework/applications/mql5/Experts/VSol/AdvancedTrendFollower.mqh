@@ -327,16 +327,33 @@ bool CAdvancedTrendFollower::IsBullish()
     if(macdCondition) score++;
     if(rsiCondition) score++;
     
-    // Log detailed scoring for debugging
-    if(InpLogDebugInfo)
+    // MUCH SMARTER LOGGING - Global state tracking across all timeframes
+    static int g_lastBullScore = -1;
+    static datetime g_lastBullLogTime = 0;
+    static bool g_hasLoggedBullish = false;
+    datetime currentTime = TimeCurrent();
+    
+    // Only log significant changes or major events - NOT repetitive scoring
+    bool shouldLog = false;
+    if(InpLogDebugInfo && !g_hasLoggedBullish) // Only on first detection
     {
-        Print(MCP_LOG_PREFIX, "IsBullish() Score: ", score, "/7");
-        Print(MCP_LOG_PREFIX, "  H1 EMA: ", h1EmaAlignment ? "YES" : "NO", " (weight: 2)");
-        Print(MCP_LOG_PREFIX, "  H4 EMA: ", h4EmaAlignment ? "YES" : "NO");
-        Print(MCP_LOG_PREFIX, "  D1 EMA: ", d1EmaAlignment ? "YES" : "NO");
-        Print(MCP_LOG_PREFIX, "  ADX>=20: ", adxCondition ? "YES" : "NO", " (", DoubleToString(m_adxH1[0], 1), ")");
-        Print(MCP_LOG_PREFIX, "  MACD: ", macdCondition ? "YES" : "NO");
-        Print(MCP_LOG_PREFIX, "  RSI>45: ", rsiCondition ? "YES" : "NO", " (", DoubleToString(m_rsiH1[0], 1), ")");
+        shouldLog = true;
+        g_hasLoggedBullish = true;
+        g_lastBullScore = score;
+        g_lastBullLogTime = currentTime;
+    }
+    else if(InpLogDebugInfo && score != g_lastBullScore && (currentTime - g_lastBullLogTime) >= 60) // Score change + 1 min cooldown
+    {
+        shouldLog = true;
+        g_lastBullScore = score;
+        g_lastBullLogTime = currentTime;
+    }
+    
+    if(shouldLog)
+    {
+        Print(MCP_LOG_PREFIX, "📈 Bullish Trend Score: ", score, "/7 (need ≥3) - EMAs:", 
+              h1EmaAlignment ? "H1✅" : "H1❌", h4EmaAlignment ? "H4✅" : "H4❌", d1EmaAlignment ? "D1✅" : "D1❌",
+              " ADX:", DoubleToString(m_adxH1[0], 0), " RSI:", DoubleToString(m_rsiH1[0], 0));
     }
     
     // Need at least 3 points (was requiring all 7 before!)
@@ -379,16 +396,33 @@ bool CAdvancedTrendFollower::IsBearish()
     if(macdCondition) score++;
     if(rsiCondition) score++;
     
-    // Log detailed scoring for debugging
-    if(InpLogDebugInfo)
+    // MUCH SMARTER LOGGING - Global state tracking across all timeframes
+    static int g_lastBearScore = -1;
+    static datetime g_lastBearLogTime = 0;
+    static bool g_hasLoggedBearish = false;
+    datetime currentTime = TimeCurrent();
+    
+    // Only log significant changes or major events - NOT repetitive scoring
+    bool shouldLog = false;
+    if(InpLogDebugInfo && !g_hasLoggedBearish) // Only on first detection
     {
-        Print(MCP_LOG_PREFIX, "IsBearish() Score: ", score, "/7");
-        Print(MCP_LOG_PREFIX, "  H1 EMA: ", h1EmaAlignment ? "YES" : "NO", " (weight: 2)");
-        Print(MCP_LOG_PREFIX, "  H4 EMA: ", h4EmaAlignment ? "YES" : "NO");
-        Print(MCP_LOG_PREFIX, "  D1 EMA: ", d1EmaAlignment ? "YES" : "NO");
-        Print(MCP_LOG_PREFIX, "  ADX>=20: ", adxCondition ? "YES" : "NO", " (", DoubleToString(m_adxH1[0], 1), ")");
-        Print(MCP_LOG_PREFIX, "  MACD: ", macdCondition ? "YES" : "NO");
-        Print(MCP_LOG_PREFIX, "  RSI<55: ", rsiCondition ? "YES" : "NO", " (", DoubleToString(m_rsiH1[0], 1), ")");
+        shouldLog = true;
+        g_hasLoggedBearish = true;
+        g_lastBearScore = score;
+        g_lastBearLogTime = currentTime;
+    }
+    else if(InpLogDebugInfo && score != g_lastBearScore && (currentTime - g_lastBearLogTime) >= 60) // Score change + 1 min cooldown
+    {
+        shouldLog = true;
+        g_lastBearScore = score;
+        g_lastBearLogTime = currentTime;
+    }
+    
+    if(shouldLog)
+    {
+        Print(MCP_LOG_PREFIX, "📉 Bearish Trend Score: ", score, "/7 (need ≥3) - EMAs:", 
+              h1EmaAlignment ? "H1✅" : "H1❌", h4EmaAlignment ? "H4✅" : "H4❌", d1EmaAlignment ? "D1✅" : "D1❌",
+              " ADX:", DoubleToString(m_adxH1[0], 0), " RSI:", DoubleToString(m_rsiH1[0], 0));
     }
     
     // Need at least 3 points (was requiring all 7 before!)
