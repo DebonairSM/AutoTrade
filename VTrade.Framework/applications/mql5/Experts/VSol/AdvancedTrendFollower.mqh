@@ -299,26 +299,48 @@ bool CAdvancedTrendFollower::IsBullish()
     if(!m_isInitialized || ArraySize(m_emaFastH1) < 1)
         return false;
     
-    // Fast EMA > Slow EMA on H1 (always required)
+    // === RELAXED CONDITIONS FOR BETTER TRADE EXECUTION ===
+    // Fast EMA > Slow EMA on H1 (primary condition)
     bool h1EmaAlignment = (m_emaFastH1[0] > m_emaSlowH1[0]);
     
-    // H4 and D1 alignment (optional - use true if data unavailable)
+    // H4 and D1 alignment (bonus points, not required)
     bool h4EmaAlignment = (ArraySize(m_emaFastH4) > 0 && ArraySize(m_emaSlowH4) > 0) ? 
-                         (m_emaFastH4[0] > m_emaSlowH4[0]) : true;
+                         (m_emaFastH4[0] > m_emaSlowH4[0]) : false;
     bool d1EmaAlignment = (ArraySize(m_emaFastD1) > 0 && ArraySize(m_emaSlowD1) > 0) ? 
-                         (m_emaFastD1[0] > m_emaSlowD1[0]) : true;
+                         (m_emaFastD1[0] > m_emaSlowD1[0]) : false;
     
-    // ADX (H1) >= threshold
-    bool adxCondition = (m_adxH1[0] >= InpAdxThreshold);
+    // ADX (H1) >= threshold (lowered from 25 to 20 for more opportunities)
+    bool adxCondition = (m_adxH1[0] >= MathMax(InpAdxThreshold - 5.0, 20.0));
     
     // MACD main > signal (H1)
     bool macdCondition = (m_macdMainH1[0] > m_macdSignalH1[0]);
     
-    // RSI (H1) > threshold
-    bool rsiCondition = (m_rsiH1[0] > InpRsiThreshold);
+    // RSI (H1) > threshold (more lenient: >45 instead of >50)
+    bool rsiCondition = (m_rsiH1[0] > MathMax(InpRsiThreshold - 5.0, 45.0));
     
-    return (h1EmaAlignment && h4EmaAlignment && d1EmaAlignment && 
-            adxCondition && macdCondition && rsiCondition);
+    // === SCORING SYSTEM: Need 3/5 conditions instead of ALL ===
+    int score = 0;
+    if(h1EmaAlignment) score += 2;  // Primary condition worth 2 points
+    if(h4EmaAlignment) score++;
+    if(d1EmaAlignment) score++; 
+    if(adxCondition) score++;
+    if(macdCondition) score++;
+    if(rsiCondition) score++;
+    
+    // Log detailed scoring for debugging
+    if(InpLogDebugInfo)
+    {
+        Print(MCP_LOG_PREFIX, "IsBullish() Score: ", score, "/7");
+        Print(MCP_LOG_PREFIX, "  H1 EMA: ", h1EmaAlignment ? "YES" : "NO", " (weight: 2)");
+        Print(MCP_LOG_PREFIX, "  H4 EMA: ", h4EmaAlignment ? "YES" : "NO");
+        Print(MCP_LOG_PREFIX, "  D1 EMA: ", d1EmaAlignment ? "YES" : "NO");
+        Print(MCP_LOG_PREFIX, "  ADX>=20: ", adxCondition ? "YES" : "NO", " (", DoubleToString(m_adxH1[0], 1), ")");
+        Print(MCP_LOG_PREFIX, "  MACD: ", macdCondition ? "YES" : "NO");
+        Print(MCP_LOG_PREFIX, "  RSI>45: ", rsiCondition ? "YES" : "NO", " (", DoubleToString(m_rsiH1[0], 1), ")");
+    }
+    
+    // Need at least 3 points (was requiring all 7 before!)
+    return (score >= 3);
 }
 
 //+------------------------------------------------------------------+
@@ -329,26 +351,48 @@ bool CAdvancedTrendFollower::IsBearish()
     if(!m_isInitialized || ArraySize(m_emaFastH1) < 1)
         return false;
     
-    // Fast EMA < Slow EMA on H1 (always required)
+    // === RELAXED CONDITIONS FOR BETTER TRADE EXECUTION ===
+    // Fast EMA < Slow EMA on H1 (primary condition)
     bool h1EmaAlignment = (m_emaFastH1[0] < m_emaSlowH1[0]);
     
-    // H4 and D1 alignment (optional - use true if data unavailable)
+    // H4 and D1 alignment (bonus points, not required)
     bool h4EmaAlignment = (ArraySize(m_emaFastH4) > 0 && ArraySize(m_emaSlowH4) > 0) ? 
-                         (m_emaFastH4[0] < m_emaSlowH4[0]) : true;
+                         (m_emaFastH4[0] < m_emaSlowH4[0]) : false;
     bool d1EmaAlignment = (ArraySize(m_emaFastD1) > 0 && ArraySize(m_emaSlowD1) > 0) ? 
-                         (m_emaFastD1[0] < m_emaSlowD1[0]) : true;
+                         (m_emaFastD1[0] < m_emaSlowD1[0]) : false;
     
-    // ADX (H1) >= threshold
-    bool adxCondition = (m_adxH1[0] >= InpAdxThreshold);
+    // ADX (H1) >= threshold (lowered from 25 to 20 for more opportunities)
+    bool adxCondition = (m_adxH1[0] >= MathMax(InpAdxThreshold - 5.0, 20.0));
     
     // MACD main < signal (H1)
     bool macdCondition = (m_macdMainH1[0] < m_macdSignalH1[0]);
     
-    // RSI (H1) < threshold
-    bool rsiCondition = (m_rsiH1[0] < InpRsiThreshold);
+    // RSI (H1) < threshold (more lenient: <55 instead of <50)
+    bool rsiCondition = (m_rsiH1[0] < MathMin(InpRsiThreshold + 5.0, 55.0));
     
-    return (h1EmaAlignment && h4EmaAlignment && d1EmaAlignment && 
-            adxCondition && macdCondition && rsiCondition);
+    // === SCORING SYSTEM: Need 3/5 conditions instead of ALL ===
+    int score = 0;
+    if(h1EmaAlignment) score += 2;  // Primary condition worth 2 points
+    if(h4EmaAlignment) score++;
+    if(d1EmaAlignment) score++; 
+    if(adxCondition) score++;
+    if(macdCondition) score++;
+    if(rsiCondition) score++;
+    
+    // Log detailed scoring for debugging
+    if(InpLogDebugInfo)
+    {
+        Print(MCP_LOG_PREFIX, "IsBearish() Score: ", score, "/7");
+        Print(MCP_LOG_PREFIX, "  H1 EMA: ", h1EmaAlignment ? "YES" : "NO", " (weight: 2)");
+        Print(MCP_LOG_PREFIX, "  H4 EMA: ", h4EmaAlignment ? "YES" : "NO");
+        Print(MCP_LOG_PREFIX, "  D1 EMA: ", d1EmaAlignment ? "YES" : "NO");
+        Print(MCP_LOG_PREFIX, "  ADX>=20: ", adxCondition ? "YES" : "NO", " (", DoubleToString(m_adxH1[0], 1), ")");
+        Print(MCP_LOG_PREFIX, "  MACD: ", macdCondition ? "YES" : "NO");
+        Print(MCP_LOG_PREFIX, "  RSI<55: ", rsiCondition ? "YES" : "NO", " (", DoubleToString(m_rsiH1[0], 1), ")");
+    }
+    
+    // Need at least 3 points (was requiring all 7 before!)
+    return (score >= 3);
 }
 
 //+------------------------------------------------------------------+

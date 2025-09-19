@@ -93,6 +93,7 @@ input int    InpStochD = 3;                      // Stochastic %D
 
 input group "=== Advanced Trend Follower ==="
 input bool   InpEnableTrendFollower = true;      // Enable Trend Follower Confirmation
+input bool   InpRequireEmaAlignment = false;     // Require Additional EMA Alignment (50/200)
 input int    InpTFEmaFastPeriod = 50;            // TF Fast EMA Period
 input int    InpTFEmaSlowPeriod = 200;           // TF Slow EMA Period  
 input int    InpTFEmaPullbackPeriod = 20;        // TF Pullback EMA Period
@@ -110,6 +111,7 @@ input bool   InpUseD1RSI = true;                  // Also gate by D1 extremes
 input double InpD1RSIOverbought = 70.0;
 input double InpD1RSIOversold  = 30.0;
 
+input bool   InpDisableRiskManagerTemp = false;   // EMERGENCY: Disable risk manager (error recovery)
 input bool   InpEnableRSIExits = true;            // Enable RSI-based exits
 input double InpRSIExitOB = 70.0;                 // Chart TF RSI overbought (long exit trigger)
 input double InpRSIExitOS = 30.0;                 // Chart TF RSI oversold (short exit trigger)
@@ -134,8 +136,9 @@ input bool   InpShowSystemStatus = true;         // Show System Status Panel
 input bool   InpShowRegimeTrendArrows = true;    // Show Regime Trend Arrows
 input bool   InpShowADXStrengthMeter = true;     // Show ADX Strength Meter
 input bool   InpShowRegimeAlerts = true;         // Show Regime Change Alerts
-input bool   InpLogDetailedInfo = false;         // Log Detailed Trade Information
-input bool   InpLogDebugInfo = false;            // Log Debug Information (Risk Manager)
+input bool   InpLogDetailedInfo = true;          // Log Detailed Trade Information
+input bool   InpLogDebugInfo = true;             // Log Debug Information (Risk Manager)
+input bool   InpLogAllErrors = true;             // Log ALL Errors and Retries (CRITICAL)
 
 input group "=== Update Settings ==="
 input int    InpRegimeUpdateSeconds = 5;         // Regime Update Interval (seconds)
@@ -664,15 +667,120 @@ void OnTimer()
         if(!InpManageOnlyOnTimeframe || Period() == InpManagementTimeframe)
         {
             ResetLastError();
+            
+            // Track consecutive risk manager errors to prevent infinite loops
+            static int consecutiveRMErrors = 0;
+            static ulong lastErrorTicket = 0;
+            
             // Cache RSI once per management tick for reuse
             if(InpEnableRSIExits || InpEnableMTFRSI)
                 CacheRsiForCycle();
-            g_riskManager.OnTick();
+            
+            // Check if the problematic position still exists
+            bool problemPositionExists = false;
+            for(int i = 0; i < PositionsTotal(); i++)
+            {
+                if(PositionGetTicket(i) == 24684248)
+                {
+                    problemPositionExists = true;
+                    break;
+                }
+            }
+            
+            // EMERGENCY: Skip risk manager if problematic position is detected
+            if(problemPositionExists)
+            {
+                static bool warningShown = false;
+                if(!warningShown)
+                {
+                    Print("[Grande] ⚠️ EMERGENCY: Skipping risk manager - position 24684248 causing errors");
+                    Print("[Grande] ⚠️ ACTION REQUIRED: Please manually close position 24684248 in MT5");
+                    warningShown = true;
+                }
+                // Skip risk manager completely for this position
+            }
+            // Only call risk manager if not disabled and not in error state
+            else if(!InpDisableRiskManagerTemp)
+            {
+                // ALWAYS process manual positions to add SL/TP even if max positions exceeded
+                AddSLTPToManualPositions();
+                
+                if(consecutiveRMErrors < 5)
+                {
+                    g_riskManager.OnTick();
+                }
+                else
+                {
+                    // Skip risk manager for this cycle due to repeated errors
+                    if(lastErrorTicket != 0)
+                    {
+                        Print(StringFormat("[Grande] WARNING: Skipping risk manager due to repeated errors on position %I64u", lastErrorTicket));
+                        // Reset error counter after 60 seconds
+                        static datetime lastErrorReset = 0;
+                        if(TimeCurrent() - lastErrorReset > 60)
+                        {
+                            consecutiveRMErrors = 0;
+                            lastErrorTicket = 0;
+                            lastErrorReset = TimeCurrent();
+                            Print("[Grande] INFO: Risk manager error counter reset");
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // Risk manager temporarily disabled by user
+                static bool disableWarningShown = false;
+                if(!disableWarningShown)
+                {
+                    Print("[Grande] ⚠️ WARNING: Risk Manager is TEMPORARILY DISABLED via InpDisableRiskManagerTemp");
+                    disableWarningShown = true;
+                }
+            }
+            
             // Add RSI-based exit management (optional)
             if(InpEnableRSIExits)
                 ApplyRSIExitRules();
+            
+            // Update momentum-specific trailing stops
+            if(InpEnableTrailingStop)
+            {
+                for(int i = 0; i < PositionsTotal(); i++)
+                {
+                    ulong ticket = PositionGetTicket(i);
+                    if(ticket > 0 && PositionSelectByTicket(ticket))
+                    {
+                        if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+                           PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+                        {
+                            UpdateMomentumTrailingStop(ticket);
+                        }
+                    }
+                }
+            }
+            
             // Do not log on timer by default; optional debug only
             int rmError = GetLastError();
+            
+            // Track risk manager errors - ALWAYS LOG
+            if(rmError != 0)
+            {
+                consecutiveRMErrors++;
+                // ALWAYS log every error
+                Print(StringFormat("[Grande] ⚠️ Risk Manager ERROR %d detected, consecutive errors: %d", rmError, consecutiveRMErrors));
+                Print(StringFormat("[Grande] ⚠️ Last Error Details: Code=%d, Description=%s", 
+                      GetLastError(), ErrorDescription(GetLastError())));
+            }
+            else if(rmError == 0)
+            {
+                // Reset on success only if we had errors before
+                if(consecutiveRMErrors > 0)
+                {
+                    Print("[Grande] ✅ Risk Manager recovered after ", consecutiveRMErrors, " errors - resetting counter");
+                    consecutiveRMErrors = 0;
+                }
+            }
+            
             if(rmError == 0 && !g_riskManager.IsTradingEnabled())
             {
                 // Trading disabled by risk checks; simply skip further actions this cycle
@@ -1872,20 +1980,60 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     double price = bullish ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double sl = 0.0, tp = 0.0;
     
+    // Check if this is a momentum trade (large candle)
+    double currentCandle = MathAbs(SymbolInfoDouble(_Symbol, SYMBOL_BID) - iOpen(_Symbol, PERIOD_CURRENT, 0));
+    double momentumStrength = currentCandle / rs.atr_current;
+    bool isMomentumTrade = (momentumStrength > 1.5); // Momentum if > 1.5x ATR
+    
+    if(isMomentumTrade && InpLogDetailedInfo)
+    {
+        Print(logPrefix + "💥 MOMENTUM TRADE DETECTED - ", DoubleToString(momentumStrength, 2), "x ATR");
+    }
+    
     // Calculate SL/TP using risk manager
     if(g_riskManager != NULL)
     {
         sl = g_riskManager.CalculateStopLoss(bullish, price, rs.atr_current);
-        tp = g_riskManager.CalculateTakeProfit(bullish, price, sl);
+        // For momentum trades, use our adaptive TP instead of risk manager's fixed ratio
+        if(isMomentumTrade)
+        {
+            tp = TakeProfit_TREND(bullish, rs, true, momentumStrength);
+        }
+        else
+        {
+            tp = g_riskManager.CalculateTakeProfit(bullish, price, sl);
+        }
     }
     else
     {
         sl = StopLoss_TREND(bullish, rs); // Fallback to old method
-        tp = TakeProfit_TREND(bullish, rs);
+        tp = TakeProfit_TREND(bullish, rs, isMomentumTrade, momentumStrength);
+    }
+
+    if(InpLogDetailedInfo)
+    {
+        double slPips = MathAbs(price - sl) / GetPipSize();
+        double tpPips = MathAbs(tp - price) / GetPipSize();
+        double rrRatio = (tpPips > 0) ? (tpPips / slPips) : 0;
+        Print(logPrefix + "SL/TP BEFORE NORMALIZE: Entry=", DoubleToString(price, _Digits), 
+              " SL=", DoubleToString(sl, _Digits), " (", DoubleToString(slPips, 1), " pips)",
+              " TP=", DoubleToString(tp, _Digits), " (", DoubleToString(tpPips, 1), " pips)",
+              " R:R=", DoubleToString(rrRatio, 2));
     }
 
     // Ensure SL/TP respect broker min stop distance and correct side
     NormalizeStops(bullish, price, sl, tp);
+
+    if(InpLogDetailedInfo)
+    {
+        double slPips = MathAbs(price - sl) / GetPipSize();
+        double tpPips = MathAbs(tp - price) / GetPipSize();
+        double rrRatio = (tpPips > 0) ? (tpPips / slPips) : 0;
+        Print(logPrefix + "SL/TP AFTER NORMALIZE: Entry=", DoubleToString(price, _Digits), 
+              " SL=", DoubleToString(sl, _Digits), " (", DoubleToString(slPips, 1), " pips)",
+              " TP=", DoubleToString(tp, _Digits), " (", DoubleToString(tpPips, 1), " pips)",
+              " R:R=", DoubleToString(rrRatio, 2));
+    }
     
     // Cap TP at nearest STRONG key level (leave a buffer) and mark TP lock in comment
     string tpLockTag = "";
@@ -1936,22 +2084,73 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
             if(bullish && haveStrongRes)
             {
                 double cappedTp = NormalizeDouble(strongRes.price - buffer, digits);
-                if(cappedTp < tp)
+                double originalTpPips = MathAbs(tp - price) / GetPipSize();
+                double cappedTpPips = MathAbs(cappedTp - price) / GetPipSize();
+                double minAcceptableTP = price + (MathAbs(price - sl) * 1.5); // At least 1.5:1 R:R
+                
+                if(InpLogDetailedInfo)
+                {
+                    Print(logPrefix + "RESISTANCE CAPPING CHECK:");
+                    Print(logPrefix + "  Original TP: ", DoubleToString(tp, digits), " (", DoubleToString(originalTpPips, 1), " pips)");
+                    Print(logPrefix + "  Resistance: ", DoubleToString(strongRes.price, digits), " (strength: ", DoubleToString(strongRes.strength, 2), ")");
+                    Print(logPrefix + "  Would cap to: ", DoubleToString(cappedTp, digits), " (", DoubleToString(cappedTpPips, 1), " pips)");
+                    Print(logPrefix + "  Min acceptable TP: ", DoubleToString(minAcceptableTP, digits));
+                }
+                
+                // Only cap TP if the capped level still gives at least 1.5:1 R:R
+                if(cappedTp < tp && cappedTp >= minAcceptableTP)
                 {
                     tp = cappedTp;
                     tpLockTag = StringFormat("|TP_LOCK@%s|R=%s|SCORE=%.2f", DoubleToString(tp, digits), DoubleToString(strongRes.price, digits), strongRes.strength);
+                    if(InpLogDetailedInfo)
+                        Print(logPrefix + "✅ TP CAPPED at resistance (maintains decent R:R)");
+                }
+                else if(InpLogDetailedInfo)
+                {
+                    Print(logPrefix + "❌ TP CAPPING REJECTED (would destroy R:R ratio)");
                 }
             }
             else if(!bullish && haveStrongSup)
             {
                 double cappedTp = NormalizeDouble(strongSup.price + buffer, digits);
-                if(cappedTp > tp)
+                double originalTpPips = MathAbs(price - tp) / GetPipSize();
+                double cappedTpPips = MathAbs(price - cappedTp) / GetPipSize();
+                double minAcceptableTP = price - (MathAbs(sl - price) * 1.5); // At least 1.5:1 R:R
+                
+                if(InpLogDetailedInfo)
+                {
+                    Print(logPrefix + "SUPPORT CAPPING CHECK:");
+                    Print(logPrefix + "  Original TP: ", DoubleToString(tp, digits), " (", DoubleToString(originalTpPips, 1), " pips)");
+                    Print(logPrefix + "  Support: ", DoubleToString(strongSup.price, digits), " (strength: ", DoubleToString(strongSup.strength, 2), ")");
+                    Print(logPrefix + "  Would cap to: ", DoubleToString(cappedTp, digits), " (", DoubleToString(cappedTpPips, 1), " pips)");
+                    Print(logPrefix + "  Min acceptable TP: ", DoubleToString(minAcceptableTP, digits));
+                }
+                
+                // Only cap TP if the capped level still gives at least 1.5:1 R:R
+                if(cappedTp > tp && cappedTp <= minAcceptableTP)
                 {
                     tp = cappedTp;
                     tpLockTag = StringFormat("|TP_LOCK@%s|S=%s|SCORE=%.2f", DoubleToString(tp, digits), DoubleToString(strongSup.price, digits), strongSup.strength);
+                    if(InpLogDetailedInfo)
+                        Print(logPrefix + "✅ TP CAPPED at support (maintains decent R:R)");
+                }
+                else if(InpLogDetailedInfo)
+                {
+                    Print(logPrefix + "❌ TP CAPPING REJECTED (would destroy R:R ratio)");
                 }
             }
         }
+    }
+    
+    if(InpLogDetailedInfo)
+    {
+        double finalSlPips = MathAbs(price - sl) / GetPipSize();
+        double finalTpPips = MathAbs(tp - price) / GetPipSize();
+        double finalRrRatio = (finalSlPips > 0) ? (finalTpPips / finalSlPips) : 0;
+        Print(logPrefix + "FINAL SL/TP: Entry=", DoubleToString(price, _Digits), 
+              " SL=", DoubleToString(sl, _Digits), " (", DoubleToString(finalSlPips, 1), " pips)",
+              " TP=", DoubleToString(tp, _Digits), " (", DoubleToString(finalTpPips, 1), " pips)",
+              " R:R=", DoubleToString(finalRrRatio, 2));
     }
     
     string comment = StringFormat("%s Trend-%s", InpOrderTag, bullish ? "BULL" : "BEAR");
@@ -2069,7 +2268,9 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     
     // Check if this is a momentum surge trade
     double currentCandle = MathAbs(SymbolInfoDouble(_Symbol, SYMBOL_BID) - iOpen(_Symbol, PERIOD_CURRENT, 0));
-    bool strongMomentumSurge = (currentCandle > rs.atr_current * 3.0);
+    double momentumStrength = currentCandle / rs.atr_current;
+    bool strongMomentumSurge = (momentumStrength > 3.0);
+    bool moderateMomentumSurge = (momentumStrength > 1.5);
     
     // Get strongest key level for breakout (unless momentum surge)
     SKeyLevel strongestLevel;
@@ -2145,7 +2346,18 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     {
         bool isBuy = strongestLevel.isResistance;
         breakoutSL = g_riskManager.CalculateStopLoss(isBuy, breakoutLevel, rs.atr_current);
-        breakoutTP = g_riskManager.CalculateTakeProfit(isBuy, breakoutLevel, breakoutSL);
+        
+        // For momentum trades, use adaptive TP
+        if(moderateMomentumSurge)
+        {
+            breakoutTP = TakeProfit_TREND(isBuy, rs, true, momentumStrength);
+            if(InpLogDetailedInfo)
+                Print(logPrefix + "Using momentum-adaptive TP for ", DoubleToString(momentumStrength, 2), "x ATR surge");
+        }
+        else
+        {
+            breakoutTP = g_riskManager.CalculateTakeProfit(isBuy, breakoutLevel, breakoutSL);
+        }
     }
     else
     {
@@ -2153,12 +2365,24 @@ void BreakoutTrade(const RegimeSnapshot &rs)
         breakoutSL = strongestLevel.isResistance ? 
                     breakoutLevel + rs.atr_current * 1.2 : 
                     breakoutLevel - rs.atr_current * 1.2;
-        breakoutTP = strongestLevel.isResistance ? 
-                    breakoutLevel - rs.atr_current * 3.0 : 
-                    breakoutLevel + rs.atr_current * 3.0;
+        
+        // Use momentum-aware TP for momentum trades
+        if(moderateMomentumSurge)
+        {
+            breakoutTP = TakeProfit_TREND(strongestLevel.isResistance, rs, true, momentumStrength);
+        }
+        else
+        {
+            breakoutTP = strongestLevel.isResistance ? 
+                        breakoutLevel - rs.atr_current * 3.0 : 
+                        breakoutLevel + rs.atr_current * 3.0;
+        }
     }
     
-    string comment = StringFormat("%s BO-%s", InpOrderTag, strongestLevel.isResistance ? "RESISTANCE" : "SUPPORT");
+    // Add momentum indicator to comment for tracking
+    string comment = StringFormat("%s BO-%s%s", InpOrderTag, 
+                                 strongestLevel.isResistance ? "RESISTANCE" : "SUPPORT",
+                                 moderateMomentumSurge ? "-MOMENTUM" : "");
     // Always-on concise order summary for monitoring
     Print(StringFormat("[BREAKOUT] ORDER %s @%s SL=%s TP=%s lot=%.2f",
                        strongestLevel.isResistance ? "BUYSTOP" : "SELLSTOP",
@@ -2516,13 +2740,15 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     // TODO: Re-enable after fixing compilation errors
     
     // === ORIGINAL GRANDE EMA ALIGNMENT LOGIC ===
-    // 50 & 200 EMA alignment across H1 + H4
-    int ema50_h1_handle = iMA(_Symbol, PERIOD_H1, InpEMA50Period, 0, MODE_EMA, PRICE_CLOSE);
-    int ema200_h1_handle = iMA(_Symbol, PERIOD_H1, InpEMA200Period, 0, MODE_EMA, PRICE_CLOSE);
-    int ema50_h4_handle = iMA(_Symbol, PERIOD_H4, InpEMA50Period, 0, MODE_EMA, PRICE_CLOSE);
-    int ema200_h4_handle = iMA(_Symbol, PERIOD_H4, InpEMA200Period, 0, MODE_EMA, PRICE_CLOSE);
-    
-    double ema50_h1 = 0, ema200_h1 = 0, ema50_h4 = 0, ema200_h4 = 0;
+    // 50 & 200 EMA alignment across H1 + H4 (NOW OPTIONAL - controlled by InpRequireEmaAlignment)
+    if(InpRequireEmaAlignment)
+    {
+        int ema50_h1_handle = iMA(_Symbol, PERIOD_H1, InpEMA50Period, 0, MODE_EMA, PRICE_CLOSE);
+        int ema200_h1_handle = iMA(_Symbol, PERIOD_H1, InpEMA200Period, 0, MODE_EMA, PRICE_CLOSE);
+        int ema50_h4_handle = iMA(_Symbol, PERIOD_H4, InpEMA50Period, 0, MODE_EMA, PRICE_CLOSE);
+        int ema200_h4_handle = iMA(_Symbol, PERIOD_H4, InpEMA200Period, 0, MODE_EMA, PRICE_CLOSE);
+        
+        double ema50_h1 = 0, ema200_h1 = 0, ema50_h4 = 0, ema200_h4 = 0;
     
     if(ema50_h1_handle != INVALID_HANDLE)
     {
@@ -2644,6 +2870,11 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         decision.rejection_reason = rejection_reason;
         if(g_reporter != NULL) g_reporter.RecordDecision(decision);
         return false;
+    }
+    }  // End of InpRequireEmaAlignment check
+    else if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "2. EMA Alignment Check: SKIPPED (disabled by InpRequireEmaAlignment=false)");
     }
     
     // Price pull-back ≤ 1 × ATR(14) to 20 EMA
@@ -3401,9 +3632,91 @@ double StopLoss_TREND(bool bullish, const RegimeSnapshot &rs)
     return bullish ? currentPrice - rs.atr_current * 1.2 : currentPrice + rs.atr_current * 1.2;
 }
 
-double TakeProfit_TREND(bool bullish, const RegimeSnapshot &rs)
+double TakeProfit_TREND(bool bullish, const RegimeSnapshot &rs, bool isMomentumTrade = false, double momentumStrength = 0.0)
 {
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    
+    if(isMomentumTrade && momentumStrength > 0)
+    {
+        // For momentum trades, use adaptive targets based on momentum strength
+        double tpMultiplier = 3.0; // Default
+        
+        if(momentumStrength > 3.0)
+        {
+            // Very strong momentum (>3x ATR) - take quick profit as momentum may exhaust
+            tpMultiplier = 1.5;
+            if(InpLogDetailedInfo)
+                Print("[MOMENTUM TP] Strong surge detected (", DoubleToString(momentumStrength, 2), 
+                      "x ATR) - Using quick TP at ", DoubleToString(tpMultiplier, 1), "x ATR");
+        }
+        else if(momentumStrength > 2.0)
+        {
+            // Strong momentum (2-3x ATR) - moderate target
+            tpMultiplier = 2.0;
+            if(InpLogDetailedInfo)
+                Print("[MOMENTUM TP] Moderate surge (", DoubleToString(momentumStrength, 2), 
+                      "x ATR) - Using TP at ", DoubleToString(tpMultiplier, 1), "x ATR");
+        }
+        else if(momentumStrength > 1.5)
+        {
+            // Regular momentum (1.5-2x ATR) - standard target
+            tpMultiplier = 2.5;
+        }
+        
+        // Check for nearby key levels that could act as resistance/support
+        if(g_keyLevelDetector != NULL)
+        {
+            double proposedTP = bullish ? 
+                currentPrice + rs.atr_current * tpMultiplier : 
+                currentPrice - rs.atr_current * tpMultiplier;
+                
+            // Try to find a key level between current price and proposed TP
+            int levelCount = g_keyLevelDetector.GetKeyLevelCount();
+            double bestLevelPrice = 0;
+            double bestLevelStrength = 0;
+            
+            for(int i = 0; i < levelCount; i++)
+            {
+                SKeyLevel level;
+                if(g_keyLevelDetector.GetKeyLevel(i, level))
+                {
+                    // Check if level is in our target direction
+                    bool levelInDirection = bullish ? 
+                        (level.price > currentPrice && level.price < proposedTP) :
+                        (level.price < currentPrice && level.price > proposedTP);
+                    
+                    if(levelInDirection && level.strength > bestLevelStrength)
+                    {
+                        bestLevelPrice = level.price;
+                        bestLevelStrength = level.strength;
+                    }
+                }
+            }
+            
+            // If we found a strong key level, use it as target (with small buffer)
+            if(bestLevelPrice != 0 && bestLevelStrength >= InpMinStrength)
+            {
+                double buffer = 0.1 * rs.atr_current; // 10% ATR buffer before key level
+                double keyLevelTP = bullish ? bestLevelPrice - buffer : bestLevelPrice + buffer;
+                
+                // Only use key level if it gives us at least 1x ATR profit
+                double minDistance = rs.atr_current * 1.0;
+                if(MathAbs(keyLevelTP - currentPrice) >= minDistance)
+                {
+                    if(InpLogDetailedInfo)
+                        Print("[MOMENTUM TP] Using key level at ", DoubleToString(bestLevelPrice, _Digits),
+                              " (strength: ", DoubleToString(bestLevelStrength, 2), ") as TP target");
+                    return keyLevelTP;
+                }
+            }
+        }
+        
+        return bullish ? 
+            currentPrice + rs.atr_current * tpMultiplier : 
+            currentPrice - rs.atr_current * tpMultiplier;
+    }
+    
+    // Standard non-momentum target
     return bullish ? currentPrice + rs.atr_current * 3.0 : currentPrice - rs.atr_current * 3.0;
 }
 
@@ -3719,6 +4032,229 @@ double GetRSIValue(string symbol, ENUM_TIMEFRAMES tf, int period, int shift=0)
 }
 
 //+------------------------------------------------------------------+
+//| Get error description                                           |
+//+------------------------------------------------------------------+
+string ErrorDescription(int errorCode)
+{
+    switch(errorCode)
+    {
+        case 0:     return "No error";
+        case 1:     return "No error, but result unknown";
+        case 2:     return "Common error";
+        case 3:     return "Invalid trade parameters";
+        case 4:     return "Trade server is busy";
+        case 5:     return "Old version of client terminal";
+        case 6:     return "No connection with trade server";
+        case 7:     return "Not enough rights";
+        case 8:     return "Too frequent requests";
+        case 9:     return "Malfunctional trade operation";
+        case 64:    return "Account disabled";
+        case 65:    return "Invalid account";
+        case 128:   return "Trade timeout";
+        case 129:   return "Invalid price";
+        case 130:   return "Invalid stops";
+        case 131:   return "Invalid trade volume";
+        case 132:   return "Market is closed";
+        case 133:   return "Trade is disabled";
+        case 134:   return "Not enough money";
+        case 135:   return "Price changed";
+        case 136:   return "Off quotes";
+        case 137:   return "Broker is busy";
+        case 138:   return "Requote";
+        case 139:   return "Order is locked";
+        case 140:   return "Long positions only allowed";
+        case 141:   return "Too many requests";
+        case 145:   return "Modification denied because order too close to market";
+        case 146:   return "Trade context is busy";
+        case 147:   return "Expirations are denied by broker";
+        case 148:   return "Amount of open and pending orders has reached the limit";
+        case 10004:  return "Requote";
+        case 10006:  return "Request rejected";
+        case 10007:  return "Request canceled by trader";
+        case 10008:  return "Order placed";
+        case 10009:  return "Request completed";
+        case 10010:  return "Only part of request completed";
+        case 10011:  return "Request processing error";
+        case 10012:  return "Request canceled by timeout";
+        case 10013:  return "Invalid request";
+        case 10014:  return "Invalid volume";
+        case 10015:  return "Invalid price";
+        case 10016:  return "Invalid stops";
+        case 10017:  return "Trade disabled";
+        case 10018:  return "Market closed";
+        case 10019:  return "Not enough money";
+        case 10020:  return "Prices changed";
+        case 10021:  return "No quotes";
+        case 10022:  return "Invalid expiration date";
+        case 10023:  return "Order state changed";
+        case 10024:  return "Too frequent requests";
+        case 10025:  return "No changes";
+        case 10026:  return "Autotrading disabled by server";
+        case 10027:  return "Autotrading disabled by client";
+        case 10028:  return "Request locked for processing";
+        case 10029:  return "Order or position frozen";
+        case 10030:  return "Invalid order filling type";
+        case 10031:  return "No connection with trade server";
+        case 10032:  return "Operation allowed for live accounts only";
+        case 10033:  return "Pending orders limit exceeded";
+        case 10034:  return "Orders and positions limit exceeded";
+        case 10045:  return "Position with specified ID already closed or doesn't exist";
+        default:    return StringFormat("Unknown error %d", errorCode);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Add SL/TP to manual positions                                   |
+//+------------------------------------------------------------------+
+void AddSLTPToManualPositions()
+{
+    static bool hasLoggedPositionCheck = false;
+    int totalPositions = PositionsTotal();
+    int processedPositions = 0;
+    int positionsNeedingSLTP = 0;
+    
+    if(!hasLoggedPositionCheck && InpLogDetailedInfo && totalPositions > 0)
+    {
+        Print(StringFormat("[Grande] Checking %d total positions for missing SL/TP...", totalPositions));
+        hasLoggedPositionCheck = true;
+    }
+    
+    for(int i = 0; i < totalPositions; i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket))
+            continue;
+            
+        // Only process positions for our symbol
+        if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+            continue;
+            
+        processedPositions++;
+        
+        // Check if position has no SL/TP
+        double currentSL = PositionGetDouble(POSITION_SL);
+        double currentTP = PositionGetDouble(POSITION_TP);
+        
+        if(InpLogDetailedInfo)
+        {
+            ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            string typeStr = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+            Print(StringFormat("[Grande] Position #%I64u %s @%.5f: SL=%.5f, TP=%.5f", 
+                  ticket, typeStr, openPrice, currentSL, currentTP));
+        }
+        
+        // If position already has both SL and TP, skip it
+        if(currentSL != 0 && currentTP != 0)
+        {
+            if(InpLogDetailedInfo)
+                Print(StringFormat("[Grande] Position #%I64u already has SL/TP, skipping", ticket));
+            continue;
+        }
+        
+        positionsNeedingSLTP++;
+            
+        // Get position details
+        ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+        double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        bool isBuy = (type == POSITION_TYPE_BUY);
+        
+        // Calculate SL/TP based on current settings
+        double atr = 0.0;
+        int atrHandle = iATR(_Symbol, PERIOD_CURRENT, 14);
+        if(atrHandle != INVALID_HANDLE)
+        {
+            double atrBuf[];
+            ArraySetAsSeries(atrBuf, true);
+            if(CopyBuffer(atrHandle, 0, 0, 1, atrBuf) > 0)
+                atr = atrBuf[0];
+            IndicatorRelease(atrHandle);
+        }
+        
+        if(atr == 0)
+            atr = 100 * _Point; // Fallback to 100 points if ATR fails
+        
+        double sl = 0.0, tp = 0.0;
+        
+        if(currentSL == 0) // Only set SL if not already set
+        {
+            if(g_riskManager != NULL)
+            {
+                sl = g_riskManager.CalculateStopLoss(isBuy, openPrice, atr);
+            }
+            else
+            {
+                // Fallback calculation using default ATR multiplier
+                double slDistance = atr * 1.5; // Default 1.5x ATR for stop loss
+                sl = isBuy ? openPrice - slDistance : openPrice + slDistance;
+            }
+        }
+        else
+        {
+            sl = currentSL; // Keep existing SL
+        }
+        
+        if(currentTP == 0) // Only set TP if not already set
+        {
+            if(g_riskManager != NULL)
+            {
+                tp = g_riskManager.CalculateTakeProfit(isBuy, openPrice, sl);
+            }
+            else
+            {
+                // Fallback calculation using configured risk-reward ratio
+                double slDistance = MathAbs(openPrice - sl);
+                double tpDistance = slDistance * InpTPRewardRatio; // Use configured R:R ratio
+                tp = isBuy ? openPrice + tpDistance : openPrice - tpDistance;
+                
+                if(InpLogDetailedInfo)
+                {
+                    double tpPips = tpDistance / GetPipSize();
+                    double slPips = slDistance / GetPipSize();
+                    Print(StringFormat("[Grande] Manual Position #%I64u SL/TP calculation:", ticket));
+                    Print(StringFormat("[Grande]   Open: %.5f, SL: %.5f (%.1f pips), TP: %.5f (%.1f pips)", 
+                          openPrice, sl, slPips, tp, tpPips));
+                    Print(StringFormat("[Grande]   R:R Ratio: %.2f:1", InpTPRewardRatio));
+                }
+            }
+        }
+        else
+        {
+            tp = currentTP; // Keep existing TP
+        }
+        
+        // Normalize stops
+        NormalizeStops(isBuy, openPrice, sl, tp);
+        
+        // Modify position to add SL/TP
+        if((currentSL == 0 || currentTP == 0) && (sl != 0 || tp != 0))
+        {
+            if(g_trade.PositionModify(ticket, sl, tp))
+            {
+                Print(StringFormat("[Grande] ✅ Added SL/TP to manual position #%I64u - SL: %.5f, TP: %.5f", 
+                      ticket, sl, tp));
+            }
+            else
+            {
+                int error = GetLastError();
+                // ALWAYS LOG ALL ERRORS - NO SUPPRESSION
+                Print(StringFormat("[Grande] ❌ FAILED to add SL/TP to position #%I64u", ticket));
+                Print(StringFormat("[Grande] ❌ Error Code: %d - %s", error, ErrorDescription(error)));
+                Print(StringFormat("[Grande] ❌ Attempted SL: %.5f, TP: %.5f", sl, tp));
+                Print(StringFormat("[Grande] ❌ Trade Result: %d", g_trade.ResultRetcode()));
+            }
+        }
+    }
+    
+    // Summary log (only if positions were found)
+    if(InpLogDetailedInfo && processedPositions > 0)
+    {
+        Print(StringFormat("[Grande] SL/TP Check Summary: %d positions processed, %d needed SL/TP updates", 
+              processedPositions, positionsNeedingSLTP));
+    }
+}
+
+//+------------------------------------------------------------------+
 //| RSI-based exit management with partial closes                    |
 //+------------------------------------------------------------------+
 void ApplyRSIExitRules()
@@ -3736,6 +4272,14 @@ void ApplyRSIExitRules()
         double price  = (type == POSITION_TYPE_BUY ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
                                                    : SymbolInfoDouble(_Symbol, SYMBOL_ASK));
 
+        // Check if this position has previously failed partial close (error 10045)
+        string failKey = "PARTIAL_FAIL_" + IntegerToString(ticket);
+        if(ObjectFind(g_chartID, failKey) >= 0)
+        {
+            // Skip this position as it previously failed with unrecoverable error
+            continue;
+        }
+        
         // Cooldown check using chart objects
         string cooldownKey = StringFormat("RSIExitCooldown_%I64u", ticket);
         datetime lastTime = 0;
@@ -3789,23 +4333,78 @@ void ApplyRSIExitRules()
             }
         }
 
+        // Check for momentum exhaustion first (for momentum trades)
+        bool isMomentumTrade = (StringFind(PositionGetString(POSITION_COMMENT), "MOMENTUM") != -1);
+        bool momentumExhausted = false;
+        
+        if(isMomentumTrade)
+        {
+            momentumExhausted = IsMomentumExhausting(ticket);
+            if(momentumExhausted && InpLogDetailedInfo)
+            {
+                Print("[MOMENTUM EXIT] Position #", ticket, " showing exhaustion signals");
+            }
+        }
+        
+        // Check for RSI exit signals or momentum exhaustion
         bool exitSignal = false;
         if(type == POSITION_TYPE_BUY)
             exitSignal = (rsi_ctf >= InpRSIExitOB) || (rsi_h4 >= InpH4RSIOverbought);
         else
             exitSignal = (rsi_ctf <= InpRSIExitOS) || (rsi_h4 <= InpH4RSIOversold);
+        
+        // For momentum trades, also exit on exhaustion
+        if(!exitSignal && momentumExhausted)
+            exitSignal = true;
 
         if(!exitSignal) continue;
 
         double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
         double vmin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-        double closeVol = MathFloor(MathMax(vmin, vol * InpRSIPartialClose) / step) * step;
+        
+        // For momentum trades on exhaustion, close more aggressively (66% instead of normal %)
+        double partialClosePercent = InpRSIPartialClose;
+        if(isMomentumTrade && momentumExhausted)
+        {
+            partialClosePercent = 0.66; // Close 66% on momentum exhaustion
+            if(InpLogDetailedInfo)
+                Print("[MOMENTUM EXIT] Using aggressive partial close (66%) for exhausted momentum trade");
+        }
+        
+        double closeVol = MathFloor(MathMax(vmin, vol * partialClosePercent) / step) * step;
         if(closeVol < vmin || closeVol >= vol) continue;
         // Ensure minimum remaining volume
         if((vol - closeVol) < MathMax(vmin, InpMinRemainingVolume))
             continue;
 
         bool ok = g_trade.PositionClosePartial(ticket, closeVol);
+        
+        // ALWAYS LOG PARTIAL CLOSE ATTEMPTS
+        if(!ok)
+        {
+            int errorCode = g_trade.ResultRetcode();
+            // ALWAYS LOG THE ERROR
+            Print(StringFormat("[RSI EXIT] ❌ PARTIAL CLOSE FAILED for position #%I64u", ticket));
+            Print(StringFormat("[RSI EXIT] ❌ Error Code: %d - %s", errorCode, ErrorDescription(errorCode)));
+            Print(StringFormat("[RSI EXIT] ❌ Attempted volume: %.2f of %.2f total", closeVol, vol));
+            Print(StringFormat("[RSI EXIT] ❌ RSI Values - Current: %.1f, H4: %.1f", rsi_ctf, rsi_h4));
+            
+            // If error 10045 or similar, mark this position to skip future attempts
+            if(errorCode == 10045 || errorCode == 10006) // Position doesn't exist or invalid request
+            {
+                string failKey = "PARTIAL_FAIL_" + IntegerToString(ticket);
+                ObjectDelete(g_chartID, failKey);
+                ObjectCreate(g_chartID, failKey, OBJ_LABEL, 0, 0, 0);
+                ObjectSetString(g_chartID, failKey, OBJPROP_TOOLTIP, IntegerToString(errorCode));
+                ObjectSetInteger(g_chartID, failKey, OBJPROP_HIDDEN, true);
+                Print(StringFormat("[RSI EXIT] ⚠️ BLOCKING future attempts on position %I64u due to error %d", ticket, errorCode));
+            }
+        }
+        else
+        {
+            Print(StringFormat("[RSI EXIT] ✅ PARTIAL CLOSE SUCCESS - Position #%I64u, Volume: %.2f", ticket, closeVol));
+        }
+        
         if(InpLogDetailedInfo)
             Print(StringFormat("[RSI EXIT] %s ticket=%I64u vol=%.2f rsi_ctf=%.1f rsi_h4=%.1f pips=%.1f",
                                ok ? "PARTIAL-CLOSE" : "FAILED",
@@ -3879,6 +4478,218 @@ bool IsATRExpanding()
     }
     
     return isExpanding;
+}
+
+//+------------------------------------------------------------------+
+//| Check if momentum is exhausting for an open position            |
+//+------------------------------------------------------------------+
+bool IsMomentumExhausting(ulong positionTicket)
+{
+    if(!PositionSelectByTicket(positionTicket))
+        return false;
+    
+    // Check if this is a momentum trade (has MOMENTUM in comment)
+    string comment = PositionGetString(POSITION_COMMENT);
+    if(StringFind(comment, "MOMENTUM") == -1)
+        return false; // Not a momentum trade
+    
+    // Get position details
+    datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+    
+    // Calculate bars since entry
+    int barsSinceEntry = Bars(_Symbol, PERIOD_CURRENT, openTime, TimeCurrent());
+    
+    // Get current ATR for reference
+    int atrHandle = iATR(_Symbol, PERIOD_CURRENT, 14);
+    if(atrHandle == INVALID_HANDLE)
+        return false;
+    
+    double atrBuffer[];
+    ArraySetAsSeries(atrBuffer, true);
+    if(CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) <= 0)
+    {
+        IndicatorRelease(atrHandle);
+        return false;
+    }
+    double currentATR = atrBuffer[0];
+    IndicatorRelease(atrHandle);
+    
+    // Check multiple exhaustion signals
+    int exhaustionSignals = 0;
+    
+    // 1. Check if recent candles are small (momentum dying)
+    if(barsSinceEntry >= 2)
+    {
+        double lastCandle = MathAbs(iClose(_Symbol, PERIOD_CURRENT, 1) - iOpen(_Symbol, PERIOD_CURRENT, 1));
+        double prevCandle = MathAbs(iClose(_Symbol, PERIOD_CURRENT, 2) - iOpen(_Symbol, PERIOD_CURRENT, 2));
+        
+        if(lastCandle < 0.5 * currentATR && prevCandle < 0.5 * currentATR)
+        {
+            exhaustionSignals++;
+            if(InpLogDetailedInfo)
+                Print("[MOMENTUM EXHAUST] Small candles detected - momentum dying");
+        }
+    }
+    
+    // 2. Check for reversal wicks (rejection)
+    if(barsSinceEntry >= 1)
+    {
+        double high1 = iHigh(_Symbol, PERIOD_CURRENT, 1);
+        double low1 = iLow(_Symbol, PERIOD_CURRENT, 1);
+        double close1 = iClose(_Symbol, PERIOD_CURRENT, 1);
+        double open1 = iOpen(_Symbol, PERIOD_CURRENT, 1);
+        double body = MathAbs(close1 - open1);
+        double range = high1 - low1;
+        
+        // Check for wick rejection (small body, large wick)
+        if(range > 0 && body / range < 0.3) // Body is less than 30% of range
+        {
+            bool upperWick = (posType == POSITION_TYPE_BUY && high1 - MathMax(open1, close1) > body * 2);
+            bool lowerWick = (posType == POSITION_TYPE_SELL && MathMin(open1, close1) - low1 > body * 2);
+            
+            if(upperWick || lowerWick)
+            {
+                exhaustionSignals++;
+                if(InpLogDetailedInfo)
+                    Print("[MOMENTUM EXHAUST] Rejection wick detected");
+            }
+        }
+    }
+    
+    // 3. Check RSI divergence (if enabled)
+    if(InpEnableMTFRSI)
+    {
+        double rsi = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+        if(rsi > 0)
+        {
+            // For longs: price higher but RSI not making new high
+            if(posType == POSITION_TYPE_BUY && currentPrice > openPrice && rsi < 65)
+            {
+                exhaustionSignals++;
+                if(InpLogDetailedInfo)
+                    Print("[MOMENTUM EXHAUST] RSI divergence detected (price up, RSI weak)");
+            }
+            // For shorts: price lower but RSI not making new low
+            else if(posType == POSITION_TYPE_SELL && currentPrice < openPrice && rsi > 35)
+            {
+                exhaustionSignals++;
+                if(InpLogDetailedInfo)
+                    Print("[MOMENTUM EXHAUST] RSI divergence detected (price down, RSI strong)");
+            }
+        }
+    }
+    
+    // 4. Time-based exhaustion for strong momentum trades
+    if(StringFind(comment, "3x ATR") != -1 && barsSinceEntry > 5)
+    {
+        exhaustionSignals++;
+        if(InpLogDetailedInfo)
+            Print("[MOMENTUM EXHAUST] Strong momentum trade exceeded time limit (", barsSinceEntry, " bars)");
+    }
+    
+    // Return true if 2 or more exhaustion signals detected
+    return (exhaustionSignals >= 2);
+}
+
+//+------------------------------------------------------------------+
+//| Update trailing stop for momentum trades                         |
+//+------------------------------------------------------------------+
+void UpdateMomentumTrailingStop(ulong positionTicket)
+{
+    if(!PositionSelectByTicket(positionTicket))
+        return;
+    
+    // Check if this is a momentum trade
+    string comment = PositionGetString(POSITION_COMMENT);
+    if(StringFind(comment, "MOMENTUM") == -1)
+        return; // Not a momentum trade
+    
+    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+    double currentSL = PositionGetDouble(POSITION_SL);
+    double currentTP = PositionGetDouble(POSITION_TP);
+    
+    // Only trail if position is in profit
+    bool inProfit = (posType == POSITION_TYPE_BUY) ? 
+                    (currentPrice > openPrice) : 
+                    (currentPrice < openPrice);
+    
+    if(!inProfit) return;
+    
+    // Get current ATR
+    int atrHandle = iATR(_Symbol, PERIOD_CURRENT, 14);
+    if(atrHandle == INVALID_HANDLE) return;
+    
+    double atrBuffer[];
+    ArraySetAsSeries(atrBuffer, true);
+    if(CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) <= 0)
+    {
+        IndicatorRelease(atrHandle);
+        return;
+    }
+    double currentATR = atrBuffer[0];
+    IndicatorRelease(atrHandle);
+    
+    // Use aggressive trailing for momentum trades (0.5x ATR instead of standard 0.6-0.8x)
+    double trailDistance = currentATR * 0.5;
+    
+    // Check for very strong momentum (>3x ATR) - use even tighter trailing
+    if(StringFind(comment, "3x ATR") != -1 || StringFind(comment, "STRONG") != -1)
+    {
+        trailDistance = currentATR * 0.4; // Ultra-tight trailing for strong momentum
+        if(InpLogDetailedInfo)
+            Print("[MOMENTUM TRAIL] Using ultra-tight trailing (0.4x ATR) for strong momentum trade");
+    }
+    
+    double newSL = 0.0;
+    if(posType == POSITION_TYPE_BUY)
+    {
+        newSL = currentPrice - trailDistance;
+        // Only update if new SL is better than current
+        if(newSL > currentSL && newSL < currentPrice)
+        {
+            // Ensure minimum stop distance
+            double minDistance = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+            if(currentPrice - newSL < minDistance)
+                newSL = currentPrice - minDistance;
+            
+            newSL = NormalizeDouble(newSL, _Digits);
+            
+            if(g_trade.PositionModify(positionTicket, newSL, currentTP))
+            {
+                if(InpLogDetailedInfo)
+                    Print("[MOMENTUM TRAIL] Updated trailing stop for #", positionTicket, 
+                          " from ", DoubleToString(currentSL, _Digits), 
+                          " to ", DoubleToString(newSL, _Digits));
+            }
+        }
+    }
+    else // SELL position
+    {
+        newSL = currentPrice + trailDistance;
+        // Only update if new SL is better than current
+        if(newSL < currentSL && newSL > currentPrice)
+        {
+            // Ensure minimum stop distance
+            double minDistance = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+            if(newSL - currentPrice < minDistance)
+                newSL = currentPrice + minDistance;
+            
+            newSL = NormalizeDouble(newSL, _Digits);
+            
+            if(g_trade.PositionModify(positionTicket, newSL, currentTP))
+            {
+                if(InpLogDetailedInfo)
+                    Print("[MOMENTUM TRAIL] Updated trailing stop for #", positionTicket, 
+                          " from ", DoubleToString(currentSL, _Digits), 
+                          " to ", DoubleToString(newSL, _Digits));
+            }
+        }
+    }
 }
 
 bool IsNR7()
@@ -4266,11 +5077,15 @@ void CloseAllPositions()
             if(g_trade.PositionClose(ticket))
             {
                 closedCount++;
-                Print(StringFormat("[CLOSE] SUCCESS ticket=%I64u", ticket));
+                Print(StringFormat("[CLOSE] ✅ SUCCESS ticket=%I64u (%d of %d)", ticket, closedCount, n));
             }
             else
             {
-                Print(StringFormat("[CLOSE] FAIL ticket=%I64u err=%d", ticket, GetLastError()));
+                int error = GetLastError();
+                Print(StringFormat("[CLOSE] ❌ FAIL ticket=%I64u", ticket));
+                Print(StringFormat("[CLOSE] ❌ Error: %d - %s", error, ErrorDescription(error)));
+                Print(StringFormat("[CLOSE] ❌ Trade Result: %d", g_trade.ResultRetcode()));
+                Print("[CLOSE] ❌ Continuing with next position...");
             }
         }
     }
@@ -4393,9 +5208,19 @@ double CloseSymbolFifoVolume(const string symbol,
 
         if(!ok)
         {
-            if(InpLogDetailedInfo)
-                Print("[Grande] FIFO volume close failed for #", oldestTicket, " Error: ", GetLastError());
+            // ALWAYS LOG FIFO FAILURES - CRITICAL
+            int error = GetLastError();
+            Print(StringFormat("[Grande] ⚠️ FIFO CLOSE FAILED for position #%I64u", oldestTicket));
+            Print(StringFormat("[Grande] ⚠️ Error: %d - %s", error, ErrorDescription(error)));
+            Print(StringFormat("[Grande] ⚠️ Attempted volume: %.2f, Position volume: %.2f", allowable, oldestVolume));
+            Print(StringFormat("[Grande] ⚠️ Trade Result Code: %d", g_trade.ResultRetcode()));
+            Print("[Grande] ⚠️ FIFO closing sequence ABORTED due to error");
             break;
+        }
+        else
+        {
+            Print(StringFormat("[Grande] ✅ FIFO closed %.2f lots of position #%I64u successfully", 
+                  allowable, oldestTicket));
         }
 
         closed += allowable;
