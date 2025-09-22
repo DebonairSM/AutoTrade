@@ -183,6 +183,12 @@ datetime                      g_lastTriangleUpdate;
 datetime                      g_lastDisplayUpdate;
 long                          g_chartID;
 datetime                      g_lastRiskUpdate;
+
+// Signal analysis throttling variables
+datetime                      g_lastSignalAnalysisTime = 0;
+string                        g_lastRejectionReason = "";
+MARKET_REGIME                 g_lastAnalysisRegime = REGIME_RANGING;
+int                           g_signalAnalysisThrottleSeconds = 30; // Throttle signal analysis for 30 seconds after rejection
 datetime                      g_lastCalendarUpdate;
 
 // Cached RSI values per management cycle
@@ -1870,6 +1876,37 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         hasWarnedAboutOpenPosition = false;
     }
     
+    // THROTTLING FIX: Prevent repeated signal analysis when previous analysis was rejected
+    datetime currentTime = TimeCurrent();
+    bool shouldThrottle = false;
+    
+    // Check if we should throttle signal analysis
+    if(g_lastSignalAnalysisTime > 0 && 
+       (currentTime - g_lastSignalAnalysisTime) < g_signalAnalysisThrottleSeconds &&
+       g_lastAnalysisRegime == rs.regime &&
+       !HasOpenPositionForSymbolAndMagic(_Symbol, InpMagicNumber))
+    {
+        // Only throttle if we're in the same regime and no position exists
+        shouldThrottle = true;
+        
+        if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "⏸️ THROTTLED: Signal analysis throttled for ", 
+                  g_signalAnalysisThrottleSeconds - (currentTime - g_lastSignalAnalysisTime), 
+                  " more seconds (last rejection: ", g_lastRejectionReason, ")");
+        }
+    }
+    
+    // THROTTLING FIX: Skip signal analysis if throttled
+    if(shouldThrottle)
+    {
+        return;
+    }
+    
+    // Update throttling variables before analysis
+    g_lastSignalAnalysisTime = currentTime;
+    g_lastAnalysisRegime = rs.regime;
+    
     // Smart logging - only once per session or verbose mode
     static bool hasLoggedAnalysisStart = false;
     if(InpLogDetailedInfo && !hasLoggedAnalysisStart)
@@ -1996,6 +2033,9 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     
     if(!Signal_TREND(bullish, rs)) 
     {
+        // Update throttling variables for rejection
+        g_lastRejectionReason = "Signal criteria not met - " + direction + " trend signal";
+        
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ ", direction, " trend signal REJECTED - signal criteria not met");
         return;
@@ -2003,6 +2043,84 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     
     if(InpLogDetailedInfo)
         Print(logPrefix + "✅ ", direction, " trend signal CONFIRMED - proceeding with trade execution");
+    
+    // *** FINBERT SENTIMENT INTEGRATION ***
+    // Get FinBERT sentiment data
+    string finbert_signal = "";
+    double finbert_score = 0.0;
+    double finbert_confidence = 0.0;
+    double sentiment_multiplier = 1.0;
+    
+    if(InpEnableCalendarAI)
+    {
+        finbert_signal = g_newsSentiment.GetCalendarSignal();
+        finbert_score = g_newsSentiment.GetCalendarScore();
+        finbert_confidence = g_newsSentiment.GetCalendarConfidence();
+        
+        // Store sentiment data for tracking
+        execution.calendar_signal = finbert_signal;
+        execution.calendar_confidence = finbert_confidence;
+        
+        if(StringLen(finbert_signal) > 0 && finbert_confidence >= 0.4)
+        {
+            // Check sentiment alignment with trade direction
+            bool sentiment_bullish = (finbert_signal == "STRONG_BUY" || finbert_signal == "BUY");
+            bool sentiment_bearish = (finbert_signal == "STRONG_SELL" || finbert_signal == "SELL");
+            bool sentiment_neutral = (finbert_signal == "NEUTRAL");
+            
+            if(InpLogDetailedInfo)
+            {
+                Print(logPrefix + "📊 FinBERT Analysis: ", finbert_signal, " (score: ", DoubleToString(finbert_score, 2), 
+                      ", confidence: ", DoubleToString(finbert_confidence, 2), ")");
+            }
+            
+            // Apply sentiment-based adjustments
+            if((bullish && sentiment_bullish) || (!bullish && sentiment_bearish))
+            {
+                // Sentiment supports trade direction - boost position size
+                if(finbert_confidence >= 0.7)
+                    sentiment_multiplier = 1.3; // 30% increase for high confidence
+                else if(finbert_confidence >= 0.5)
+                    sentiment_multiplier = 1.15; // 15% increase for medium confidence
+                
+                if(InpLogDetailedInfo)
+                    Print(logPrefix + "✅ FinBERT SUPPORTS trade direction - position multiplier: ", DoubleToString(sentiment_multiplier, 2));
+            }
+            else if((bullish && sentiment_bearish) || (!bullish && sentiment_bullish))
+            {
+                // Sentiment opposes trade direction
+                if(finbert_confidence >= 0.7)
+                {
+                    // High confidence opposing signal - block trade
+                    execution.decision = "REJECTED";
+                    execution.rejection_reason = StringFormat("FinBERT opposing signal: %s (conf %.2f)", finbert_signal, finbert_confidence);
+                    if(g_reporter != NULL) g_reporter.RecordDecision(execution);
+                    
+                    if(InpLogDetailedInfo)
+                        Print(logPrefix + "❌ TRADE BLOCKED: FinBERT high-confidence opposing signal (", finbert_signal, ")");
+                    return;
+                }
+                else
+                {
+                    // Lower confidence opposing - reduce position size
+                    sentiment_multiplier = 0.7; // 30% reduction
+                    if(InpLogDetailedInfo)
+                        Print(logPrefix + "⚠️ FinBERT OPPOSES trade direction - reducing position size: ", DoubleToString(sentiment_multiplier, 2));
+                }
+            }
+            else if(sentiment_neutral && finbert_confidence >= 0.6)
+            {
+                // High confidence neutral - slight reduction
+                sentiment_multiplier = 0.9; // 10% reduction
+                if(InpLogDetailedInfo)
+                    Print(logPrefix + "⚖️ FinBERT NEUTRAL - slight position reduction: ", DoubleToString(sentiment_multiplier, 2));
+            }
+        }
+        else if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "📊 FinBERT: No reliable sentiment data (signal: ", finbert_signal, ", conf: ", DoubleToString(finbert_confidence, 2), ")");
+        }
+    }
     
     // Calculate position size using risk manager
     double stopDistancePips = rs.atr_current * 1.2 / _Point;
@@ -2019,13 +2137,22 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     {
         lot = g_riskManager.CalculateLotSize(stopDistancePips, rs.regime);
         if(InpLogDetailedInfo)
-            Print(logPrefix + "  Lot Size (Risk Manager): ", DoubleToString(lot, 2));
+            Print(logPrefix + "  Base Lot Size (Risk Manager): ", DoubleToString(lot, 2));
     }
     else
     {
         lot = CalcLot(rs.regime); // Fallback to old method
         if(InpLogDetailedInfo)
-            Print(logPrefix + "  Lot Size (Fallback): ", DoubleToString(lot, 2));
+            Print(logPrefix + "  Base Lot Size (Fallback): ", DoubleToString(lot, 2));
+    }
+    
+    // Apply FinBERT sentiment multiplier
+    if(sentiment_multiplier != 1.0)
+    {
+        double original_lot = lot;
+        lot = lot * sentiment_multiplier;
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "  FinBERT Adjustment: ", DoubleToString(original_lot, 2), " × ", DoubleToString(sentiment_multiplier, 2), " = ", DoubleToString(lot, 2));
     }
 
     // Normalize lot to symbol volume step and bounds
@@ -2324,6 +2451,9 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     
     if(!Signal_BREAKOUT(rs)) 
     {
+        // Update throttling variables for rejection
+        g_lastRejectionReason = "Signal criteria not met - BREAKOUT signal";
+        
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ Breakout signal REJECTED - signal criteria not met");
         return;
@@ -2557,6 +2687,9 @@ void RangeTrade(const RegimeSnapshot &rs)
     
     if(!Signal_RANGE(rs)) 
     {
+        // Update throttling variables for rejection
+        g_lastRejectionReason = "Signal criteria not met - RANGE signal";
+        
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ Range signal REJECTED - signal criteria not met");
         return;
@@ -2971,7 +3104,45 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     }
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double pullbackDistance = MathAbs(currentPrice - ema20);
-    bool pullbackValid = (pullbackDistance <= rs.atr_current);
+    
+    // *** FINBERT-BASED DYNAMIC PULLBACK ADJUSTMENT ***
+    double pullbackMultiplier = 1.0; // Default ATR multiplier
+    string finbert_signal = "";
+    double finbert_confidence = 0.0;
+    
+    if(InpEnableCalendarAI)
+    {
+        finbert_signal = g_newsSentiment.GetCalendarSignal();
+        finbert_confidence = g_newsSentiment.GetCalendarConfidence();
+        
+        if(StringLen(finbert_signal) > 0 && finbert_confidence >= 0.4)
+        {
+            bool sentiment_bullish = (finbert_signal == "STRONG_BUY" || finbert_signal == "BUY");
+            bool sentiment_bearish = (finbert_signal == "STRONG_SELL" || finbert_signal == "SELL");
+            
+            // If FinBERT sentiment supports the trade direction, allow more pullback
+            if((bullish && sentiment_bullish) || (!bullish && sentiment_bearish))
+            {
+                if(finbert_confidence >= 0.7)
+                    pullbackMultiplier = 2.0; // Allow 2x ATR for high confidence supporting sentiment
+                else if(finbert_confidence >= 0.5)
+                    pullbackMultiplier = 1.5; // Allow 1.5x ATR for medium confidence
+                
+                if(InpLogDetailedInfo)
+                    Print(logPrefix + "📊 FinBERT supports trade direction - pullback tolerance increased to ", DoubleToString(pullbackMultiplier, 1), "x ATR");
+            }
+            // If sentiment opposes but with low confidence, slightly relax
+            else if(finbert_confidence < 0.6)
+            {
+                pullbackMultiplier = 1.2; // Slight relaxation for low confidence opposition
+                if(InpLogDetailedInfo)
+                    Print(logPrefix + "📊 FinBERT low confidence - slight pullback tolerance increase to ", DoubleToString(pullbackMultiplier, 1), "x ATR");
+            }
+        }
+    }
+    
+    double adjustedATRLimit = rs.atr_current * pullbackMultiplier;
+    bool pullbackValid = (pullbackDistance <= adjustedATRLimit);
     
     if(InpLogDetailedInfo)
     {
@@ -2979,18 +3150,22 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         Print(logPrefix + "  Current Price: ", DoubleToString(currentPrice, _Digits));
         Print(logPrefix + "  EMA20: ", DoubleToString(ema20, _Digits));
         Print(logPrefix + "  Distance to EMA20: ", DoubleToString(pullbackDistance, _Digits), " (", DoubleToString(pullbackDistance / _Point, 1), " pips)");
-        Print(logPrefix + "  ATR Limit: ", DoubleToString(rs.atr_current, _Digits), " (", DoubleToString(rs.atr_current / _Point, 1), " pips)");
+        Print(logPrefix + "  Base ATR Limit: ", DoubleToString(rs.atr_current, _Digits), " (", DoubleToString(rs.atr_current / _Point, 1), " pips)");
+        Print(logPrefix + "  Adjusted ATR Limit: ", DoubleToString(adjustedATRLimit, _Digits), " (", DoubleToString(adjustedATRLimit / _Point, 1), " pips)");
+        Print(logPrefix + "  FinBERT Multiplier: ", DoubleToString(pullbackMultiplier, 1), "x");
         Print(logPrefix + "  Pullback Valid: ", pullbackValid ? "✅ WITHIN LIMIT" : "❌ TOO FAR");
     }
     
     if(!pullbackValid)
     {
         if(InpLogDetailedInfo)
-            Print(logPrefix + "❌ SIGNAL BLOCKED: Price too far from EMA20 (pullback > 1×ATR)");
+            Print(logPrefix + "❌ SIGNAL BLOCKED: Price too far from EMA20 (pullback > ", DoubleToString(pullbackMultiplier, 1), "×ATR)");
         
-        rejection_reason = StringFormat("Pullback too far - Distance: %.1f pips, Limit: %.1f pips",
+        rejection_reason = StringFormat("Pullback too far - Distance: %.1f pips, Limit: %.1f pips (%.1fx ATR%s)",
                                        pullbackDistance / _Point,
-                                       rs.atr_current / _Point);
+                                       adjustedATRLimit / _Point,
+                                       pullbackMultiplier,
+                                       (pullbackMultiplier > 1.0 ? " FinBERT-adjusted" : ""));
         decision.decision = "REJECTED";
         decision.rejection_reason = rejection_reason;
         if(g_reporter != NULL) g_reporter.RecordDecision(decision);
