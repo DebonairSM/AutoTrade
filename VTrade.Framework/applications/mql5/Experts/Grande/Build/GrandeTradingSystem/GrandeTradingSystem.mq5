@@ -925,11 +925,16 @@ void OnTimer()
                 else if(finalError == 4203)
                 {
                     // Error 4203 is normal when positions already have SL/TP set or are being processed
-                    if(InpLogDetailedInfo)
-                        Print("[Grande] ℹ️ Position already processed (error 4203) - not counting as consecutive error");
+                    // Don't count as consecutive error and don't increment error counter
+                    if(InpLogDetailedInfo && consecutive4203Errors % 20 == 0) // Only log every 20th occurrence
+                        Print("[Grande] ℹ️ Position modification skipped (error 4203) - position already processed or invalid");
 
-                    // Track 4203 errors for throttling purposes
+                    // Reset consecutive errors since 4203 is not a real error
+                    consecutiveRMErrors = 0;
+                    
+                    // Track 4203 errors for throttling purposes but don't let them accumulate
                     consecutive4203Errors++;
+                    if(consecutive4203Errors > 100) consecutive4203Errors = 10; // Reset to prevent overflow
                     last4203ErrorTime = TimeCurrent();
                 }
                 else
@@ -1102,7 +1107,7 @@ void OnTimer()
             }
             else
             {
-                Print("[CAL-AI] Calendar analysis unavailable. Ensure MCP server and Docker FinBERT are running.");
+                Print("[CAL-AI] Calendar analysis unavailable. Ensure Python dependencies are installed.");
             }
         }
         g_lastCalendarUpdate = currentTime;
@@ -3293,7 +3298,7 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     double pullbackDistance = MathAbs(currentPrice - ema20);
     
     // *** FINBERT-BASED DYNAMIC PULLBACK ADJUSTMENT ***
-    double pullbackMultiplier = 1.0; // Default ATR multiplier
+    double pullbackMultiplier = 2.0; // Default ATR multiplier (increased from 1.0 for better market adaptation)
     string finbert_signal = "";
     double finbert_confidence = 0.0;
     
@@ -3311,9 +3316,9 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
             if((bullish && sentiment_bullish) || (!bullish && sentiment_bearish))
             {
                 if(finbert_confidence >= 0.7)
-                    pullbackMultiplier = 2.0; // Allow 2x ATR for high confidence supporting sentiment
+                    pullbackMultiplier = 3.0; // Allow 3x ATR for high confidence supporting sentiment
                 else if(finbert_confidence >= 0.5)
-                    pullbackMultiplier = 1.5; // Allow 1.5x ATR for medium confidence
+                    pullbackMultiplier = 2.5; // Allow 2.5x ATR for medium confidence
                 
                 if(InpLogDetailedInfo)
                     Print(logPrefix + "📊 FinBERT supports trade direction - pullback tolerance increased to ", DoubleToString(pullbackMultiplier, 1), "x ATR");
@@ -3321,7 +3326,7 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
             // If sentiment opposes but with low confidence, slightly relax
             else if(finbert_confidence < 0.6)
             {
-                pullbackMultiplier = 1.2; // Slight relaxation for low confidence opposition
+                pullbackMultiplier = 2.2; // Slight relaxation for low confidence opposition (increased from 1.2)
                 if(InpLogDetailedInfo)
                     Print(logPrefix + "📊 FinBERT low confidence - slight pullback tolerance increase to ", DoubleToString(pullbackMultiplier, 1), "x ATR");
             }
@@ -3472,7 +3477,7 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         }
     }
     
-    // RSI(14) 40-60 reset, then hook with price continuation
+    // RSI momentum validation - adjusted for trend trading
     int rsi_handle = iRSI(_Symbol, PERIOD_CURRENT, InpRSIPeriod, PRICE_CLOSE);
     double rsi = 0, rsi_prev = 0;
     
@@ -3500,16 +3505,44 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         return false;
     }
     
-    bool rsiCondition = bullish ? 
-                       (rsi > 40 && rsi < 60 && rsi > rsi_prev) :
-                       (rsi > 40 && rsi < 60 && rsi < rsi_prev);
+    // FIX: Improved RSI logic for trend trading
+    // For BULLISH (long): Avoid extreme overbought (RSI > 80) 
+    // For BEARISH (short): Avoid extreme oversold (RSI < 20)
+    // This allows trading in trending conditions where RSI stays extended
+    bool rsiCondition = false;
+    if(bullish)
+    {
+        // For longs: RSI not extreme overbought AND rising
+        rsiCondition = (rsi < 80 && rsi > rsi_prev);
+        // Optional: Also avoid extreme oversold for longs
+        if(rsi < 25) rsiCondition = false; // Don't catch falling knives
+    }
+    else // bearish
+    {
+        // For shorts: RSI not extreme oversold AND falling
+        rsiCondition = (rsi > 20 && rsi < rsi_prev);
+        // Optional: Also avoid extreme overbought for shorts
+        if(rsi > 75) rsiCondition = false; // Don't short at exhaustion tops
+    }
     
     if(InpLogDetailedInfo)
     {
         Print(logPrefix + "4. RSI Momentum Analysis:");
         Print(logPrefix + "  RSI Current: ", DoubleToString(rsi, 2));
         Print(logPrefix + "  RSI Previous: ", DoubleToString(rsi_prev, 2));
-        Print(logPrefix + "  RSI in Range (40-60): ", (rsi > 40 && rsi < 60) ? "✅" : "❌");
+        
+        // Show appropriate range based on direction
+        if(bullish)
+        {
+            Print(logPrefix + "  RSI Valid Range: < 80 (not extreme overbought)");
+            Print(logPrefix + "  RSI in Valid Range: ", (rsi < 80 && rsi > 25) ? "✅" : "❌");
+        }
+        else // bearish
+        {
+            Print(logPrefix + "  RSI Valid Range: > 20 (not extreme oversold)");
+            Print(logPrefix + "  RSI in Valid Range: ", (rsi > 20 && rsi < 75) ? "✅" : "❌");
+        }
+        
         Print(logPrefix + "  RSI Direction: ", bullish ? (rsi > rsi_prev ? "✅ RISING" : "❌ FALLING") : 
                                                         (rsi < rsi_prev ? "✅ FALLING" : "❌ RISING"));
         Print(logPrefix + "  RSI Condition: ", rsiCondition ? "✅ CONFIRMED" : "❌ REJECTED");
@@ -3520,8 +3553,23 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ SIGNAL BLOCKED: RSI momentum not aligned with ", direction, " trend");
         
-        rejection_reason = StringFormat("RSI conditions failed - Current: %.1f (need 40-60 and %s)",
-                                       rsi, bullish ? "rising" : "falling");
+        // Updated rejection message to reflect new logic
+        string rsiRejectionDetail = "";
+        if(bullish)
+        {
+            if(rsi >= 80) rsiRejectionDetail = "RSI too high (>=80)";
+            else if(rsi < 25) rsiRejectionDetail = "RSI too low (<25)";
+            else rsiRejectionDetail = "RSI not rising";
+        }
+        else // bearish
+        {
+            if(rsi <= 20) rsiRejectionDetail = "RSI too low (<=20)";
+            else if(rsi > 75) rsiRejectionDetail = "RSI too high (>75)";
+            else rsiRejectionDetail = "RSI not falling";
+        }
+        
+        rejection_reason = StringFormat("RSI conditions failed - Current: %.1f (%s)",
+                                       rsi, rsiRejectionDetail);
         decision.decision = "REJECTED";
         decision.rejection_reason = rejection_reason;
         decision.rsi_current = rsi;
@@ -3534,10 +3582,15 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         Print(logPrefix + "🎯 ALL CRITERIA PASSED - ", direction, " TREND SIGNAL CONFIRMED!");
         Print(logPrefix + "  ✅ Trend Follower (if enabled)");
         Print(logPrefix + "  ✅ EMA Alignment (H1 & H4)");
-        Print(logPrefix + "  ✅ Price Pullback (≤ 1×ATR from EMA20)");
+        Print(logPrefix + "  ✅ Price Pullback (≤ 2×ATR from EMA20)");
         if(InpEnableMTFRSI)
             Print(logPrefix + "  ✅ Multi-TF RSI (H4/D1 not exhausted)");
-        Print(logPrefix + "  ✅ RSI Momentum (40-60 range with correct direction)");
+        
+        // Updated success message with new RSI logic
+        if(bullish)
+            Print(logPrefix + "  ✅ RSI Momentum (not overbought & rising)");
+        else
+            Print(logPrefix + "  ✅ RSI Momentum (not oversold & falling)");
     }
     
     // Track successful signal

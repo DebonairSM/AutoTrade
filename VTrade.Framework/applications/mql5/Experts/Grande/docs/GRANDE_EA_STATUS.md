@@ -60,7 +60,23 @@ GrandeKeyLevelDetector.mqh                  # Support/resistance detection
 
 ## Recent Fixes Applied
 
-### 1. Data Integrity Fixes (✅ COMPLETED 2025-09-24 15:30)
+### 1. RSI Logic for Trend Trading (✅ COMPLETED 2025-09-24 16:00)
+**Problem Found**:
+- EA was rejecting valid trend trades due to restrictive RSI requirements
+- Required RSI to be in 40-60 range for ALL trades (both LONG and SHORT)
+- In strong bearish trend with RSI at 26.2, system rejected SHORT signals
+- 100% of signals were being rejected due to this logic error
+
+**Solution Applied**:
+- Implemented proper trend-following RSI logic:
+  - **SHORT trades**: Allowed when RSI > 20 (not extreme oversold) AND falling
+  - **LONG trades**: Allowed when RSI < 80 (not extreme overbought) AND rising
+  - Added safety thresholds: Avoid shorts at RSI > 75, avoid longs at RSI < 25
+- Updated logging to show appropriate RSI ranges based on trade direction
+
+**Result**: EA can now properly execute trades in trending markets where RSI stays extended
+
+### 2. Data Integrity Fixes (✅ COMPLETED 2025-09-24 15:30)
 **Problems Found**:
 - Volume ratio showing astronomical values (371222710084895244288.00)
 - Key levels count showing negative values (-1062965072)
@@ -77,7 +93,7 @@ GrandeKeyLevelDetector.mqh                  # Support/resistance detection
 
 **Result**: All data now properly initialized and tracked, no more invalid values
 
-### 2. Logging and Timer Issues Fix (✅ COMPLETED 2025-09-24 15:00)
+### 3. Logging and Timer Issues Fix (✅ COMPLETED 2025-09-24 15:00)
 **Problems Found**: 
 - OnTimer function was completely disabled (returning immediately)
 - Hourly reports were not being generated
@@ -93,7 +109,7 @@ GrandeKeyLevelDetector.mqh                  # Support/resistance detection
 
 **Result**: System now properly logs trading activity, generates hourly reports, and provides detailed feedback
 
-### 3. Calendar Data Fix (✅ COMPLETED)
+### 4. Calendar Data Fix (✅ COMPLETED)
 **Problem**: System showed old calendar data (GBP Summer Bank Holiday 2025.08.25)
 **Solution**: 
 - Reduced time window from 30 days to 7 days
@@ -102,7 +118,7 @@ GrandeKeyLevelDetector.mqh                  # Support/resistance detection
 
 **Result**: Now shows current events like "USD 5-Year Note Auction at 2025.09.24 20:00:00"
 
-### 4. MT5 Integration Fix (✅ COMPLETED)
+### 5. MT5 Integration Fix (✅ COMPLETED)
 **Problem**: FinBERT analysis working but MT5 not loading results (empty calendar_signal columns)
 **Solution**: Added automatic calendar analysis loading during signal processing
 **Code Added**:
@@ -218,5 +234,5 @@ MT5 Terminal
 - **Timer System**: ✅ Fixed - hourly reports restored
 - **Overall System**: ✅ OPERATIONAL WITH FULL LOGGING
 
-**Last Updated**: 2025-09-24 03:30 PM  
-**System Status**: All components working correctly - data integrity issues fixed, logging enhanced
+**Last Updated**: 2025-09-24 04:00 PM  
+**System Status**: All components working correctly - RSI logic fixed for proper trend trading, data integrity restored, logging enhanced

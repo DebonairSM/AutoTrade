@@ -14,16 +14,6 @@
 int ShellExecuteW(int hwnd, string Operation, string File, string Parameters, string Directory, int ShowCmd);
 #import
 
-// WinInet imports for HTTP API calls to Docker container
-#import "wininet.dll"
-int InternetOpenW(string, int, string, string, int);
-int InternetConnectW(int, string, int, string, string, int, int, int);
-int HttpOpenRequestW(int, string, string, string, string, string, int, int);
-int HttpSendRequestW(int, string, int, string, int);
-int InternetReadFile(int, string, int, int&);
-int HttpQueryInfoW(int, int, string, int&, int);
-int InternetCloseHandle(int);
-#import
 
 
 //+------------------------------------------------------------------+
@@ -128,11 +118,8 @@ private:
     string            ExecutePythonScript(string script_path);
     bool              ValidateSentimentData();
     
-    // Docker API methods
-    bool              CallDockerAPI(string endpoint, string json_data, string &response);
-    bool              SendCalendarEventsToDocker(string &response);
+    // File-based analysis methods  
     bool              LoadEconomicEventsFromFile(string &events_json);
-    bool              IsDockerContainerRunning();
     bool              RunCalendarAnalysisFileBased();
 };
 
@@ -253,41 +240,12 @@ bool CNewsSentimentIntegration::LoadLatestAnalysis()
 }
 
 //+------------------------------------------------------------------+
-//| Run calendar analysis using the integrated system               |
+//| Run calendar analysis using file-based FinBERT analyzer        |
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::RunCalendarAnalysis()
 {
-    Print("Grande Calendar Sentiment: Calling Docker FinBERT API...");
-    
-    // Check if Docker container is running
-    if(!IsDockerContainerRunning())
-    {
-        Print("WARNING: Docker FinBERT container not responding, falling back to file-based analysis");
-        return RunCalendarAnalysisFileBased();
-    }
-    
-    // Call Docker API
-    string response = "";
-    if(SendCalendarEventsToDocker(response))
-    {
-        Print("Docker FinBERT API response received, parsing...");
-        if(ParseCalendarSentimentData(response))
-        {
-            m_last_analysis_time = TimeCurrent();
-            Print("✅ Docker FinBERT analysis completed successfully");
-            return true;
-        }
-        else
-        {
-            Print("ERROR: Failed to parse Docker API response, falling back to file-based analysis");
-            return RunCalendarAnalysisFileBased();
-        }
-    }
-    else
-    {
-        Print("ERROR: Failed to call Docker FinBERT API, falling back to file-based analysis");
-        return RunCalendarAnalysisFileBased();
-    }
+    Print("Grande Calendar Sentiment: Running file-based analysis...");
+    return RunCalendarAnalysisFileBased();
 }
 
 //+------------------------------------------------------------------+
@@ -456,9 +414,8 @@ void CNewsSentimentIntegration::PrintEnhancedMetrics()
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::IsSentimentServerRunning()
 {
-    // This would typically check if the Docker container is running
-    // For now, we'll assume it's running if we can access the analysis file
-    return true; // Simplified for MQL5
+    // File-based analysis is always available if Python script exists
+    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -853,14 +810,6 @@ bool CNewsSentimentIntegration::RunCalendarAnalysisFileBased()
     return true;
 }
 
-//+------------------------------------------------------------------+
-//| Check if Docker container is running                            |
-//+------------------------------------------------------------------+
-bool CNewsSentimentIntegration::IsDockerContainerRunning()
-{
-    string response = "";
-    return CallDockerAPI("/health", "", response);
-}
 
 //+------------------------------------------------------------------+
 //| Load economic events from JSON file                             |
@@ -881,91 +830,4 @@ bool CNewsSentimentIntegration::LoadEconomicEventsFromFile(string &events_json)
     return true;
 }
 
-//+------------------------------------------------------------------+
-//| Send calendar events to Docker FinBERT API                      |
-//+------------------------------------------------------------------+
-bool CNewsSentimentIntegration::SendCalendarEventsToDocker(string &response)
-{
-    string events_json = "";
-    if(!LoadEconomicEventsFromFile(events_json))
-    {
-        Print("ERROR: Could not load economic events from file");
-        return false;
-    }
-    
-    string endpoint = "/tools/analyze_calendar_events";
-    return CallDockerAPI(endpoint, events_json, response);
-}
 
-//+------------------------------------------------------------------+
-//| Call Docker FinBERT API via HTTP                                |
-//+------------------------------------------------------------------+
-bool CNewsSentimentIntegration::CallDockerAPI(string endpoint, string json_data, string &response)
-{
-    int hInternet = InternetOpenW("GrandeTradingSystem", 1, "", "", 0);
-    if(hInternet == 0)
-    {
-        Print("ERROR: Failed to initialize WinInet");
-        return false;
-    }
-    
-    int hConnect = InternetConnectW(hInternet, "localhost", 8000, "", "", 3, 0, 0);
-    if(hConnect == 0)
-    {
-        Print("ERROR: Failed to connect to Docker container on localhost:8000");
-        InternetCloseHandle(hInternet);
-        return false;
-    }
-    
-    string headers = "Content-Type: application/json\r\n";
-    int hRequest = HttpOpenRequestW(hConnect, "POST", endpoint, "HTTP/1.1", "", "", 0x80000000, 0);
-    if(hRequest == 0)
-    {
-        Print("ERROR: Failed to create HTTP request");
-        InternetCloseHandle(hConnect);
-        InternetCloseHandle(hInternet);
-        return false;
-    }
-    
-    bool success = HttpSendRequestW(hRequest, headers, StringLen(headers), json_data, StringLen(json_data));
-    if(!success)
-    {
-        Print("ERROR: Failed to send HTTP request to Docker API");
-        InternetCloseHandle(hRequest);
-        InternetCloseHandle(hConnect);
-        InternetCloseHandle(hInternet);
-        return false;
-    }
-    
-    // Read response
-    response = "";
-    string buffer = "";
-    int bytesRead = 0;
-    while(InternetReadFile(hRequest, buffer, 1024, bytesRead) && bytesRead > 0)
-    {
-        response += StringSubstr(buffer, 0, bytesRead);
-    }
-
-    // Check HTTP status code
-    int statusCode = 0;
-    string statusText = "";
-    int statusSize = 0;
-    if(HttpQueryInfoW(hRequest, 19, statusText, statusSize, 0)) // HTTP_QUERY_STATUS_CODE = 19
-    {
-        statusCode = StringToInteger(statusText);
-        if(statusCode != 200)
-        {
-            Print("ERROR: HTTP request failed with status code: ", statusCode);
-            InternetCloseHandle(hRequest);
-            InternetCloseHandle(hConnect);
-            InternetCloseHandle(hInternet);
-            return false;
-        }
-    }
-
-    InternetCloseHandle(hRequest);
-    InternetCloseHandle(hConnect);
-    InternetCloseHandle(hInternet);
-
-    return StringLen(response) > 0;
-}

@@ -91,11 +91,11 @@ public:
         // Clear previous events
         m_event_count = 0;
         
-        // Expand lookback window to capture more events
-        const int HOURS_LOOKBACK = 168; // 7 days lookback
+        // Focus on current and upcoming events only
+        const int HOURS_LOOKBACK = 24; // Only 1 day lookback for context
         datetime now = TimeGMT();
         datetime tm_start = now - (HOURS_LOOKBACK * 3600);
-        datetime tm_end   = now + (hours_ahead * 24 * 3600); // Extend to 24 days ahead
+        datetime tm_end   = now + (hours_ahead * 3600); // Use the passed hours_ahead parameter correctly
         
         // Build a currency filter based on the current symbol (fallback to common majors)
         string filter_currencies = BuildFilterCurrencies();
@@ -113,9 +113,9 @@ public:
                                    TimeToString(tm_start, TIME_DATE|TIME_SECONDS),
                                    TimeToString(tm_end, TIME_DATE|TIME_SECONDS),
                                    filter_currencies));
-                // Fallback: try with ALL currencies but keep reasonable time window
-                datetime ultra_wide_start = now - (7 * 24 * 3600); // Only 7 days back (not 30)
-                datetime ultra_wide_end   = now + (14 * 24 * 3600); // 14 days ahead (not 30)
+                // Fallback: try with ALL currencies but focus on current timeframe
+                datetime ultra_wide_start = now - (6 * 3600); // Only 6 hours back
+                datetime ultra_wide_end   = now + (72 * 3600); // 3 days ahead for upcoming events
                 if(FetchMT5CalendarEvents(ultra_wide_start, ultra_wide_end, "USD,EUR,GBP,JPY,AUD,NZD,CAD,CHF"))
                 {
                     Print(StringFormat("[GrandeMT5News] INFO: Ultra-wide window (%s → %s); collected %d events",
