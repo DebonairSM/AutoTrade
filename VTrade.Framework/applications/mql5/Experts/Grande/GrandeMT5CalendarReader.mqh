@@ -113,9 +113,9 @@ public:
                                    TimeToString(tm_start, TIME_DATE|TIME_SECONDS),
                                    TimeToString(tm_end, TIME_DATE|TIME_SECONDS),
                                    filter_currencies));
-                // Fallback: try with ALL currencies and even wider window
-                datetime ultra_wide_start = now - (30 * 24 * 3600); // 30 days back
-                datetime ultra_wide_end   = now + (30 * 24 * 3600); // 30 days ahead
+                // Fallback: try with ALL currencies but keep reasonable time window
+                datetime ultra_wide_start = now - (7 * 24 * 3600); // Only 7 days back (not 30)
+                datetime ultra_wide_end   = now + (14 * 24 * 3600); // 14 days ahead (not 30)
                 if(FetchMT5CalendarEvents(ultra_wide_start, ultra_wide_end, "USD,EUR,GBP,JPY,AUD,NZD,CAD,CHF"))
                 {
                     Print(StringFormat("[GrandeMT5News] INFO: Ultra-wide window (%s → %s); collected %d events",
@@ -242,41 +242,72 @@ public:
             }
         }
         
-        // As a final proof attempt, fetch a wide date range without filters and print one sample
+        // As a final proof attempt, fetch recent events only (avoid showing old historical data)
         datetime now = TimeCurrent();
-        datetime start_probe = now - (30 * 24 * 3600);
-        datetime end_probe   = now + (30 * 24 * 3600);
+        datetime start_probe = now - (7 * 24 * 3600);  // Only 7 days back instead of 30
+        datetime end_probe   = now + (14 * 24 * 3600); // 14 days ahead for upcoming events
         ArrayResize(values, 0);
         ResetLastError();
         int wide = CalendarValueHistory(values, start_probe, end_probe, "", "");
         if(wide > 0)
         {
-            MqlCalendarEvent ev3;
-            if(CalendarEventById(values[0].event_id, ev3))
+            // Find the most recent or upcoming event (not just the first/oldest one)
+            int best_index = -1;
+            datetime best_time = 0;
+            datetime cutoff_time = now - (3 * 24 * 3600); // Don't show events older than 3 days
+            
+            for(int i = 0; i < wide; i++)
             {
-                MqlCalendarCountry cc3; string cur3 = "";
-                if(CalendarCountryById(ev3.country_id, cc3)) cur3 = cc3.currency;
-                string s_actual3   = FormatCalendarValue(values[0].actual_value, ev3.digits);
-                string s_forecast3 = FormatCalendarValue(values[0].forecast_value, ev3.digits);
-                string s_previous3 = FormatCalendarValue(values[0].prev_value, ev3.digits);
-                int impact3 = NEWS_IMPACT_LOW;
-                switch(ev3.importance)
+                // Prefer upcoming events, but accept recent events within 3 days
+                if(values[i].time >= cutoff_time)
                 {
-                    case 0: impact3 = NEWS_IMPACT_LOW; break;
-                    case 1: impact3 = NEWS_IMPACT_MEDIUM; break;
-                    case 2: impact3 = NEWS_IMPACT_HIGH; break;
-                    default: impact3 = ev3.importance >= 3 ? NEWS_IMPACT_CRITICAL : NEWS_IMPACT_LOW; break;
+                    if(best_index == -1 || 
+                       (values[i].time >= now && best_time < now) || // Prefer upcoming over past
+                       (values[i].time >= now && values[i].time < best_time) || // Among upcoming, prefer sooner
+                       (values[i].time < now && values[i].time > best_time && best_time < now)) // Among past, prefer more recent
+                    {
+                        best_index = i;
+                        best_time = values[i].time;
+                    }
                 }
-                Print(StringFormat("[CAL-AI] PROOF: MT5 calendar sample: %s %s at %s | actual=%s forecast=%s prev=%s impact=%s",
-                                   cur3,
-                                   ev3.name,
-                                   TimeToString(values[0].time, TIME_DATE|TIME_SECONDS),
-                                   s_actual3,
-                                   s_forecast3,
-                                   s_previous3,
-                                   GetImpactString(impact3)));
             }
-            return true;
+            
+            if(best_index >= 0)
+            {
+                MqlCalendarEvent ev3;
+                if(CalendarEventById(values[best_index].event_id, ev3))
+                {
+                    MqlCalendarCountry cc3; string cur3 = "";
+                    if(CalendarCountryById(ev3.country_id, cc3)) cur3 = cc3.currency;
+                    string s_actual3   = FormatCalendarValue(values[best_index].actual_value, ev3.digits);
+                    string s_forecast3 = FormatCalendarValue(values[best_index].forecast_value, ev3.digits);
+                    string s_previous3 = FormatCalendarValue(values[best_index].prev_value, ev3.digits);
+                    int impact3 = NEWS_IMPACT_LOW;
+                    switch(ev3.importance)
+                    {
+                        case 0: impact3 = NEWS_IMPACT_LOW; break;
+                        case 1: impact3 = NEWS_IMPACT_MEDIUM; break;
+                        case 2: impact3 = NEWS_IMPACT_HIGH; break;
+                        default: impact3 = ev3.importance >= 3 ? NEWS_IMPACT_CRITICAL : NEWS_IMPACT_LOW; break;
+                    }
+                    string time_status = (values[best_index].time >= now) ? "UPCOMING" : "RECENT";
+                    Print(StringFormat("[CAL-AI] PROOF: MT5 calendar sample (%s): %s %s at %s | actual=%s forecast=%s prev=%s impact=%s",
+                                       time_status,
+                                       cur3,
+                                       ev3.name,
+                                       TimeToString(values[best_index].time, TIME_DATE|TIME_SECONDS),
+                                       s_actual3,
+                                       s_forecast3,
+                                       s_previous3,
+                                       GetImpactString(impact3)));
+                }
+                return true;
+            }
+            else
+            {
+                Print("[CAL-AI] PROOF: MT5 calendar accessible but no recent/upcoming events found in 7-day window");
+                return true;
+            }
         }
         
         if(err == 4807 || err == 4806 || err == 4804 || err == 4805 || err == 4808)

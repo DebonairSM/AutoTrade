@@ -18,6 +18,7 @@
 #include "mcp/analyze_sentiment_server/GrandeNewsSentimentIntegration.mqh"
 #include "GrandeMT5CalendarReader.mqh"
 #include "GrandeIntelligentReporter.mqh"
+#include "GrandeDatabaseManager.mqh"
 #include "..\VSol\AdvancedTrendFollower.mqh"
 #include "..\VSol\GrandeRiskManager.mqh"
 #include <Trade\Trade.mqh>
@@ -91,6 +92,12 @@ input int    InpStochPeriod = 14;                // Stochastic Period
 input int    InpStochK = 3;                      // Stochastic %K
 input int    InpStochD = 3;                      // Stochastic %D
 
+input group "=== Database Settings ==="
+input bool   InpEnableDatabase = true;          // Enable Database Logging
+input string InpDatabasePath = "GrandeTradingData.db"; // Database File Path
+input bool   InpDatabaseDebug = false;           // Enable Database Debug Prints
+input int    InpDataCollectionInterval = 60;     // Data Collection Interval (seconds)
+
 input group "=== Advanced Trend Follower ==="
 input bool   InpEnableTrendFollower = true;      // Enable Trend Follower Confirmation
 input bool   InpRequireEmaAlignment = false;     // Require Additional EMA Alignment (50/200)
@@ -137,7 +144,7 @@ input bool   InpShowRegimeTrendArrows = true;    // Show Regime Trend Arrows
 input bool   InpShowADXStrengthMeter = true;     // Show ADX Strength Meter
 input bool   InpShowRegimeAlerts = true;         // Show Regime Change Alerts
 input bool   InpLogDetailedInfo = true;          // Log Detailed Trade Information
-input bool   InpLogVerbose = false;             // Ultra-Verbose Logging (for debugging only)
+input bool   InpLogVerbose = true;              // Verbose Logging (recommended for monitoring)
 input bool   InpLogDebugInfo = false;            // Log Debug Information (Risk Manager)
 input bool   InpLogAllErrors = true;             // Log ALL Errors and Retries (CRITICAL)
 
@@ -170,6 +177,7 @@ CGrandeTriangleTradingRules*  g_triangleTrading;
 CAdvancedTrendFollower*       g_trendFollower;
 CGrandeRiskManager*           g_riskManager;
 CGrandeIntelligentReporter*   g_reporter;
+CGrandeDatabaseManager*       g_databaseManager;
 // CMultiTimeframeAnalyzer*      g_mtfAnalyzer;  // Temporarily disabled
 CNewsSentimentIntegration     g_newsSentiment;
 CGrandeMT5NewsReader          g_calendarReader;
@@ -196,6 +204,10 @@ datetime                      g_lastRsiCacheTime;
 double                        g_cachedRsiCTF = EMPTY_VALUE;
 double                        g_cachedRsiH4  = EMPTY_VALUE;
 double                        g_cachedRsiD1  = EMPTY_VALUE;
+
+// Database data collection variables
+datetime                      g_lastDataCollectionTime = 0;
+datetime                      g_lastBarTime = 0;
 
 // Cooldown storage per ticket for partial closes
 struct SRsiExitState {
@@ -224,6 +236,7 @@ double NormalizeVolumeToStep(const string symbol, double volume);
 void NormalizeStops(const bool isBuy, const double entryPrice, double &sl, double &tp);
 bool IsPendingPriceValid(const bool isBuyStop, const double levelPrice);
 bool HasSimilarPendingOrderForBreakout(const bool isBuyStop, const double levelPrice, const int tolerancePoints);
+void CollectMarketDataForDatabase();
 // Core function forward declarations
 bool ValidateInputParameters();
 void ConfigureTradeFillingMode();
@@ -258,6 +271,30 @@ int OnInit()
     g_trade.SetDeviationInPoints(InpSlippage);
     // Configure supported filling mode for this symbol
     ConfigureTradeFillingMode();
+    
+    // Initialize database manager
+    if(InpEnableDatabase)
+    {
+        g_databaseManager = new CGrandeDatabaseManager();
+        if(g_databaseManager == NULL)
+        {
+            Print("ERROR: Failed to create Database Manager");
+            return INIT_FAILED;
+        }
+        
+        if(!g_databaseManager.Initialize(InpDatabasePath, InpDatabaseDebug))
+        {
+            Print("ERROR: Failed to initialize Database Manager");
+            delete g_databaseManager;
+            g_databaseManager = NULL;
+            return INIT_FAILED;
+        }
+        
+        if(InpLogDebugInfo)
+        {
+            Print("Database Manager initialized successfully: ", InpDatabasePath);
+        }
+    }
     
     // Configure risk management settings
     g_riskConfig.risk_percent_trend = InpRiskPctTrend;
@@ -596,6 +633,17 @@ void OnDeinit(const int reason)
     // Clean up timer
     EventKillTimer();
     
+    // Clean up database manager
+    if(g_databaseManager != NULL)
+    {
+        if(InpLogDebugInfo)
+            Print("Closing database connection...");
+        
+        g_databaseManager.Close();
+        delete g_databaseManager;
+        g_databaseManager = NULL;
+    }
+    
     // Clean up detectors
     if(g_regimeDetector != NULL)
     {
@@ -657,6 +705,13 @@ void OnTick()
     // Check if trading is allowed
     if(!MQLInfoInteger(MQL_TRADE_ALLOWED) || !InpEnableTrading)
         return;
+    
+    // Collect market data for database if enabled
+    if(InpEnableDatabase && g_databaseManager != NULL)
+    {
+        CollectMarketDataForDatabase();
+    }
+    
     // All periodic updates are handled in OnTimer to prevent per-tick thrashing
 }
 
@@ -665,13 +720,6 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-    // OnTimer temporarily disabled to fix compilation issues
-    // All periodic updates are handled by risk manager during normal operations
-    return;
-    
-    /*
-    // TODO: Re-enable OnTimer functionality once compilation issues are resolved
-    // All the code below has been temporarily disabled to fix compilation errors
     datetime currentTime = TimeCurrent();
     
     // Generate initial report 5 seconds after startup
@@ -825,6 +873,7 @@ void OnTimer()
                             }
                         }
                     }
+                }
             }
             else
             {
@@ -1073,7 +1122,6 @@ void OnTimer()
                 ObjectDelete(g_chartID, STARTUP_PANEL_NAME);
         }
     }
-    */
 }
 
 //+------------------------------------------------------------------+
@@ -1835,29 +1883,28 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
 {
     string logPrefix = "[TRADE DECISION] ";
     
-    // Smart logging - only when no position exists or verbose mode
-    static bool hasLoggedTradeAnalysis = false;
+    // Enhanced logging - show analysis periodically even with positions
+    static datetime lastAnalysisLog = 0;
     bool hasPosition = HasOpenPositionForSymbolAndMagic(_Symbol, InpMagicNumber);
+    bool shouldLogAnalysis = (TimeCurrent() - lastAnalysisLog >= 300); // Log every 5 minutes
     
-    if(InpLogDetailedInfo && (!hasPosition && !hasLoggedTradeAnalysis))
+    if(InpLogDetailedInfo && shouldLogAnalysis)
     {
-        Print(logPrefix + "🔍 ANALYZING TRADE OPPORTUNITY (no position open)");
+        string posStatus = hasPosition ? " (position open)" : " (no position)";
+        Print(logPrefix + "🔍 ANALYZING TRADE OPPORTUNITY", posStatus);
         Print(logPrefix + "Price: ", DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits), 
               " | Spread: ", SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), " pts | Regime: ", g_regimeDetector.RegimeToString(rs.regime));
-        hasLoggedTradeAnalysis = true;
+        lastAnalysisLog = TimeCurrent();
     }
-    else if(InpLogVerbose) // Only in ultra-verbose mode
+    else if(InpLogVerbose) // Verbose mode shows all analyses
     {
         Print(logPrefix + "=== ANALYZING TRADE OPPORTUNITY ===");
         Print(logPrefix + "Timestamp: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES));
         Print(logPrefix + "Symbol: ", _Symbol);
         Print(logPrefix + "Current Price: ", DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits));
         Print(logPrefix + "Spread: ", SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), " points");
+        Print(logPrefix + "Has Position: ", hasPosition ? "YES" : "NO");
     }
-    
-    // Reset flag when position is closed
-    if(hasPosition && hasLoggedTradeAnalysis)
-        hasLoggedTradeAnalysis = false;
     
     // Prepare decision tracking data
     STradeDecision decision;
@@ -2135,6 +2182,17 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
         finbert_signal = g_newsSentiment.GetCalendarSignal();
         finbert_score = g_newsSentiment.GetCalendarScore();
         finbert_confidence = g_newsSentiment.GetCalendarConfidence();
+        
+        // If no signal is loaded, try to load existing analysis file
+        if(StringLen(finbert_signal) == 0 || finbert_confidence == 0.0)
+        {
+            if(g_newsSentiment.LoadLatestCalendarAnalysis())
+            {
+                finbert_signal = g_newsSentiment.GetCalendarSignal();
+                finbert_score = g_newsSentiment.GetCalendarScore();
+                finbert_confidence = g_newsSentiment.GetCalendarConfidence();
+            }
+        }
         
         // Store sentiment data for tracking
         execution.calendar_signal = finbert_signal;
@@ -5928,6 +5986,156 @@ bool HasOpenPositionForSymbolAndMagic(const string symbol, const int magic)
         return true;
     }
     return false;
+}
+
+//+------------------------------------------------------------------+
+//| Database Market Data Collection                                  |
+//+------------------------------------------------------------------+
+void CollectMarketDataForDatabase()
+{
+    if(g_databaseManager == NULL || !g_databaseManager.IsConnected())
+        return;
+    
+    datetime currentTime = TimeCurrent();
+    
+    // Check if we should collect data (based on interval)
+    if((currentTime - g_lastDataCollectionTime) < InpDataCollectionInterval)
+        return;
+    
+    // Check if we have a new bar
+    datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+    if(currentBarTime == g_lastBarTime)
+        return;
+    
+    g_lastBarTime = currentBarTime;
+    g_lastDataCollectionTime = currentTime;
+    
+    // Get current bar data
+    double open = iOpen(_Symbol, PERIOD_CURRENT, 0);
+    double high = iHigh(_Symbol, PERIOD_CURRENT, 0);
+    double low = iLow(_Symbol, PERIOD_CURRENT, 0);
+    double close = iClose(_Symbol, PERIOD_CURRENT, 0);
+    double volume = iRealVolume(_Symbol, PERIOD_CURRENT, 0);
+    
+    // Validate data
+    if(open <= 0 || high <= 0 || low <= 0 || close <= 0)
+        return;
+    
+    // Get indicator values
+    double atr = 0, adx_h1 = 0, adx_h4 = 0, adx_d1 = 0;
+    double rsi_current = 0, rsi_h4 = 0, rsi_d1 = 0;
+    double ema_20 = 0, ema_50 = 0, ema_200 = 0;
+    double stoch_k = 0, stoch_d = 0;
+    
+    // ATR
+    int atrHandle = iATR(_Symbol, PERIOD_CURRENT, InpATRPeriod);
+    if(atrHandle != INVALID_HANDLE)
+    {
+        double atrBuffer[];
+        if(CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) > 0)
+            atr = atrBuffer[0];
+        IndicatorRelease(atrHandle);
+    }
+    
+    // ADX values
+    if(g_regimeDetector != NULL)
+    {
+        RegimeSnapshot rs = g_regimeDetector.DetectCurrentRegime();
+        adx_h1 = rs.adx_h1;
+        adx_h4 = rs.adx_h4;
+        adx_d1 = rs.adx_d1;
+    }
+    
+    // RSI values
+    rsi_current = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+    rsi_h4 = GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0);
+    rsi_d1 = InpUseD1RSI ? GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0) : 0;
+    
+    // EMA values
+    int ema20Handle = iMA(_Symbol, PERIOD_CURRENT, InpEMA20Period, 0, MODE_EMA, PRICE_CLOSE);
+    int ema50Handle = iMA(_Symbol, PERIOD_CURRENT, InpEMA50Period, 0, MODE_EMA, PRICE_CLOSE);
+    int ema200Handle = iMA(_Symbol, PERIOD_CURRENT, InpEMA200Period, 0, MODE_EMA, PRICE_CLOSE);
+    
+    if(ema20Handle != INVALID_HANDLE)
+    {
+        double emaBuffer[];
+        if(CopyBuffer(ema20Handle, 0, 0, 1, emaBuffer) > 0)
+            ema_20 = emaBuffer[0];
+        IndicatorRelease(ema20Handle);
+    }
+    
+    if(ema50Handle != INVALID_HANDLE)
+    {
+        double emaBuffer[];
+        if(CopyBuffer(ema50Handle, 0, 0, 1, emaBuffer) > 0)
+            ema_50 = emaBuffer[0];
+        IndicatorRelease(ema50Handle);
+    }
+    
+    if(ema200Handle != INVALID_HANDLE)
+    {
+        double emaBuffer[];
+        if(CopyBuffer(ema200Handle, 0, 0, 1, emaBuffer) > 0)
+            ema_200 = emaBuffer[0];
+        IndicatorRelease(ema200Handle);
+    }
+    
+    // Stochastic values
+    int stochHandle = iStochastic(_Symbol, PERIOD_CURRENT, InpStochPeriod, InpStochK, InpStochD, MODE_SMA, STO_LOWHIGH);
+    if(stochHandle != INVALID_HANDLE)
+    {
+        double stochKBuffer[], stochDBuffer[];
+        if(CopyBuffer(stochHandle, 0, 0, 1, stochKBuffer) > 0 && CopyBuffer(stochHandle, 1, 0, 1, stochDBuffer) > 0)
+        {
+            stoch_k = stochKBuffer[0];
+            stoch_d = stochDBuffer[0];
+        }
+        IndicatorRelease(stochHandle);
+    }
+    
+    // Insert market data into database
+    bool success = g_databaseManager.InsertMarketData(
+        _Symbol, 
+        Period(), 
+        currentBarTime, 
+        open, high, low, close, volume,
+        atr, adx_h1, adx_h4, adx_d1,
+        rsi_current, rsi_h4, rsi_d1,
+        ema_20, ema_50, ema_200,
+        stoch_k, stoch_d
+    );
+    
+    if(!success && InpDatabaseDebug)
+    {
+        Print("[GrandeDB] Failed to insert market data for bar: ", TimeToString(currentBarTime));
+    }
+    
+    // Also insert regime data if available
+    if(g_regimeDetector != NULL)
+    {
+        RegimeSnapshot rs = g_regimeDetector.DetectCurrentRegime();
+        string regimeStr = g_regimeDetector.RegimeToString(rs.regime);
+        string volatilityLevel = "NORMAL";
+        
+        if(rs.atr_current > 0 && atr > 0)
+        {
+            double atrRatio = rs.atr_current / atr;
+            if(atrRatio > InpHighVolMultiplier)
+                volatilityLevel = "HIGH";
+            else if(atrRatio < 0.5)
+                volatilityLevel = "LOW";
+        }
+        
+        g_databaseManager.InsertRegimeData(
+            _Symbol,
+            currentBarTime,
+            regimeStr,
+            rs.confidence,
+            rs.adx_h1, rs.adx_h4, rs.adx_d1,
+            rs.atr_current,
+            volatilityLevel
+        );
+    }
 }
 
 double NormalizeVolumeToStep(const string symbol, double volume)
