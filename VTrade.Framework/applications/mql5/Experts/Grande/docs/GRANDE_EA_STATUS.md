@@ -34,18 +34,59 @@
 - **Reports**: `GrandeReport_EURUSD!_YYYY.MM.DD.txt`
 - **Analysis**: `integrated_calendar_analysis.json`
 
-## File Locations
+## File Locations & Monitoring Checklist
 
-### Critical Files
+### Critical Files (Must Check Daily)
 ```
 %APPDATA%\MetaQuotes\Terminal\Common\Files\
-├── economic_events.json                    # Calendar input data
-├── integrated_calendar_analysis.json       # FinBERT analysis results
-└── integrated_news_analysis.json          # News sentiment data
+├── economic_events.json                    # Calendar input data (3.5KB typical)
+├── integrated_calendar_analysis.json       # FinBERT analysis results (11KB typical)
+└── integrated_news_analysis.json          # News sentiment data (5KB typical)
 
 %APPDATA%\MetaQuotes\Terminal\{ID}\MQL5\Files\
-├── FinBERT_Data_EURUSD!_YYYY.MM.DD.csv   # Trading data log
-└── GrandeReport_EURUSD!_YYYY.MM.DD.txt    # Hourly reports
+├── FinBERT_Data_EURUSD!_YYYY.MM.DD.csv   # Trading data log (grows daily)
+├── GrandeReport_EURUSD!_YYYY.MM.DD.txt    # Hourly reports (30KB+ daily)
+└── GrandeTradingData.db                   # SQLite database (4KB+ grows with activity)
+```
+
+### Log Files (Check for Errors)
+```
+%APPDATA%\MetaQuotes\Terminal\{ID}\MQL5\Logs\
+├── YYYYMMDD.log                           # Main EA log file (check for errors)
+└── YYYYMMDD_errors.log                   # Error-specific log (if exists)
+```
+
+### Compiled Files (Check After Updates)
+```
+%APPDATA%\MetaQuotes\Terminal\{ID}\MQL5\Experts\
+├── GrandeTradingSystem.ex5               # Compiled EA (check timestamp)
+└── GrandeTestSuite.ex5                   # Test suite (if exists)
+
+%APPDATA%\MetaQuotes\Terminal\{ID}\MQL5\Include\
+├── GrandeMarketRegimeDetector.mqh        # Regime detection module
+├── GrandeKeyLevelDetector.mqh            # Key levels module
+├── GrandeIntelligentReporter.mqh         # Reporting module
+├── GrandeMT5CalendarReader.mqh           # Calendar reader module
+└── GrandeNewsSentimentIntegration.mqh    # FinBERT integration module
+```
+
+### Python Analysis Files (Check for Updates)
+```
+mcp/analyze_sentiment_server/
+├── finbert_calendar_analyzer.py          # Main FinBERT processor
+├── main.py                               # MCP server (if running)
+├── requirements.txt                      # Python dependencies
+├── integration_test_results.json         # Test results
+├── benchmark_results.json               # Performance benchmarks
+└── data/                                # Analysis data directory
+```
+
+### Monitoring Scripts (New)
+```
+Grande/
+├── monitor_improvements.ps1              # Improvement tracking script
+├── GrandeBuild.ps1                       # Build and deployment script
+└── test_database.py                     # Database testing script
 ```
 
 ### Source Files
@@ -60,7 +101,21 @@ GrandeKeyLevelDetector.mqh                  # Support/resistance detection
 
 ## Recent Fixes Applied
 
-### 1. RSI Logic for Trend Trading (✅ COMPLETED 2025-09-24 16:00)
+### 1. Risk Manager & Trend Follower Improvements (✅ COMPLETED 2025-09-24 16:30)
+**Problems Found**:
+- Risk Manager error 4203 counter reset to 10 instead of 0, causing unnecessary throttling
+- Trend Follower too strict, rejecting 100% of signals despite strong local trends
+- EA unable to trade when multi-timeframe alignment wasn't perfect
+
+**Solutions Applied**:
+1. **Risk Manager Fix**: Changed counter reset from 10 to 0 to prevent accumulation
+2. **Trend Follower Override**: Added logic to allow trades when local ADX shows strong trend
+   - H4 ADX > 35 or H1 ADX > 40 overrides Trend Follower rejection
+   - Balances multi-timeframe analysis with local market conditions
+
+**Result**: EA can now execute trades in strong local trends even without perfect multi-timeframe alignment
+
+### 2. RSI Logic for Trend Trading (✅ COMPLETED 2025-09-24 16:00)
 **Problem Found**:
 - EA was rejecting valid trend trades due to restrictive RSI requirements
 - Required RSI to be in 40-60 range for ALL trades (both LONG and SHORT)
@@ -155,15 +210,50 @@ if(StringLen(finbert_signal) == 0 || finbert_confidence == 0.0)
 - **High Confidence Predictions**: 4/10
 - **Processing Time**: 4.8ms
 
-## Quick Commands
+## Quick Commands & File Checks
 
-### Check System Status
+### Daily Monitoring Commands
 ```powershell
-# Verify FinBERT analysis
+# 1. Check FinBERT analysis status
 Get-Content "$env:APPDATA\MetaQuotes\Terminal\Common\Files\integrated_calendar_analysis.json" | ConvertFrom-Json | Select signal, confidence, event_count
 
-# Check trading data
-$mt5Path = "$env:APPDATA\MetaQuotes\Terminal"; Get-ChildItem -Path $mt5Path -Directory | ForEach-Object { $file = Join-Path $_.FullName "MQL5\Files\FinBERT_Data_EURUSD!_$(Get-Date -Format 'yyyy.MM.dd').csv"; if (Test-Path $file) { Get-Content $file | Select-Object -Last 3 } }
+# 2. Check today's trading activity
+$mt5Path = "$env:APPDATA\MetaQuotes\Terminal"; Get-ChildItem -Path $mt5Path -Directory | ForEach-Object { $file = Join-Path $_.FullName "MQL5\Files\FinBERT_Data_EURUSD!_$(Get-Date -Format 'yyyy.MM.dd').csv"; if (Test-Path $file) { Write-Host "Records: $((Import-Csv $file).Count)"; Get-Content $file | Select-Object -Last 3 } }
+
+# 3. Check for errors in logs
+$logPath = Get-ChildItem "$env:APPDATA\MetaQuotes\Terminal\*\MQL5\Logs" -Directory | Select-Object -First 1; $latestLog = Get-ChildItem "$($logPath.FullName)\*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1; Get-Content $latestLog.FullName -Tail 50 | Where-Object {$_ -match "ERROR|error|Error|failed|Failed|WARNING|warning"} | Select-Object -Last 10
+
+# 4. Check database status
+$mt5Path = Get-ChildItem "$env:APPDATA\MetaQuotes\Terminal\*" -Directory | Where-Object {Test-Path "$($_.FullName)\MQL5"} | Select-Object -First 1; $dbFile = "$($mt5Path.FullName)\MQL5\Files\GrandeTradingData.db"; if (Test-Path $dbFile) { $item = Get-Item $dbFile; Write-Host "Database: $($item.Name) | Size: $($item.Length) bytes | Modified: $(Get-Date $item.LastWriteTime -Format 'HH:mm:ss')" } else { Write-Host "Database not found!" }
+
+# 5. Check all file timestamps
+$commonPath = "$env:APPDATA\MetaQuotes\Terminal\Common\Files"; $files = @("economic_events.json", "integrated_calendar_analysis.json", "integrated_news_analysis.json"); foreach ($file in $files) { $filepath = Join-Path $commonPath $file; if (Test-Path $filepath) { $item = Get-Item $filepath; Write-Host "$($item.Name): $(Get-Date $item.LastWriteTime -Format 'HH:mm:ss')" } }
+```
+
+### Comprehensive File Check Script
+```powershell
+# Run the monitoring script
+.\monitor_improvements.ps1
+
+# Check all expected files exist
+$checks = @{
+    "Calendar Data" = "$env:APPDATA\MetaQuotes\Terminal\Common\Files\economic_events.json"
+    "FinBERT Analysis" = "$env:APPDATA\MetaQuotes\Terminal\Common\Files\integrated_calendar_analysis.json"
+    "News Analysis" = "$env:APPDATA\MetaQuotes\Terminal\Common\Files\integrated_news_analysis.json"
+    "Today's CSV" = "$env:APPDATA\MetaQuotes\Terminal\*\MQL5\Files\FinBERT_Data_EURUSD!_$(Get-Date -Format 'yyyy.MM.dd').csv"
+    "Today's Report" = "$env:APPDATA\MetaQuotes\Terminal\*\MQL5\Files\GrandeReport_EURUSD!_$(Get-Date -Format 'yyyyMMdd').txt"
+    "Database" = "$env:APPDATA\MetaQuotes\Terminal\*\MQL5\Files\GrandeTradingData.db"
+    "Compiled EA" = "$env:APPDATA\MetaQuotes\Terminal\*\MQL5\Experts\GrandeTradingSystem.ex5"
+}
+
+foreach ($check in $checks.GetEnumerator()) {
+    $files = Get-ChildItem $check.Value -ErrorAction SilentlyContinue
+    if ($files) {
+        Write-Host "✅ $($check.Key): $($files[0].Name)" -ForegroundColor Green
+    } else {
+        Write-Host "❌ $($check.Key): NOT FOUND" -ForegroundColor Red
+    }
+}
 ```
 
 ### Force Analysis Update
@@ -177,21 +267,55 @@ python finbert_calendar_analyzer.py
 powershell -ExecutionPolicy Bypass -File "GrandeBuild.ps1"
 ```
 
-## Troubleshooting
+## Troubleshooting & File Monitoring
 
-### If Calendar Data Shows Old Events
-- Check calendar reader time window (should be 7 days, not 30)
-- Verify MT5 calendar is enabled in Tools > Options > Terminal
+### File Monitoring Checklist (Daily)
+- [ ] **Calendar Data**: `economic_events.json` updated within last 24h
+- [ ] **FinBERT Analysis**: `integrated_calendar_analysis.json` has recent timestamp
+- [ ] **Trading Data**: `FinBERT_Data_EURUSD!_YYYY.MM.DD.csv` growing with new records
+- [ ] **Reports**: `GrandeReport_EURUSD!_YYYY.MM.DD.txt` updated hourly
+- [ ] **Database**: `GrandeTradingData.db` size increasing with activity
+- [ ] **Logs**: No ERROR messages in latest log file
+- [ ] **Compiled EA**: `GrandeTradingSystem.ex5` timestamp matches recent builds
 
-### If FinBERT Analysis Not Working
-- Check if `integrated_calendar_analysis.json` exists
-- Verify `economic_events.json` has current data
-- Run file-based analysis: `python finbert_calendar_analyzer.py`
+### Common Issues & Solutions
 
-### If CSV Shows Empty Calendar Columns
-- Check if MT5 integration fix is applied
-- Verify `LoadLatestCalendarAnalysis()` is being called
-- Check file permissions in Common\Files directory
+#### Calendar Data Shows Old Events
+- **Check**: `economic_events.json` timestamp
+- **Solution**: Calendar reader time window (should be 7 days, not 30)
+- **Verify**: MT5 calendar enabled in Tools > Options > Terminal
+
+#### FinBERT Analysis Not Working
+- **Check**: `integrated_calendar_analysis.json` exists and recent
+- **Verify**: `economic_events.json` has current data
+- **Solution**: Run `python finbert_calendar_analyzer.py`
+
+#### CSV Shows Empty Calendar Columns
+- **Check**: MT5 integration fix applied
+- **Verify**: `LoadLatestCalendarAnalysis()` being called
+- **Solution**: Check file permissions in Common\Files directory
+
+#### Low Trading Activity
+- **Check**: CSV record count (should be >5 per day)
+- **Verify**: No position blocking new trades
+- **Solution**: Check Trend Follower and RSI logic settings
+
+#### Error 4203 Accumulation
+- **Check**: Risk Manager error counter in logs
+- **Solution**: EA reload required (counter reset fix applied)
+
+#### Database Not Growing
+- **Check**: `GrandeTradingData.db` file size
+- **Verify**: Database initialization messages in logs
+- **Solution**: Check database permissions and path
+
+### File Size Expectations
+- **economic_events.json**: 3-5KB (daily)
+- **integrated_calendar_analysis.json**: 10-15KB (daily)
+- **FinBERT_Data_*.csv**: 1KB+ per trading decision
+- **GrandeReport_*.txt**: 30KB+ per day
+- **GrandeTradingData.db**: 4KB+ (grows with activity)
+- **Log files**: 1-10MB per day (depends on verbosity)
 
 ## Expected Outputs
 
@@ -234,5 +358,5 @@ MT5 Terminal
 - **Timer System**: ✅ Fixed - hourly reports restored
 - **Overall System**: ✅ OPERATIONAL WITH FULL LOGGING
 
-**Last Updated**: 2025-09-24 04:00 PM  
-**System Status**: All components working correctly - RSI logic fixed for proper trend trading, data integrity restored, logging enhanced
+**Last Updated**: 2025-09-24 04:45 PM  
+**System Status**: All critical issues fixed - Comprehensive file monitoring guide added - EA requires reload in MT5 to activate improvements

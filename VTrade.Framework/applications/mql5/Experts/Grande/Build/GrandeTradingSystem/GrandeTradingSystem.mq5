@@ -934,7 +934,7 @@ void OnTimer()
                     
                     // Track 4203 errors for throttling purposes but don't let them accumulate
                     consecutive4203Errors++;
-                    if(consecutive4203Errors > 100) consecutive4203Errors = 10; // Reset to prevent overflow
+                    if(consecutive4203Errors > 100) consecutive4203Errors = 0; // Reset to 0 to prevent unnecessary throttling
                     last4203ErrorTime = TimeCurrent();
                 }
                 else
@@ -3097,28 +3097,45 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         Print(logPrefix + "Evaluating ", direction, " trend signal criteria...");
     
     // === ADVANCED TREND FOLLOWER CONFIRMATION ===
+    // Modified: Allow trades when trend is strong even if Trend Follower disagrees
+    bool trendFollowerPass = true;
     if(g_trendFollower != NULL && InpEnableTrendFollower)
     {
         bool trendFollowerSignal = bullish ? g_trendFollower.IsBullish() : g_trendFollower.IsBearish();
+        double tfStrength = g_trendFollower.TrendStrength();
         
         if(InpLogDetailedInfo)
         {
             Print(logPrefix + "1. Trend Follower Analysis:");
-            Print(logPrefix + "  Multi-timeframe signal: ", trendFollowerSignal ? "✅ CONFIRMED" : "❌ REJECTED");
-            Print(logPrefix + "  TF Strength: ", DoubleToString(g_trendFollower.TrendStrength(), 2));
+            Print(logPrefix + "  Multi-timeframe signal: ", trendFollowerSignal ? "✅ CONFIRMED" : "⚠️ NOT ALIGNED");
+            Print(logPrefix + "  TF Strength: ", DoubleToString(tfStrength, 2));
             Print(logPrefix + "  TF Pullback Price (EMA20): ", DoubleToString(g_trendFollower.EntryPricePullback(), _Digits));
         }
         
+        // NEW LOGIC: Only reject if Trend Follower strongly disagrees AND local ADX is weak
         if(!trendFollowerSignal)
         {
-            if(InpLogDetailedInfo)
-                Print(logPrefix + "❌ SIGNAL BLOCKED: Trend Follower rejected ", direction, " signal");
-            
-            rejection_reason = "Trend Follower multi-timeframe analysis rejected signal";
-            decision.decision = "REJECTED";
-            decision.rejection_reason = rejection_reason;
-            if(g_reporter != NULL) g_reporter.RecordDecision(decision);
-            return false;
+            // Allow override if current timeframe shows strong trend (ADX > 35)
+            if(rs.adx_h4 > 35.0 || rs.adx_h1 > 40.0)
+            {
+                if(InpLogDetailedInfo)
+                    Print(logPrefix + "⚠️ Trend Follower disagrees but local ADX is strong (H4: ", 
+                          DoubleToString(rs.adx_h4, 1), " H1: ", DoubleToString(rs.adx_h1, 1), 
+                          ") - ALLOWING SIGNAL");
+                trendFollowerPass = true; // Override rejection
+            }
+            else
+            {
+                if(InpLogDetailedInfo)
+                    Print(logPrefix + "❌ SIGNAL BLOCKED: Trend Follower rejected ", direction, 
+                          " signal and local ADX is weak");
+                
+                rejection_reason = "Trend Follower multi-timeframe analysis rejected signal (weak local trend)";
+                decision.decision = "REJECTED";
+                decision.rejection_reason = rejection_reason;
+                if(g_reporter != NULL) g_reporter.RecordDecision(decision);
+                return false;
+            }
         }
     }
     else if(InpLogDetailedInfo)
