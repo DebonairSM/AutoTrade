@@ -275,6 +275,7 @@ int OnInit()
     // Initialize database manager
     if(InpEnableDatabase)
     {
+        Print("[Grande] Attempting to initialize Database Manager...");
         g_databaseManager = new CGrandeDatabaseManager();
         if(g_databaseManager == NULL)
         {
@@ -287,13 +288,17 @@ int OnInit()
             Print("ERROR: Failed to initialize Database Manager");
             delete g_databaseManager;
             g_databaseManager = NULL;
-            return INIT_FAILED;
+            // Don't fail initialization, just disable database
+            Print("[Grande] WARNING: Database disabled due to initialization failure");
         }
-        
-        if(InpLogDebugInfo)
+        else
         {
-            Print("Database Manager initialized successfully: ", InpDatabasePath);
+            Print("[Grande] ✅ Database Manager initialized successfully: ", InpDatabasePath);
         }
+    }
+    else
+    {
+        Print("[Grande] Database logging is DISABLED (InpEnableDatabase = false)");
     }
     
     // Configure risk management settings
@@ -1918,6 +1923,25 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
     decision.regime_confidence = rs.confidence;
     decision.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
     decision.open_positions = PositionsTotal();
+    
+    // FIX: Initialize all fields to prevent uninitialized memory values
+    decision.signal_type = "";
+    decision.decision = "";
+    decision.rejection_reason = "";
+    decision.volume_ratio = 0.0;
+    decision.risk_percent = 0.0;
+    decision.calculated_lot = 0.0;
+    decision.risk_check_passed = false;
+    decision.drawdown_check_passed = false;
+    decision.nearest_resistance = 0.0;
+    decision.nearest_support = 0.0;
+    decision.rsi_current = 0.0;
+    decision.rsi_h4 = 0.0;
+    decision.rsi_d1 = 0.0;
+    decision.calendar_signal = "";
+    decision.calendar_confidence = 0.0;
+    decision.additional_notes = "";
+    
     if(g_keyLevelDetector != NULL)
         decision.key_levels_count = g_keyLevelDetector.GetKeyLevelCount();
     else
@@ -2150,6 +2174,17 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     
     execution.rsi_d1 = GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0);
     if(execution.rsi_d1 < 0) execution.rsi_d1 = 0.0;
+    
+    // FIX: Initialize calendar data (will be updated if calendar AI is enabled)
+    execution.calendar_signal = "";
+    execution.calendar_confidence = 0.0;
+    execution.additional_notes = "";
+    execution.volume_ratio = 0.0;
+    execution.risk_percent = 0.0;
+    execution.calculated_lot = 0.0;
+    execution.nearest_resistance = 0.0;
+    execution.nearest_support = 0.0;
+    execution.key_levels_count = g_keyLevelDetector != NULL ? g_keyLevelDetector.GetKeyLevelCount() : 0;
     
     if(InpLogDetailedInfo)
     {
@@ -3028,6 +3063,21 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     decision.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
     decision.open_positions = PositionsTotal();
     
+    // FIX: Initialize remaining fields to prevent uninitialized memory values
+    decision.decision = "";
+    decision.rejection_reason = "";
+    decision.volume_ratio = 0.0;
+    decision.risk_percent = 0.0;
+    decision.calculated_lot = 0.0;
+    decision.risk_check_passed = false;
+    decision.drawdown_check_passed = false;
+    decision.nearest_resistance = 0.0;
+    decision.nearest_support = 0.0;
+    decision.key_levels_count = g_keyLevelDetector != NULL ? g_keyLevelDetector.GetKeyLevelCount() : 0;
+    decision.calendar_signal = "";
+    decision.calendar_confidence = 0.0;
+    decision.additional_notes = "";
+    
     // Initialize RSI values - always populate them even if not used for rejection
     decision.rsi_current = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
     if(decision.rsi_current < 0) decision.rsi_current = 0.0;
@@ -3520,6 +3570,21 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     decision.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
     decision.open_positions = PositionsTotal();
     
+    // FIX: Initialize remaining fields to prevent uninitialized memory values
+    decision.decision = "";
+    decision.rejection_reason = "";
+    decision.volume_ratio = 0.0;
+    decision.risk_percent = 0.0;
+    decision.calculated_lot = 0.0;
+    decision.risk_check_passed = false;
+    decision.drawdown_check_passed = false;
+    decision.nearest_resistance = 0.0;
+    decision.nearest_support = 0.0;
+    decision.key_levels_count = g_keyLevelDetector != NULL ? g_keyLevelDetector.GetKeyLevelCount() : 0;
+    decision.calendar_signal = "";
+    decision.calendar_confidence = 0.0;
+    decision.additional_notes = "";
+    
     // Initialize RSI values - always populate them even if not used for rejection
     decision.rsi_current = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
     if(decision.rsi_current < 0) decision.rsi_current = 0.0;
@@ -3672,6 +3737,15 @@ bool Signal_BREAKOUT(const RegimeSnapshot &rs)
     // Volume spike ≥ 1.2 × 20-bar MA (relaxed for more opportunities)
     long volume = iTickVolume(_Symbol, PERIOD_CURRENT, 0);
     long avgVolume = GetAverageVolume(20);
+    
+    // FIX: Prevent division by negative or zero when volume data is unavailable
+    if(avgVolume <= 0) 
+    {
+        avgVolume = 1; // Default to 1 to prevent division errors
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "⚠️ Volume data unavailable, using default");
+    }
+    
     double volumeRatio = (double)volume / avgVolume;
     bool volumeSpike = (volume >= avgVolume * 1.2);  // Reduced from 1.5x to 1.2x
     
@@ -3753,6 +3827,21 @@ bool Signal_RANGE(const RegimeSnapshot &rs)
     decision.regime_confidence = rs.confidence;
     decision.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
     decision.open_positions = PositionsTotal();
+    
+    // FIX: Initialize remaining fields to prevent uninitialized memory values
+    decision.decision = "";
+    decision.rejection_reason = "";
+    decision.volume_ratio = 0.0;
+    decision.risk_percent = 0.0;
+    decision.calculated_lot = 0.0;
+    decision.risk_check_passed = false;
+    decision.drawdown_check_passed = false;
+    decision.nearest_resistance = 0.0;
+    decision.nearest_support = 0.0;
+    decision.key_levels_count = g_keyLevelDetector != NULL ? g_keyLevelDetector.GetKeyLevelCount() : 0;
+    decision.calendar_signal = "";
+    decision.calendar_confidence = 0.0;
+    decision.additional_notes = "";
     
     // Initialize RSI values - always populate them even if not used for rejection
     decision.rsi_current = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);

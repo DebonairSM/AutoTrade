@@ -60,7 +60,24 @@ GrandeKeyLevelDetector.mqh                  # Support/resistance detection
 
 ## Recent Fixes Applied
 
-### 1. Logging and Timer Issues Fix (✅ COMPLETED 2025-09-24)
+### 1. Data Integrity Fixes (✅ COMPLETED 2025-09-24 15:30)
+**Problems Found**:
+- Volume ratio showing astronomical values (371222710084895244288.00)
+- Key levels count showing negative values (-1062965072)
+- Support/Resistance prices uninitialized (0.00000)
+- Database not logging activity
+- Calendar data missing in CSV exports
+
+**Solutions Applied**:
+- Added validation for volume calculation (if avgVolume <= 0, set to 1)
+- Initialized all STradeDecision structure fields to prevent garbage values
+- Fixed key_levels_count initialization when detector is null
+- Added database initialization logging and error handling
+- Ensured calendar_signal and calendar_confidence are properly tracked
+
+**Result**: All data now properly initialized and tracked, no more invalid values
+
+### 2. Logging and Timer Issues Fix (✅ COMPLETED 2025-09-24 15:00)
 **Problems Found**: 
 - OnTimer function was completely disabled (returning immediately)
 - Hourly reports were not being generated
@@ -76,7 +93,7 @@ GrandeKeyLevelDetector.mqh                  # Support/resistance detection
 
 **Result**: System now properly logs trading activity, generates hourly reports, and provides detailed feedback
 
-### 2. Calendar Data Fix (✅ COMPLETED)
+### 3. Calendar Data Fix (✅ COMPLETED)
 **Problem**: System showed old calendar data (GBP Summer Bank Holiday 2025.08.25)
 **Solution**: 
 - Reduced time window from 30 days to 7 days
@@ -85,7 +102,7 @@ GrandeKeyLevelDetector.mqh                  # Support/resistance detection
 
 **Result**: Now shows current events like "USD 5-Year Note Auction at 2025.09.24 20:00:00"
 
-### 2. MT5 Integration Fix (✅ COMPLETED)
+### 4. MT5 Integration Fix (✅ COMPLETED)
 **Problem**: FinBERT analysis working but MT5 not loading results (empty calendar_signal columns)
 **Solution**: Added automatic calendar analysis loading during signal processing
 **Code Added**:
@@ -201,5 +218,5 @@ MT5 Terminal
 - **Timer System**: ✅ Fixed - hourly reports restored
 - **Overall System**: ✅ OPERATIONAL WITH FULL LOGGING
 
-**Last Updated**: 2025-09-24 03:00 PM
-**System Status**: All components working correctly with proper logging and reporting
+**Last Updated**: 2025-09-24 03:30 PM  
+**System Status**: All components working correctly - data integrity issues fixed, logging enhanced
