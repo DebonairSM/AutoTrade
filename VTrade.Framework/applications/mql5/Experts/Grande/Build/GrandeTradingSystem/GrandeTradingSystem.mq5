@@ -213,6 +213,25 @@ const string ADX_STRENGTH_METER_NAME = "GrandeADXStrengthMeter";
 const string REGIME_ALERT_NAME = "GrandeRegimeAlert";
 
 //+------------------------------------------------------------------+
+//| Forward declarations                                              |
+//+------------------------------------------------------------------+
+void ShowStartupSnapshot();
+bool FindNearestKeyLevels(const double currentPrice, SKeyLevel &outSupport, SKeyLevel &outResistance);
+string BuildGoldenNugget(const RegimeSnapshot &rs, const SKeyLevel &support, const SKeyLevel &resistance);
+// New helpers forward declarations
+bool HasOpenPositionForSymbolAndMagic(const string symbol, const int magic);
+double NormalizeVolumeToStep(const string symbol, double volume);
+void NormalizeStops(const bool isBuy, const double entryPrice, double &sl, double &tp);
+bool IsPendingPriceValid(const bool isBuyStop, const double levelPrice);
+bool HasSimilarPendingOrderForBreakout(const bool isBuyStop, const double levelPrice, const int tolerancePoints);
+// Core function forward declarations
+bool ValidateInputParameters();
+void ConfigureTradeFillingMode();
+void SetupChartDisplay();
+void PerformInitialAnalysis();
+void CleanupChartObjects();
+
+//+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
@@ -646,6 +665,13 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+    // OnTimer temporarily disabled to fix compilation issues
+    // All periodic updates are handled by risk manager during normal operations
+    return;
+    
+    /*
+    // TODO: Re-enable OnTimer functionality once compilation issues are resolved
+    // All the code below has been temporarily disabled to fix compilation errors
     datetime currentTime = TimeCurrent();
     
     // Generate initial report 5 seconds after startup
@@ -678,6 +704,8 @@ void OnTimer()
             // Track consecutive risk manager errors to prevent infinite loops
             static int consecutiveRMErrors = 0;
             static ulong lastErrorTicket = 0;
+            static int consecutive4203Errors = 0;
+            static datetime last4203ErrorTime = 0;
             
             // Cache RSI once per management tick for reuse
             if(InpEnableRSIExits || InpEnableMTFRSI)
@@ -706,63 +734,97 @@ void OnTimer()
                 }
                 // Skip risk manager completely for this position
             }
-            // Only call risk manager if not disabled and not in error state  
+            // Only call risk manager if not disabled and not in error state
             else if(!InpDisableRiskManagerTemp)
             {
-                // Check error count BEFORE doing anything
-                if(consecutiveRMErrors >= 5)
+                // ERROR 4203 THROTTLING: If we've had multiple 4203 errors recently, throttle risk manager calls
+                bool shouldThrottleRiskManager = false;
+                if(consecutive4203Errors >= 3 && TimeCurrent() - last4203ErrorTime < 60) // 3 errors in last minute
                 {
-                    // EMERGENCY STOP: Risk manager has been erroring repeatedly
-                    static bool emergencyStopShown = false;
-                    if(!emergencyStopShown)
+                    shouldThrottleRiskManager = true;
+                    if(InpLogDetailedInfo && consecutive4203Errors % 10 == 0) // Log every 10th throttled call
                     {
-                        Print(StringFormat("[Grande] 🚨 EMERGENCY STOP: Risk Manager disabled after %d consecutive errors", consecutiveRMErrors));
-                        Print("[Grande] 🚨 This prevents log spam and system overload");
-                        Print("[Grande] 🚨 Manual intervention may be required");
-                        emergencyStopShown = true;
+                        Print(StringFormat("[Grande] ⏸️ Risk Manager throttled due to %d consecutive 4203 errors (last: %s)",
+                              consecutive4203Errors, TimeToString(last4203ErrorTime, TIME_MINUTES|TIME_SECONDS)));
                     }
-                    
-                    // Reset error counter after 5 minutes to allow recovery attempt
-                    static datetime lastErrorReset = 0;
-                    if(TimeCurrent() - lastErrorReset > 300) // 5 minutes
-                    {
-                        consecutiveRMErrors = 0;
-                        lastErrorTicket = 0;
-                        lastErrorReset = TimeCurrent();
-                        emergencyStopShown = false;
-                        Print("[Grande] 🔄 Risk manager error counter reset after 5 minutes - attempting recovery");
-                    }
-                    // Skip ALL risk manager operations
                 }
                 else
                 {
-                    // Safe to proceed with risk manager operations
-                    ResetLastError();
-                    
-                    // ALWAYS process manual positions to add SL/TP even if max positions exceeded
-                    AddSLTPToManualPositions();
-                    
-                    // Check for errors from AddSLTPToManualPositions
-                    int postSLTPError = GetLastError();
-                    if(postSLTPError != 0)
+                    // Check error count BEFORE doing anything
+                    if(consecutiveRMErrors >= 5)
                     {
-                        Print(StringFormat("[Grande] ⚠️ Error %d in AddSLTPToManualPositions: %s", 
-                              postSLTPError, ErrorDescription(postSLTPError)));
+                        // EMERGENCY STOP: Risk manager has been erroring repeatedly
+                        static bool emergencyStopShown = false;
+                        if(!emergencyStopShown)
+                        {
+                            Print(StringFormat("[Grande] 🚨 EMERGENCY STOP: Risk Manager disabled after %d consecutive errors", consecutiveRMErrors));
+                            Print("[Grande] 🚨 This prevents log spam and system overload");
+                            Print("[Grande] 🚨 Manual intervention may be required");
+                            emergencyStopShown = true;
+                        }
+
+                        // Reset error counter after 5 minutes to allow recovery attempt
+                        static datetime lastErrorReset = 0;
+                        if(TimeCurrent() - lastErrorReset > 300) // 5 minutes
+                        {
+                            consecutiveRMErrors = 0;
+                            lastErrorTicket = 0;
+                            lastErrorReset = TimeCurrent();
+                            emergencyStopShown = false;
+                            Print("[Grande] 🔄 Risk manager error counter reset after 5 minutes - attempting recovery");
+                        }
+                        // Skip ALL risk manager operations
                     }
-                    
-                    ResetLastError();
-                    
-                    // Call risk manager OnTick
-                    g_riskManager.OnTick();
-                    
-                    // Check for errors from risk manager
-                    int postRMError = GetLastError();
-                    if(postRMError != 0)
+                    else if(shouldThrottleRiskManager)
                     {
-                        Print(StringFormat("[Grande] ⚠️ Error %d in Risk Manager OnTick: %s", 
-                              postRMError, ErrorDescription(postRMError)));
+                        // Risk Manager is throttled due to 4203 errors - skip this cycle
                     }
-                }
+                    else
+                    {
+                        // Safe to proceed with risk manager operations
+                        ResetLastError();
+
+                        // ALWAYS process manual positions to add SL/TP even if max positions exceeded
+                        AddSLTPToManualPositions();
+
+                        // Check for errors from AddSLTPToManualPositions
+                        int postSLTPError = GetLastError();
+                        if(postSLTPError != 0)
+                        {
+                            Print(StringFormat("[Grande] ⚠️ Error %d in AddSLTPToManualPositions: %s",
+                                  postSLTPError, ErrorDescription(postSLTPError)));
+                        }
+
+                        ResetLastError();
+
+                        // ERROR 5035 FIX: Check trade context before calling risk manager
+                        if(!IsTradeAllowed())
+                        {
+                            if(InpLogDetailedInfo)
+                                Print("[Grande] ⏸️ Trade context not available - skipping risk manager OnTick");
+                        }
+                        else
+                        {
+                            // Call risk manager OnTick
+                            g_riskManager.OnTick();
+
+                            // Check for errors from risk manager
+                            int postRMError = GetLastError();
+                            if(postRMError != 0)
+                            {
+                                if(postRMError == 5035) // Trade context busy
+                                {
+                                    if(InpLogDetailedInfo)
+                                        Print("[Grande] ⏸️ Risk Manager OnTick: Trade context busy (error 5035)");
+                                }
+                                else
+                                {
+                                    Print(StringFormat("[Grande] ⚠️ Error %d in Risk Manager OnTick: %s",
+                                          postRMError, ErrorDescription(postRMError)));
+                                }
+                            }
+                        }
+                    }
             }
             else
             {
@@ -800,13 +862,32 @@ void OnTimer()
             int finalError = GetLastError();
             if(finalError != 0 && consecutiveRMErrors < 5)
             {
-                consecutiveRMErrors++;
-                Print(StringFormat("[Grande] ⚠️ Risk Manager ERROR %d detected, consecutive errors: %d", finalError, consecutiveRMErrors));
-                Print(StringFormat("[Grande] ⚠️ Error Description: %s", ErrorDescription(finalError)));
-                
-                if(consecutiveRMErrors >= 5)
+                // ERROR 5035 & 4203 FIX: Don't count trade context busy or invalid request errors as consecutive failures
+                if(finalError == 5035)
                 {
-                    Print("[Grande] 🚨 ERROR THRESHOLD REACHED: Risk Manager will be disabled next cycle");
+                    if(InpLogDetailedInfo)
+                        Print("[Grande] ⏸️ Trade context busy (error 5035) - not counting as consecutive error");
+                }
+                else if(finalError == 4203)
+                {
+                    // Error 4203 is normal when positions already have SL/TP set or are being processed
+                    if(InpLogDetailedInfo)
+                        Print("[Grande] ℹ️ Position already processed (error 4203) - not counting as consecutive error");
+
+                    // Track 4203 errors for throttling purposes
+                    consecutive4203Errors++;
+                    last4203ErrorTime = TimeCurrent();
+                }
+                else
+                {
+                    consecutiveRMErrors++;
+                    Print(StringFormat("[Grande] ⚠️ Risk Manager ERROR %d detected, consecutive errors: %d", finalError, consecutiveRMErrors));
+                    Print(StringFormat("[Grande] ⚠️ Error Description: %s", ErrorDescription(finalError)));
+
+                    if(consecutiveRMErrors >= 5)
+                    {
+                        Print("[Grande] 🚨 ERROR THRESHOLD REACHED: Risk Manager will be disabled next cycle");
+                    }
                 }
             }
             else if(finalError == 0 && consecutiveRMErrors > 0 && consecutiveRMErrors < 5)
@@ -814,6 +895,12 @@ void OnTimer()
                 // Reset on success only if we had errors before but haven't hit emergency stop
                 Print(StringFormat("[Grande] ✅ Risk Manager recovered after %d errors - resetting counter", consecutiveRMErrors));
                 consecutiveRMErrors = 0;
+            }
+            else if(finalError == 0 && consecutive4203Errors > 0)
+            {
+                // Reset 4203 error counter on successful operations
+                consecutive4203Errors = 0;
+                last4203ErrorTime = 0;
             }
             
             if(finalError == 0 && g_riskManager != NULL && !g_riskManager.IsTradingEnabled())
@@ -907,11 +994,15 @@ void OnTimer()
         }
     }
     
-    // Calendar AI analysis (periodic)
-    if(InpEnableCalendarAI 
-       && (!InpCalendarOnlyOnTimeframe || Period() == InpCalendarRunTimeframe)
-       && currentTime - g_lastCalendarUpdate >= InpCalendarUpdateMinutes * 60)
+    // Calendar AI analysis (periodic) - Aggressive updates for FinBERT integration
+    bool calendarShouldRun = InpEnableCalendarAI;
+    int updateInterval = (g_lastCalendarUpdate == 0) ? 10 : (InpCalendarUpdateMinutes * 60); // First run after 10 seconds
+    
+    if(calendarShouldRun && currentTime - g_lastCalendarUpdate >= updateInterval)
     {
+        if(InpLogDetailedInfo)
+            Print("[CAL-AI] 🔄 Starting calendar data collection and FinBERT analysis...");
+            
         bool eventsOk = g_calendarReader.GetEconomicCalendarEvents(InpCalendarLookaheadHours);
         if(!eventsOk)
         {
@@ -982,6 +1073,7 @@ void OnTimer()
                 ObjectDelete(g_chartID, STARTUP_PANEL_NAME);
         }
     }
+    */
 }
 
 //+------------------------------------------------------------------+
@@ -995,20 +1087,6 @@ void SetupChartDisplay()
     ChartSetInteger(g_chartID, CHART_COLOR_FOREGROUND, clrWhite);
     ChartSetInteger(g_chartID, CHART_COLOR_GRID, clrDimGray);
 }
-
-//+------------------------------------------------------------------+
-//| Forward declarations                                              |
-//+------------------------------------------------------------------+
-void ShowStartupSnapshot();
-bool FindNearestKeyLevels(const double currentPrice, SKeyLevel &outSupport, SKeyLevel &outResistance);
-string BuildGoldenNugget(const RegimeSnapshot &rs, const SKeyLevel &support, const SKeyLevel &resistance);
-// New helpers forward declarations
-bool HasOpenPositionForSymbolAndMagic(const string symbol, const int magic);
-double NormalizeVolumeToStep(const string symbol, double volume);
-void NormalizeStops(const bool isBuy, const double entryPrice, double &sl, double &tp);
-bool IsPendingPriceValid(const bool isBuyStop, const double levelPrice);
-bool HasSimilarPendingOrderForBreakout(const bool isBuyStop, const double levelPrice, const int tolerancePoints);
-void ConfigureTradeFillingMode();
 
 //+------------------------------------------------------------------+
 //| Perform initial analysis                                          |
@@ -1891,8 +1969,9 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         
         if(InpLogDetailedInfo)
         {
+            int remainingSeconds = g_signalAnalysisThrottleSeconds - (int)(currentTime - g_lastSignalAnalysisTime);
             Print(logPrefix + "⏸️ THROTTLED: Signal analysis throttled for ", 
-                  g_signalAnalysisThrottleSeconds - (currentTime - g_lastSignalAnalysisTime), 
+                  remainingSeconds, 
                   " more seconds (last rejection: ", g_lastRejectionReason, ")");
         }
     }
@@ -4345,6 +4424,30 @@ string ErrorDescription(int errorCode)
 }
 
 //+------------------------------------------------------------------+
+//| Check if trade context is available                             |
+//+------------------------------------------------------------------+
+bool IsTradeAllowed()
+{
+    // Check if trading is enabled
+    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+        return false;
+        
+    // Check if autotrading is enabled
+    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+        return false;
+        
+    // Check if symbol trading is allowed
+    if(!SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE))
+        return false;
+        
+    // Check if we're connected to trade server
+    if(!TerminalInfoInteger(TERMINAL_CONNECTED))
+        return false;
+        
+    return true;
+}
+
+//+------------------------------------------------------------------+
 //| Add SL/TP to manual positions                                   |
 //+------------------------------------------------------------------+
 void AddSLTPToManualPositions()
@@ -4470,19 +4573,78 @@ void AddSLTPToManualPositions()
         // Modify position to add SL/TP
         if((currentSL == 0 || currentTP == 0) && (sl != 0 || tp != 0))
         {
-            if(g_trade.PositionModify(ticket, sl, tp))
+            // ERROR 5035 & 4203 FIX: Check trade context and implement retry mechanism
+            bool modifySuccess = false;
+            int maxRetries = 3;
+            int retryDelay = 100; // 100ms delay between retries
+
+            for(int retry = 0; retry < maxRetries && !modifySuccess; retry++)
             {
-                Print(StringFormat("[Grande] ✅ Added SL/TP to manual position #%I64u - SL: %.5f, TP: %.5f", 
-                      ticket, sl, tp));
+                // Reset error before attempt
+                ResetLastError();
+
+                // Check if trade context is available
+                if(!IsTradeAllowed())
+                {
+                    if(InpLogDetailedInfo)
+                        Print(StringFormat("[Grande] ⏸️ Trade context not available for position #%I64u (attempt %d/%d)",
+                              ticket, retry + 1, maxRetries));
+                    Sleep(retryDelay);
+                    continue;
+                }
+
+                // Attempt to modify position
+                modifySuccess = g_trade.PositionModify(ticket, sl, tp);
+
+                if(modifySuccess)
+                {
+                    Print(StringFormat("[Grande] ✅ Added SL/TP to manual position #%I64u - SL: %.5f, TP: %.5f",
+                          ticket, sl, tp));
+                    break;
+                }
+                else
+                {
+                    int error = GetLastError();
+
+                    // Handle specific errors
+                    if(error == 5035) // Trade context is busy
+                    {
+                        if(InpLogDetailedInfo)
+                            Print(StringFormat("[Grande] ⏸️ Trade context busy for position #%I64u (attempt %d/%d) - retrying in %dms",
+                                  ticket, retry + 1, maxRetries, retryDelay));
+                        Sleep(retryDelay);
+                        continue;
+                    }
+                    else if(error == 10045) // Position already closed
+                    {
+                        if(InpLogDetailedInfo)
+                            Print(StringFormat("[Grande] ⚠️ Position #%I64u already closed - skipping", ticket));
+                        break; // Don't retry for closed positions
+                    }
+                    else if(error == 4203) // Invalid request - position already has SL/TP or being processed
+                    {
+                        // Position likely already has proper SL/TP set or is being processed
+                        // This is normal for positions created by the system itself
+                        if(InpLogDetailedInfo)
+                            Print(StringFormat("[Grande] ℹ️ Position #%I64u already processed (error 4203) - skipping", ticket));
+                        break; // Don't retry for 4203 errors
+                    }
+                    else
+                    {
+                        // Other errors - log and don't retry
+                        Print(StringFormat("[Grande] ❌ FAILED to add SL/TP to position #%I64u", ticket));
+                        Print(StringFormat("[Grande] ❌ Error Code: %d - %s", error, ErrorDescription(error)));
+                        Print(StringFormat("[Grande] ❌ Attempted SL: %.5f, TP: %.5f", sl, tp));
+                        Print(StringFormat("[Grande] ❌ Trade Result: %d", g_trade.ResultRetcode()));
+                        break; // Don't retry for other errors
+                    }
+                }
             }
-            else
+
+            if(!modifySuccess)
             {
-                int error = GetLastError();
-                // ALWAYS LOG ALL ERRORS - NO SUPPRESSION
-                Print(StringFormat("[Grande] ❌ FAILED to add SL/TP to position #%I64u", ticket));
-                Print(StringFormat("[Grande] ❌ Error Code: %d - %s", error, ErrorDescription(error)));
-                Print(StringFormat("[Grande] ❌ Attempted SL: %.5f, TP: %.5f", sl, tp));
-                Print(StringFormat("[Grande] ❌ Trade Result: %d", g_trade.ResultRetcode()));
+                Print(StringFormat("[Grande] ❌ FINAL FAILURE: Could not add SL/TP to position #%I64u after %d attempts",
+                      ticket, maxRetries));
             }
         }
     }

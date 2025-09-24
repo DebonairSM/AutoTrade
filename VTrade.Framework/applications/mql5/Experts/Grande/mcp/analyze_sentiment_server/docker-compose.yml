@@ -1,0 +1,14 @@
+version: "3.8"
+services:
+  finbert-analyzer:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - SENTIMENT_PROVIDER=finbert_local
+      - CALENDAR_ANALYZER=finbert_enhanced
+      - FINBERT_MODEL=yiyanghkust/finbert-tone
+      - MCP_TRANSPORT=streamable-http
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

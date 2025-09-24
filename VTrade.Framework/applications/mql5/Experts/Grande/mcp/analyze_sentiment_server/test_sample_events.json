@@ -1,0 +1,31 @@
+{
+  "events": [
+    {
+      "time_utc": "2025-01-15 14:30:00",
+      "currency": "USD",
+      "name": "Consumer Price Index (CPI)",
+      "actual": 3.2,
+      "forecast": 3.0,
+      "previous": 2.8,
+      "impact": "High"
+    },
+    {
+      "time_utc": "2025-01-15 16:00:00", 
+      "currency": "EUR",
+      "name": "Unemployment Rate",
+      "actual": 6.8,
+      "forecast": 7.2,
+      "previous": 7.5,
+      "impact": "Medium"
+    },
+    {
+      "time_utc": "2025-01-16 09:30:00",
+      "currency": "GBP", 
+      "name": "Retail Sales",
+      "actual": 2.1,
+      "forecast": 1.8,
+      "previous": 1.5,
+      "impact": "Critical"
+    }
+  ]
+}

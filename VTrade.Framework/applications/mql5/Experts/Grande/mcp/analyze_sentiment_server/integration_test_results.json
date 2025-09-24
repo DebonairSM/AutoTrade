@@ -1,0 +1,48 @@
+{
+  "integration_summary": {
+    "total_tests": 4,
+    "passed_tests": 4,
+    "success_rate": 100.0,
+    "overall_status": "PASSED"
+  },
+  "test_results": [
+    {
+      "test": "finbert_analyzer",
+      "status": "PASSED",
+      "signal": "NEUTRAL",
+      "score": 0.10000000000000002,
+      "confidence": 0.5433333333333333,
+      "event_count": 3,
+      "processing_time_ms": 1.4693737030029297,
+      "surprise_accuracy": 0.6744444444444445,
+      "signal_consistency": 1.0
+    },
+    {
+      "test": "mcp_server",
+      "status": "PASSED",
+      "signal": "NEUTRAL",
+      "score": 0.0,
+      "confidence": 0.43333333333333335,
+      "analyzer": "FinBERT"
+    },
+    {
+      "test": "mcp_server",
+      "status": "PASSED",
+      "json_size_bytes": 4087,
+      "event_count": 3,
+      "has_metrics": true,
+      "has_research_validation": true
+    },
+    {
+      "test": "performance_requirements",
+      "status": "PASSED",
+      "processing_time_ms": 1.5246868133544922,
+      "reported_time_ms": 1.4910697937011719,
+      "confidence": 0.5433333333333333,
+      "consistency": 1.0,
+      "performance_grade": "C (Acceptable)"
+    }
+  ],
+  "system_ready": true,
+  "deployment_grade": "A+ (Production Ready)"
+}

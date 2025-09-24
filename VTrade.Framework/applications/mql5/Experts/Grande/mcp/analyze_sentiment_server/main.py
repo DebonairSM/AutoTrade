@@ -7,6 +7,8 @@ from typing import Any, Dict
 from mcp.server.fastmcp import FastMCP, Context
 import httpx
 from functools import lru_cache
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 
 
 # Basic logging (no secrets)
@@ -74,6 +76,36 @@ def redact(text: str) -> str:
 
 # Create MCP server
 mcp = FastMCP("Grande Sentiment Server")
+
+# Create FastAPI app for HTTP endpoints
+app = FastAPI(title="Grande Sentiment Server HTTP API")
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Docker container."""
+    return {"status": "healthy", "service": "Grande Sentiment Server"}
+
+@app.post("/tools/analyze_calendar_events")
+async def analyze_calendar_events_endpoint(request: Request):
+    """HTTP endpoint for calendar events analysis."""
+    try:
+        data = await request.json()
+
+        # Create a mock context for the MCP tool
+        class MockContext:
+            async def error(self, message: str):
+                logger.error(message)
+
+        ctx = MockContext()
+
+        # Call the MCP tool
+        result = await analyze_calendar_events(data, ctx)
+
+        return JSONResponse(content=result)
+
+    except Exception as e:
+        logger.error(f"HTTP API error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @mcp.tool()
@@ -259,8 +291,8 @@ async def analyze_calendar_events(events: Any, ctx: Context) -> Dict[str, Any]:
             if k in n: return 1
         return 1  # default
 
-    # Select analyzer mode
-    mode = os.environ.get("CALENDAR_ANALYZER", "heuristic").strip().lower()
+    # Select analyzer mode - default to enhanced FinBERT
+    mode = os.environ.get("CALENDAR_ANALYZER", "finbert_enhanced").strip().lower()
     use_finbert = mode.startswith("finbert")
 
     per = []
@@ -397,13 +429,31 @@ def main() -> None:
     if transport not in {"stdio", "streamable-http", "streamable_http"}:
         transport = "stdio"
     transport = "streamable-http" if transport.startswith("streamable") else "stdio"
-    
-    # Set environment variables for HTTP binding
+
     if transport == "streamable-http":
-        os.environ["MCP_HOST"] = "0.0.0.0"
-        os.environ["MCP_PORT"] = "8000"
-    
-    mcp.run(transport=transport)
+        # Run both MCP server and HTTP API server
+        import asyncio
+        import uvicorn
+        from concurrent.futures import ThreadPoolExecutor
+
+        async def run_servers():
+            # Run MCP server in a thread pool
+            def run_mcp():
+                mcp.run(transport="streamable-http")
+
+            # Start MCP server in background thread
+            with ThreadPoolExecutor() as executor:
+                executor.submit(run_mcp)
+
+                # Run FastAPI server
+                config = uvicorn.Config(app, host="0.0.0.0", port=8000)
+                server = uvicorn.Server(config)
+                await server.serve()
+
+        asyncio.run(run_servers())
+    else:
+        # Use the transport specified by environment variable
+        mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

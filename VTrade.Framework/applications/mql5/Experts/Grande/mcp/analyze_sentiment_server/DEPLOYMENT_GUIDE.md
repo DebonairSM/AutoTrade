@@ -1,325 +1,302 @@
-# Grande Sentiment MCP Server - Deployment Guide
+# Grande Enhanced FinBERT Deployment Guide
 
-This guide provides multiple deployment options to ensure your sentiment server MCP is always running and monitored.
+## Quick Start
 
-## 🚀 Quick Start
+### 1. Prerequisites
+- Python 3.8+
+- 4GB+ RAM (8GB recommended for GPU)
+- NVIDIA GPU with CUDA support (optional, for faster processing)
 
-### Option 1: Docker (Recommended)
+### 2. Installation
 ```bash
-# Clone and navigate to the directory
+# Clone or download the Grande repository
 cd mcp/analyze_sentiment_server
 
-# Copy environment file
-cp env.example .env
+# Create virtual environment
+python -m venv .venv
 
-# Edit configuration
-nano .env
+# Activate virtual environment
+# Windows:
+.\.venv\Scripts\Activate.ps1
+# Linux/Mac:
+source .venv/bin/activate
 
-# Start with Docker Compose
-docker compose up -d
-
-# Check status
-docker compose ps
-docker compose logs -f sentiment-server
-```
-
-### Option 2: Direct Python with Monitor
-```bash
 # Install dependencies
-pip install -r requirements.txt requests
-
-# Start with monitoring
-python monitor.py
-
-# Or start manually
-python main.py
-```
-
-## 📋 Deployment Options
-
-### 1. Docker Deployment (Production Recommended)
-
-**Advantages:**
-- ✅ Isolated environment
-- ✅ Built-in health checks
-- ✅ Easy scaling and updates
-- ✅ Consistent across environments
-- ✅ Automatic restart policies
-
-**Setup:**
-```bash
-# Build and start
-docker compose up -d
-
-# With local LLM (Ollama)
-docker compose --profile local-llm up -d
-
-# Check health
-curl http://localhost:8000/health
-
-# View logs
-docker compose logs -f sentiment-server
-```
-
-**Configuration:**
-- Edit `docker-compose.yml` for port changes
-- Edit `.env` file for environment variables
-- Modify `Dockerfile` for custom dependencies
-
-### 2. Systemd Service (Linux)
-
-**Advantages:**
-- ✅ Native Linux service management
-- ✅ Automatic startup on boot
-- ✅ Built-in restart policies
-- ✅ System integration
-
-**Setup:**
-```bash
-# Run deployment script
-./deploy.sh
-
-# Or manual setup
-sudo cp grande-sentiment.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable grande-sentiment
-sudo systemctl start grande-sentiment
-```
-
-**Management:**
-```bash
-# Start/Stop/Restart
-sudo systemctl start grande-sentiment
-sudo systemctl stop grande-sentiment
-sudo systemctl restart grande-sentiment
-
-# Check status
-sudo systemctl status grande-sentiment
-
-# View logs
-sudo journalctl -u grande-sentiment -f
-```
-
-### 3. Windows Service
-
-**Advantages:**
-- ✅ Native Windows service
-- ✅ Automatic startup
-- ✅ Service management integration
-
-**Setup:**
-1. Install NSSM (Non-Sucking Service Manager)
-2. Copy files to `C:\grande-sentiment\`
-3. Install service:
-```cmd
-nssm install GrandeSentimentMCP C:\grande-sentiment\.venv\Scripts\python.exe
-nssm set GrandeSentimentMCP AppParameters main.py
-nssm set GrandeSentimentMCP AppDirectory C:\grande-sentiment
-nssm start GrandeSentimentMCP
-```
-
-### 4. Python Monitor Script
-
-**Advantages:**
-- ✅ Cross-platform
-- ✅ Customizable monitoring
-- ✅ Detailed logging
-- ✅ Easy debugging
-
-**Usage:**
-```bash
-# Basic monitoring
-python monitor.py
-
-# Custom configuration
-python monitor.py --url http://localhost:8000/health --interval 60 --max-retries 5
-```
-
-## 🔧 Configuration
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MCP_TRANSPORT` | `stdio` | Transport mode (`stdio` or `streamable-http`) |
-| `SENTIMENT_PROVIDER` | `openai_compat` | Provider (`openai_compat`, `finbert_local`, `classifier`) |
-| `OPENAI_BASE_URL` | - | OpenAI-compatible API endpoint |
-| `OPENAI_API_KEY` | - | API key (if required) |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Model name |
-| `CLASSIFIER_URL` | - | Custom classifier endpoint |
-| `FINBERT_MODEL` | `yiyanghkust/finbert-tone` | FinBERT model name |
-
-### Provider Options
-
-#### 1. OpenAI Compatible (Default)
-```bash
-export OPENAI_BASE_URL="http://localhost:11434/v1"  # Ollama
-export OPENAI_API_KEY="EMPTY"
-export OPENAI_MODEL="llama3.2"
-```
-
-#### 2. Local FinBERT
-```bash
-export SENTIMENT_PROVIDER="finbert_local"
-export FINBERT_MODEL="yiyanghkust/finbert-tone"
-```
-
-#### 3. Custom Classifier
-```bash
-export SENTIMENT_PROVIDER="classifier"
-export CLASSIFIER_URL="http://your-classifier:8080/analyze"
-```
-
-## 📊 Monitoring and Health Checks
-
-### Health Check Endpoint
-- **URL:** `http://localhost:8000/health`
-- **Method:** GET
-- **Response:** `{"status": "healthy", "service": "Grande Sentiment Server"}`
-
-### Docker Health Checks
-```yaml
-healthcheck:
-  test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-  interval: 30s
-  timeout: 10s
-  retries: 3
-  start_period: 10s
-```
-
-### Monitor Script Features
-- ✅ Automatic health checking
-- ✅ Auto-restart on failure
-- ✅ Configurable intervals
-- ✅ Detailed logging
-- ✅ Graceful shutdown
-
-## 🔍 Troubleshooting
-
-### Common Issues
-
-#### 1. Server Won't Start
-```bash
-# Check logs
-docker compose logs sentiment-server
-sudo journalctl -u grande-sentiment -f
-
-# Check dependencies
 pip install -r requirements.txt
 ```
 
-#### 2. Health Check Fails
+### 3. Basic Configuration
 ```bash
-# Test health endpoint
-curl -v http://localhost:8000/health
+# Set environment variables
+export SENTIMENT_PROVIDER="finbert_local"
+export CALENDAR_ANALYZER="finbert_enhanced"
+export FINBERT_MODEL="yiyanghkust/finbert-tone"
+```
 
+### 4. Test Installation
+```bash
+# Run benchmark test
+python performance_benchmark.py
+
+# Expected output:
+# === BENCHMARK RESULTS ===
+# Tests Passed: 4/4
+# Success Rate: 100.0%
+# Overall Grade: A (Very Good)
+```
+
+## Production Deployment
+
+### Option A: Local Development
+```bash
+# Start MCP server
+python main.py
+
+# Test with sample data
+python finbert_calendar_analyzer.py --input test_sample_events.json
+```
+
+### Option B: Docker Deployment
+```dockerfile
+# Dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+EXPOSE 8000
+
+ENV SENTIMENT_PROVIDER=finbert_local
+ENV CALENDAR_ANALYZER=finbert_enhanced
+ENV MCP_TRANSPORT=streamable-http
+
+CMD ["python", "main.py"]
+```
+
+```bash
+# Build and run
+docker build -t grande-finbert .
+docker run -p 8000:8000 grande-finbert
+```
+
+### Option C: MQL5 Integration
+1. Copy `GrandeNewsSentimentIntegration.mqh` to your MQL5 Experts folder
+2. Include in your Expert Advisor:
+```cpp
+#include "GrandeNewsSentimentIntegration.mqh"
+
+CNewsSentimentIntegration news_sentiment;
+
+int OnInit() {
+    if (!news_sentiment.Initialize()) {
+        Print("ERROR: Failed to initialize FinBERT sentiment analysis");
+        return INIT_FAILED;
+    }
+    return INIT_SUCCEEDED;
+}
+
+void OnTick() {
+    if (news_sentiment.RunCalendarAnalysis()) {
+        news_sentiment.PrintEnhancedMetrics();
+        
+        if (news_sentiment.ShouldEnterLong()) {
+            // Enter long position based on sentiment
+        }
+    }
+}
+```
+
+## Configuration Options
+
+### Environment Variables
+```bash
+# Core Settings
+SENTIMENT_PROVIDER=finbert_local          # finbert_local, openai_compat, classifier
+CALENDAR_ANALYZER=finbert_enhanced        # finbert_enhanced, heuristic
+FINBERT_MODEL=yiyanghkust/finbert-tone    # FinBERT model to use
+
+# Server Settings
+MCP_TRANSPORT=stdio                       # stdio, streamable-http
+MCP_HOST=0.0.0.0                         # HTTP server host
+MCP_PORT=8000                            # HTTP server port
+
+# External API Settings (if using)
+OPENAI_BASE_URL=http://localhost:11434/v1 # OpenAI-compatible endpoint
+OPENAI_API_KEY=EMPTY                     # API key (if required)
+OPENAI_MODEL=llama3.2                    # Model name
+```
+
+### Performance Tuning
+```bash
+# For better performance with GPU
+export CUDA_VISIBLE_DEVICES=0
+
+# For CPU-only deployment
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# For memory optimization
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+```
+
+## Monitoring and Maintenance
+
+### Health Checks
+```bash
 # Check if server is running
-netstat -tlnp | grep 8000
+curl http://localhost:8000/health
+
+# Run performance benchmark
+python performance_benchmark.py
+
+# Test with sample data
+python finbert_calendar_analyzer.py --input test_sample_events.json
 ```
 
-#### 3. Permission Issues
+### Log Monitoring
 ```bash
-# Fix ownership
-sudo chown -R mcpuser:mcpuser /opt/grande-sentiment
+# View logs
+tail -f grande_sentiment.log
 
-# Check service user
-id mcpuser
+# Check performance metrics
+grep "processing_time_ms" grande_sentiment.log | tail -10
 ```
 
-### Log Locations
-
-| Deployment | Log Location |
-|------------|--------------|
-| Docker | `docker compose logs sentiment-server` |
-| Systemd | `sudo journalctl -u grande-sentiment` |
-| Windows | `C:\grande-sentiment\logs\` |
-| Monitor | `monitor.log` |
-
-## 🚀 Production Recommendations
-
-### 1. Use Docker (Recommended)
-- Better isolation and security
-- Easier updates and rollbacks
-- Built-in health monitoring
-- Consistent across environments
-
-### 2. Enable Logging
+### Model Updates
 ```bash
-# Docker
-docker compose logs -f sentiment-server
-
-# Systemd
-sudo journalctl -u grande-sentiment -f --since "1 hour ago"
+# Update FinBERT model
+export FINBERT_MODEL=latest_version
+python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('$FINBERT_MODEL')"
 ```
 
-### 3. Set Up Monitoring
-- Use the provided monitor script
-- Set up external monitoring (Prometheus, Grafana)
-- Configure alerts for failures
+## Troubleshooting
 
-### 4. Security Considerations
-- Run as non-root user
-- Use environment variables for secrets
-- Enable firewall rules
-- Regular security updates
+### Common Issues
 
-## 📈 Scaling and High Availability
-
-### Load Balancing
-```yaml
-# docker-compose.yml
-services:
-  sentiment-server-1:
-    # ... configuration
-  sentiment-server-2:
-    # ... configuration
-  nginx:
-    image: nginx
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-```
-
-### Multiple Instances
+**1. "No module named 'torch'"**
 ```bash
-# Start multiple instances
-docker compose up -d --scale sentiment-server=3
+# Install PyTorch
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
-## 🔄 Updates and Maintenance
-
-### Docker Updates
+**2. CUDA out of memory**
 ```bash
-# Pull latest changes
-git pull
-
-# Rebuild and restart
-docker compose down
-docker compose up -d --build
+# Reduce batch size or use CPU
+export CUDA_VISIBLE_DEVICES=""
 ```
 
-### Systemd Updates
+**3. Model download fails**
 ```bash
-# Update files
-sudo cp main.py /opt/grande-sentiment/
-sudo systemctl restart grande-sentiment
+# Manual download
+python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.from_pretrained('yiyanghkust/finbert-tone')"
 ```
 
-## 📞 Support
+**4. MQL5 integration issues**
+- Ensure "Allow DLL imports" is enabled in Expert Advisor settings
+- Check file paths in GrandeNewsSentimentIntegration.mqh
+- Verify JSON parsing in ParseCalendarSentimentData()
 
-For issues and questions:
-1. Check the logs first
-2. Review this documentation
-3. Check the health endpoint
-4. Verify configuration
+### Performance Issues
 
-## 🎯 Best Practices
+**Slow Processing:**
+- Check if using GPU: `python -c "import torch; print(torch.cuda.is_available())"`
+- Monitor memory usage during analysis
+- Consider reducing batch size
 
-1. **Always use health checks** - Monitor service availability
-2. **Log everything** - Enable detailed logging for debugging
-3. **Use environment variables** - Don't hardcode configuration
-4. **Test deployments** - Verify functionality after updates
-5. **Monitor resources** - Watch CPU, memory, and disk usage
-6. **Backup configuration** - Keep deployment configs in version control
-7. **Use restart policies** - Ensure automatic recovery from failures
+**Low Accuracy:**
+- Verify economic event data format
+- Check impact weight assignments
+- Review surprise calculation logic
+
+**High Memory Usage:**
+- Use CPU-only PyTorch build
+- Reduce model precision: `torch.float16`
+- Implement model caching
+
+## Security Considerations
+
+### API Security
+```bash
+# Use authentication for HTTP endpoints
+export OPENAI_API_KEY="your-secure-key"
+
+# Enable HTTPS in production
+export MCP_SSL_CERT=/path/to/cert.pem
+export MCP_SSL_KEY=/path/to/key.pem
+```
+
+### Data Privacy
+- Economic event data is processed locally
+- No sensitive information is logged
+- PII detection and redaction enabled by default
+
+### Network Security
+```bash
+# Restrict network access
+export MCP_HOST=127.0.0.1  # Localhost only
+
+# Use firewall rules
+ufw allow 8000/tcp  # Allow only necessary ports
+```
+
+## Scaling and Production
+
+### Horizontal Scaling
+```bash
+# Load balancer configuration (nginx)
+upstream finbert_backend {
+    server 127.0.0.1:8001;
+    server 127.0.0.1:8002;
+    server 127.0.0.1:8003;
+}
+
+server {
+    listen 80;
+    location / {
+        proxy_pass http://finbert_backend;
+    }
+}
+```
+
+### Monitoring
+```bash
+# Prometheus metrics endpoint
+export ENABLE_METRICS=true
+
+# Health check endpoint
+curl http://localhost:8000/health
+```
+
+### Backup and Recovery
+```bash
+# Backup model cache
+tar -czf finbert_model_backup.tar.gz ~/.cache/huggingface/
+
+# Backup configuration
+cp .env .env.backup
+```
+
+## Support and Maintenance
+
+### Regular Maintenance
+- Weekly performance benchmarks
+- Monthly model updates
+- Quarterly security reviews
+
+### Support Contacts
+- Technical Issues: Check logs and run diagnostics
+- Performance Issues: Run benchmark tests
+- Integration Issues: Verify MQL5 configuration
+
+### Version Updates
+```bash
+# Check for updates
+pip list --outdated
+
+# Update dependencies
+pip install -r requirements.txt --upgrade
+
+# Test after updates
+python performance_benchmark.py
+```

@@ -14,6 +14,17 @@
 int ShellExecuteW(int hwnd, string Operation, string File, string Parameters, string Directory, int ShowCmd);
 #import
 
+// WinInet imports for HTTP API calls to Docker container
+#import "wininet.dll"
+int InternetOpenW(string, int, string, string, int);
+int InternetConnectW(int, string, int, string, string, int, int, int);
+int HttpOpenRequestW(int, string, string, string, string, string, int, int);
+int HttpSendRequestW(int, string, int, string, int);
+int InternetReadFile(int, string, int, int&);
+int HttpQueryInfoW(int, int, string, int&, int);
+int InternetCloseHandle(int);
+#import
+
 
 //+------------------------------------------------------------------+
 //| News Sentiment Integration Class                                |
@@ -48,6 +59,13 @@ private:
         string        reasoning;        // Explanation
         int           event_count;      // Events analyzed
         datetime      timestamp;        // Analysis time
+        
+        // Enhanced metrics from research validation
+        double        surprise_accuracy;     // 0..1
+        double        signal_consistency;    // 0..1
+        double        processing_time_ms;    // Processing time
+        int           high_confidence_count; // High confidence predictions
+        double        average_confidence;    // Average confidence across events
     };
     
     NewsSentimentData m_current_sentiment;
@@ -85,6 +103,12 @@ public:
     string            GetCalendarReasoning() { return m_calendar_sentiment.reasoning; }
     int               GetEventCount() { return m_calendar_sentiment.event_count; }
     
+    // Enhanced metrics access
+    double            GetSurpriseAccuracy() { return m_calendar_sentiment.surprise_accuracy; }
+    double            GetSignalConsistency() { return m_calendar_sentiment.signal_consistency; }
+    double            GetProcessingTime() { return m_calendar_sentiment.processing_time_ms; }
+    int               GetHighConfidenceCount() { return m_calendar_sentiment.high_confidence_count; }
+    
     // Trading signal integration
     bool              ShouldEnterLong();
     bool              ShouldEnterShort();
@@ -94,6 +118,7 @@ public:
     // Utility functions
     string            GetSentimentDescription();
     void              PrintSentimentInfo();
+    void              PrintEnhancedMetrics();
     bool              IsSentimentServerRunning();
     
 private:
@@ -102,6 +127,13 @@ private:
     bool              AnalyzeCalendarInline();
     string            ExecutePythonScript(string script_path);
     bool              ValidateSentimentData();
+    
+    // Docker API methods
+    bool              CallDockerAPI(string endpoint, string json_data, string &response);
+    bool              SendCalendarEventsToDocker(string &response);
+    bool              LoadEconomicEventsFromFile(string &events_json);
+    bool              IsDockerContainerRunning();
+    bool              RunCalendarAnalysisFileBased();
 };
 
 //+------------------------------------------------------------------+
@@ -131,6 +163,11 @@ CNewsSentimentIntegration::CNewsSentimentIntegration()
     m_calendar_sentiment.reasoning = "No calendar analysis available";
     m_calendar_sentiment.event_count = 0;
     m_calendar_sentiment.timestamp = 0;
+    m_calendar_sentiment.surprise_accuracy = 0.0;
+    m_calendar_sentiment.signal_consistency = 0.0;
+    m_calendar_sentiment.processing_time_ms = 0.0;
+    m_calendar_sentiment.high_confidence_count = 0;
+    m_calendar_sentiment.average_confidence = 0.0;
 }
 
 //+------------------------------------------------------------------+
@@ -220,35 +257,37 @@ bool CNewsSentimentIntegration::LoadLatestAnalysis()
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::RunCalendarAnalysis()
 {
-    Print("Grande Calendar Sentiment: Running calendar analysis...");
-    string script_path = "mcp/analyze_sentiment_server/finbert_calendar_analyzer.py";
-    string result = ExecutePythonScript(script_path);
-    if(result == "")
+    Print("Grande Calendar Sentiment: Calling Docker FinBERT API...");
+    
+    // Check if Docker container is running
+    if(!IsDockerContainerRunning())
     {
-        Print("ERROR: Failed to execute calendar analysis script");
-        // Try inline fallback analysis if Python execution isn't available
-        if(AnalyzeCalendarInline())
-            return true;
-        return false;
+        Print("WARNING: Docker FinBERT container not responding, falling back to file-based analysis");
+        return RunCalendarAnalysisFileBased();
     }
     
-    // Wait briefly for the analyzer to produce output in Common\Files
-    bool loaded = false;
-    for(int attempt = 0; attempt < 20; ++attempt) // up to ~10 seconds total
+    // Call Docker API
+    string response = "";
+    if(SendCalendarEventsToDocker(response))
     {
-        if(LoadLatestCalendarAnalysis())
+        Print("Docker FinBERT API response received, parsing...");
+        if(ParseCalendarSentimentData(response))
         {
-            loaded = true;
-            break;
+            m_last_analysis_time = TimeCurrent();
+            Print("✅ Docker FinBERT analysis completed successfully");
+            return true;
         }
-        Sleep(500);
+        else
+        {
+            Print("ERROR: Failed to parse Docker API response, falling back to file-based analysis");
+            return RunCalendarAnalysisFileBased();
+        }
     }
-    if(!loaded)
+    else
     {
-        // Fallback to inline analysis if no external analysis file was produced
-        return AnalyzeCalendarInline();
+        Print("ERROR: Failed to call Docker FinBERT API, falling back to file-based analysis");
+        return RunCalendarAnalysisFileBased();
     }
-    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -391,6 +430,25 @@ void CNewsSentimentIntegration::PrintSentimentInfo()
     Print("Articles Analyzed: ", m_current_sentiment.article_count);
     Print("Reasoning: ", m_current_sentiment.reasoning);
     Print("=====================================");
+}
+
+//+------------------------------------------------------------------+
+//| Print enhanced research metrics                                  |
+//+------------------------------------------------------------------+
+void CNewsSentimentIntegration::PrintEnhancedMetrics()
+{
+    Print("=== GRANDE ENHANCED FINBERT METRICS ===");
+    Print("Signal: ", m_calendar_sentiment.signal);
+    Print("Score: ", DoubleToString(m_calendar_sentiment.score, 3));
+    Print("Confidence: ", DoubleToString(m_calendar_sentiment.confidence, 3));
+    Print("Events Analyzed: ", m_calendar_sentiment.event_count);
+    Print("High Confidence Predictions: ", m_calendar_sentiment.high_confidence_count, "/", m_calendar_sentiment.event_count);
+    Print("Surprise Accuracy: ", DoubleToString(m_calendar_sentiment.surprise_accuracy, 3));
+    Print("Signal Consistency: ", DoubleToString(m_calendar_sentiment.signal_consistency, 3));
+    Print("Processing Time: ", DoubleToString(m_calendar_sentiment.processing_time_ms, 1), "ms");
+    Print("Average Confidence: ", DoubleToString(m_calendar_sentiment.average_confidence, 3));
+    Print("Reasoning: ", m_calendar_sentiment.reasoning);
+    Print("=========================================");
 }
 
 //+------------------------------------------------------------------+
@@ -576,6 +634,68 @@ bool CNewsSentimentIntegration::ParseCalendarSentimentData(string json_data)
         if(q > p) m_calendar_sentiment.reasoning = StringSubstr(json_data, p, q - p);
     }
     m_calendar_sentiment.timestamp = TimeCurrent();
+    
+    // Parse enhanced metrics if available
+    string patt_surprise = "\"surprise_accuracy\": ";
+    p = StringFind(json_data, patt_surprise);
+    if(p >= 0)
+    {
+        p += StringLen(patt_surprise);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.surprise_accuracy = StringToDouble(s);
+    }
+    
+    string patt_consistency = "\"signal_consistency\": ";
+    p = StringFind(json_data, patt_consistency);
+    if(p >= 0)
+    {
+        p += StringLen(patt_consistency);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.signal_consistency = StringToDouble(s);
+    }
+    
+    string patt_time = "\"processing_time_ms\": ";
+    p = StringFind(json_data, patt_time);
+    if(p >= 0)
+    {
+        p += StringLen(patt_time);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.processing_time_ms = StringToDouble(s);
+    }
+    
+    string patt_high_conf = "\"high_confidence_predictions\": ";
+    p = StringFind(json_data, patt_high_conf);
+    if(p >= 0)
+    {
+        p += StringLen(patt_high_conf);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.high_confidence_count = (int)StringToInteger(s);
+    }
+    
+    string patt_avg_conf = "\"average_confidence\": ";
+    p = StringFind(json_data, patt_avg_conf);
+    if(p >= 0)
+    {
+        p += StringLen(patt_avg_conf);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.average_confidence = StringToDouble(s);
+    }
+    
     return m_calendar_sentiment.event_count > 0 && m_calendar_sentiment.signal != "";
 }
 
@@ -698,3 +818,154 @@ if (news_sentiment.ShouldExitPosition())
     // Exit current position
 }
 */
+
+//+------------------------------------------------------------------+
+//| Fallback: Run calendar analysis using file-based method         |
+//+------------------------------------------------------------------+
+bool CNewsSentimentIntegration::RunCalendarAnalysisFileBased()
+{
+    Print("Grande Calendar Sentiment: Running file-based analysis...");
+    string script_path = "mcp/analyze_sentiment_server/finbert_calendar_analyzer.py";
+    string result = ExecutePythonScript(script_path);
+    if(result == "")
+    {
+        Print("ERROR: Failed to execute calendar analysis script");
+        if(AnalyzeCalendarInline())
+            return true;
+        return false;
+    }
+    
+    // Wait briefly for the analyzer to produce output in Common\Files
+    bool loaded = false;
+    for(int attempt = 0; attempt < 20; ++attempt)
+    {
+        if(LoadLatestCalendarAnalysis())
+        {
+            loaded = true;
+            break;
+        }
+        Sleep(500);
+    }
+    if(!loaded)
+    {
+        return AnalyzeCalendarInline();
+    }
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Check if Docker container is running                            |
+//+------------------------------------------------------------------+
+bool CNewsSentimentIntegration::IsDockerContainerRunning()
+{
+    string response = "";
+    return CallDockerAPI("/health", "", response);
+}
+
+//+------------------------------------------------------------------+
+//| Load economic events from JSON file                             |
+//+------------------------------------------------------------------+
+bool CNewsSentimentIntegration::LoadEconomicEventsFromFile(string &events_json)
+{
+    string file_path = "economic_events.json";
+    int fh = FileOpen(file_path, FILE_READ|FILE_TXT|FILE_COMMON);
+    if(fh == INVALID_HANDLE)
+        fh = FileOpen(file_path, FILE_READ|FILE_TXT);
+    if(fh == INVALID_HANDLE)
+        return false;
+    
+    events_json = "";
+    while(!FileIsEnding(fh))
+        events_json += FileReadString(fh);
+    FileClose(fh);
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Send calendar events to Docker FinBERT API                      |
+//+------------------------------------------------------------------+
+bool CNewsSentimentIntegration::SendCalendarEventsToDocker(string &response)
+{
+    string events_json = "";
+    if(!LoadEconomicEventsFromFile(events_json))
+    {
+        Print("ERROR: Could not load economic events from file");
+        return false;
+    }
+    
+    string endpoint = "/tools/analyze_calendar_events";
+    return CallDockerAPI(endpoint, events_json, response);
+}
+
+//+------------------------------------------------------------------+
+//| Call Docker FinBERT API via HTTP                                |
+//+------------------------------------------------------------------+
+bool CNewsSentimentIntegration::CallDockerAPI(string endpoint, string json_data, string &response)
+{
+    int hInternet = InternetOpenW("GrandeTradingSystem", 1, "", "", 0);
+    if(hInternet == 0)
+    {
+        Print("ERROR: Failed to initialize WinInet");
+        return false;
+    }
+    
+    int hConnect = InternetConnectW(hInternet, "localhost", 8000, "", "", 3, 0, 0);
+    if(hConnect == 0)
+    {
+        Print("ERROR: Failed to connect to Docker container on localhost:8000");
+        InternetCloseHandle(hInternet);
+        return false;
+    }
+    
+    string headers = "Content-Type: application/json\r\n";
+    int hRequest = HttpOpenRequestW(hConnect, "POST", endpoint, "HTTP/1.1", "", "", 0x80000000, 0);
+    if(hRequest == 0)
+    {
+        Print("ERROR: Failed to create HTTP request");
+        InternetCloseHandle(hConnect);
+        InternetCloseHandle(hInternet);
+        return false;
+    }
+    
+    bool success = HttpSendRequestW(hRequest, headers, StringLen(headers), json_data, StringLen(json_data));
+    if(!success)
+    {
+        Print("ERROR: Failed to send HTTP request to Docker API");
+        InternetCloseHandle(hRequest);
+        InternetCloseHandle(hConnect);
+        InternetCloseHandle(hInternet);
+        return false;
+    }
+    
+    // Read response
+    response = "";
+    string buffer = "";
+    int bytesRead = 0;
+    while(InternetReadFile(hRequest, buffer, 1024, bytesRead) && bytesRead > 0)
+    {
+        response += StringSubstr(buffer, 0, bytesRead);
+    }
+
+    // Check HTTP status code
+    int statusCode = 0;
+    string statusText = "";
+    int statusSize = 0;
+    if(HttpQueryInfoW(hRequest, 19, statusText, statusSize, 0)) // HTTP_QUERY_STATUS_CODE = 19
+    {
+        statusCode = StringToInteger(statusText);
+        if(statusCode != 200)
+        {
+            Print("ERROR: HTTP request failed with status code: ", statusCode);
+            InternetCloseHandle(hRequest);
+            InternetCloseHandle(hConnect);
+            InternetCloseHandle(hInternet);
+            return false;
+        }
+    }
+
+    InternetCloseHandle(hRequest);
+    InternetCloseHandle(hConnect);
+    InternetCloseHandle(hInternet);
+
+    return StringLen(response) > 0;
+}

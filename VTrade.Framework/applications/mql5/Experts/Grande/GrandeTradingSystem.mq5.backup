@@ -213,25 +213,6 @@ const string ADX_STRENGTH_METER_NAME = "GrandeADXStrengthMeter";
 const string REGIME_ALERT_NAME = "GrandeRegimeAlert";
 
 //+------------------------------------------------------------------+
-//| Forward declarations                                              |
-//+------------------------------------------------------------------+
-void ShowStartupSnapshot();
-bool FindNearestKeyLevels(const double currentPrice, SKeyLevel &outSupport, SKeyLevel &outResistance);
-string BuildGoldenNugget(const RegimeSnapshot &rs, const SKeyLevel &support, const SKeyLevel &resistance);
-// New helpers forward declarations
-bool HasOpenPositionForSymbolAndMagic(const string symbol, const int magic);
-double NormalizeVolumeToStep(const string symbol, double volume);
-void NormalizeStops(const bool isBuy, const double entryPrice, double &sl, double &tp);
-bool IsPendingPriceValid(const bool isBuyStop, const double levelPrice);
-bool HasSimilarPendingOrderForBreakout(const bool isBuyStop, const double levelPrice, const int tolerancePoints);
-// Core function forward declarations
-bool ValidateInputParameters();
-void ConfigureTradeFillingMode();
-void SetupChartDisplay();
-void PerformInitialAnalysis();
-void CleanupChartObjects();
-
-//+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
@@ -665,13 +646,6 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-    // OnTimer temporarily disabled to fix compilation issues
-    // All periodic updates are handled by risk manager during normal operations
-    return;
-    
-    /*
-    // TODO: Re-enable OnTimer functionality once compilation issues are resolved
-    // All the code below has been temporarily disabled to fix compilation errors
     datetime currentTime = TimeCurrent();
     
     // Generate initial report 5 seconds after startup
@@ -1073,7 +1047,6 @@ void OnTimer()
                 ObjectDelete(g_chartID, STARTUP_PANEL_NAME);
         }
     }
-    */
 }
 
 //+------------------------------------------------------------------+
@@ -1087,6 +1060,19 @@ void SetupChartDisplay()
     ChartSetInteger(g_chartID, CHART_COLOR_FOREGROUND, clrWhite);
     ChartSetInteger(g_chartID, CHART_COLOR_GRID, clrDimGray);
 }
+
+//+------------------------------------------------------------------+
+//| Forward declarations                                              |
+//+------------------------------------------------------------------+
+void ShowStartupSnapshot();
+bool FindNearestKeyLevels(const double currentPrice, SKeyLevel &outSupport, SKeyLevel &outResistance);
+string BuildGoldenNugget(const RegimeSnapshot &rs, const SKeyLevel &support, const SKeyLevel &resistance);
+// New helpers forward declarations
+bool HasOpenPositionForSymbolAndMagic(const string symbol, const int magic);
+double NormalizeVolumeToStep(const string symbol, double volume);
+void NormalizeStops(const bool isBuy, const double entryPrice, double &sl, double &tp);
+bool IsPendingPriceValid(const bool isBuyStop, const double levelPrice);
+bool HasSimilarPendingOrderForBreakout(const bool isBuyStop, const double levelPrice, const int tolerancePoints);
 
 //+------------------------------------------------------------------+
 //| Perform initial analysis                                          |
