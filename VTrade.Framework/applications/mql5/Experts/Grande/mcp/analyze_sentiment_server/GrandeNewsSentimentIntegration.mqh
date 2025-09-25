@@ -244,7 +244,6 @@ bool CNewsSentimentIntegration::LoadLatestAnalysis()
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::RunCalendarAnalysis()
 {
-    Print("Grande Calendar Sentiment: Running file-based analysis...");
     return RunCalendarAnalysisFileBased();
 }
 

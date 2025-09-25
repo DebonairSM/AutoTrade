@@ -72,7 +72,7 @@ if ($mt5Path) {
 }
 ```
 
-### **4. FinBERT Analysis**
+### **4. FinBERT Analysis Files**
 ```powershell
 # Check FinBERT integration - try multiple possible paths
 $commonPaths = @(
@@ -90,9 +90,32 @@ foreach ($path in $commonPaths) {
 }
 
 if ($commonPath) {
-    $analysisFile = "$commonPath\integrated_calendar_analysis.json"
+    $calendarAnalysisFile = "$commonPath\integrated_calendar_analysis.json"
+    $newsAnalysisFile = "$commonPath\integrated_news_analysis.json"
 } else {
-    $analysisFile = $null
+    $calendarAnalysisFile = $null
+    $newsAnalysisFile = $null
+}
+```
+
+### **5. Database Analysis**
+```powershell
+# Check database health and growth
+if ($mt5Path) {
+    $dbFile = "$($mt5Path.FullName)\MQL5\Files\GrandeTradingData.db"
+    if (Test-Path $dbFile) {
+        $dbInfo = Get-ChildItem $dbFile
+        $dbSize = [math]::Round($dbInfo.Length / 1KB, 2)
+        $dbLastModified = $dbInfo.LastWriteTime
+    } else {
+        $dbFile = $null
+        $dbSize = 0
+        $dbLastModified = $null
+    }
+} else {
+    $dbFile = $null
+    $dbSize = 0
+    $dbLastModified = $null
 }
 ```
 
@@ -202,23 +225,133 @@ if (Test-Path $todayCSV) {
 
 ### **7. FinBERT Status Check**
 ```powershell
-# Verify FinBERT integration
-if (Test-Path $analysisFile) {
-    $content = Get-Content $analysisFile | ConvertFrom-Json
-    Write-Host "FinBERT Signal: $($content.signal) | Confidence: $($content.confidence)" -ForegroundColor Green
+# Verify FinBERT integration - Calendar Analysis
+if (Test-Path $calendarAnalysisFile) {
+    $calendarContent = Get-Content $calendarAnalysisFile | ConvertFrom-Json
+    Write-Host "FinBERT Calendar Signal: $($calendarContent.signal) | Confidence: $($calendarContent.confidence)" -ForegroundColor Green
+    Write-Host "Event Count: $($calendarContent.event_count) | Processing Time: $($calendarContent.metrics.processing_time_ms)ms" -ForegroundColor Cyan
 } else {
-    Write-Host "❌ FinBERT analysis not available" -ForegroundColor Red
+    Write-Host "❌ FinBERT calendar analysis not available" -ForegroundColor Red
+}
+
+# Verify FinBERT integration - News Analysis
+if (Test-Path $newsAnalysisFile) {
+    $newsContent = Get-Content $newsAnalysisFile | ConvertFrom-Json
+    Write-Host "FinBERT News Signal: $($newsContent.signal) | Confidence: $($newsContent.confidence)" -ForegroundColor Green
+} else {
+    Write-Host "❌ FinBERT news analysis not available" -ForegroundColor Red
 }
 ```
 
-### **8. System Health Metrics**
+### **8. Database Health Analysis**
+```powershell
+# Check database growth and integrity
+if ($dbFile -and (Test-Path $dbFile)) {
+    Write-Host "=== DATABASE HEALTH ANALYSIS ===" -ForegroundColor Magenta
+    
+    # Database size and modification info
+    Write-Host "Database Size: $dbSize KB" -ForegroundColor Cyan
+    Write-Host "Last Modified: $dbLastModified" -ForegroundColor Cyan
+    
+    # Check if database is growing (recent modification)
+    $timeSinceModified = (Get-Date) - $dbLastModified
+    if ($timeSinceModified.TotalMinutes -lt 60) {
+        Write-Host "✅ Database recently updated (within last hour)" -ForegroundColor Green
+    } elseif ($timeSinceModified.TotalHours -lt 24) {
+        Write-Host "⚠️ Database updated within last 24 hours" -ForegroundColor Yellow
+    } else {
+        Write-Host "❌ Database not updated recently ($([math]::Round($timeSinceModified.TotalHours, 1)) hours ago)" -ForegroundColor Red
+    }
+    
+    # Check database file integrity (basic check)
+    try {
+        $dbStream = [System.IO.File]::OpenRead($dbFile)
+        $dbStream.Close()
+        Write-Host "✅ Database file is accessible and not corrupted" -ForegroundColor Green
+    } catch {
+        Write-Host "❌ Database file access error: $($_.Exception.Message)" -ForegroundColor Red
+    }
+} else {
+    Write-Host "❌ Database file not found or not accessible" -ForegroundColor Red
+}
+```
+
+### **9. Enhanced CSV Data Analysis**
+```powershell
+# Check CSV data collection with detailed analysis
+if (Test-Path $todayCSV) {
+    Write-Host "=== CSV DATA ANALYSIS ===" -ForegroundColor Magenta
+    
+    $data = Import-Csv $todayCSV
+    Write-Host "Today's CSV Records: $($data.Count)" -ForegroundColor Cyan
+    
+    if ($data.Count -gt 0) {
+        # Decision breakdown
+        $decisionBreakdown = $data | Group-Object decision | Sort-Object Count -Descending
+        Write-Host "`nDecision Breakdown:" -ForegroundColor Cyan
+        $decisionBreakdown | Format-Table Count, Name -AutoSize
+        
+        # Signal type breakdown
+        $signalBreakdown = $data | Group-Object signal_type | Sort-Object Count -Descending
+        Write-Host "Signal Type Breakdown:" -ForegroundColor Cyan
+        $signalBreakdown | Format-Table Count, Name -AutoSize
+        
+        # Recent activity (last 3 records)
+        Write-Host "`nRecent Activity (Last 3 records):" -ForegroundColor Cyan
+        $data | Select-Object -Last 3 | Format-Table timestamp, signal_type, decision, rejection_reason -AutoSize
+        
+        # Check for data quality issues
+        $emptyReasons = ($data | Where-Object {$_.rejection_reason -eq "" -and $_.decision -eq "REJECTED"}).Count
+        if ($emptyReasons -gt 0) {
+            Write-Host "⚠️ Found $emptyReasons records with empty rejection reasons" -ForegroundColor Yellow
+        }
+        
+        # Check for recent activity
+        $lastRecord = $data | Select-Object -Last 1
+        $lastRecordTime = [DateTime]::ParseExact($lastRecord.timestamp, "yyyy.MM.dd HH:mm:ss", $null)
+        $timeSinceLastRecord = (Get-Date) - $lastRecordTime
+        
+        if ($timeSinceLastRecord.TotalMinutes -lt 30) {
+            Write-Host "✅ Recent data activity (last record: $($timeSinceLastRecord.TotalMinutes.ToString('F1')) minutes ago)" -ForegroundColor Green
+        } elseif ($timeSinceLastRecord.TotalHours -lt 2) {
+            Write-Host "⚠️ Data activity within last 2 hours (last record: $($timeSinceLastRecord.TotalHours.ToString('F1')) hours ago)" -ForegroundColor Yellow
+        } else {
+            Write-Host "❌ No recent data activity (last record: $($timeSinceLastRecord.TotalHours.ToString('F1')) hours ago)" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "❌ CSV file exists but contains no data" -ForegroundColor Red
+    }
+} else {
+    Write-Host "❌ No CSV file found for today" -ForegroundColor Red
+}
+```
+
+### **10. System Health Metrics**
 ```powershell
 # Check system health
 if ($latestLog) {
+    Write-Host "=== SYSTEM HEALTH METRICS ===" -ForegroundColor Magenta
+    
     Write-Host "Log Size: $([math]::Round($latestLog.Length/1MB, 2)) MB" -ForegroundColor Yellow
     Write-Host "Last Modified: $($latestLog.LastWriteTime)" -ForegroundColor Yellow
+    
+    # Check for throttling events
     $throttleLogs = Get-Content $latestLog.FullName -Tail 500 | Where-Object {$_ -match "THROTTLED|throttled"}
     Write-Host "Throttling Events: $($throttleLogs.Count)" -ForegroundColor Cyan
+    
+    # Check for memory issues
+    $memoryLogs = Get-Content $latestLog.FullName -Tail 500 | Where-Object {$_ -match "memory|Memory|MEMORY"}
+    if ($memoryLogs.Count -gt 0) {
+        Write-Host "⚠️ Memory-related logs found: $($memoryLogs.Count)" -ForegroundColor Yellow
+        $memoryLogs | Select-Object -Last 3
+    }
+    
+    # Check for connection issues
+    $connectionLogs = Get-Content $latestLog.FullName -Tail 500 | Where-Object {$_ -match "connection|Connection|CONNECTION|disconnect|Disconnect"}
+    if ($connectionLogs.Count -gt 0) {
+        Write-Host "⚠️ Connection-related logs found: $($connectionLogs.Count)" -ForegroundColor Yellow
+        $connectionLogs | Select-Object -Last 3
+    }
 } else {
     Write-Host "❌ Cannot check system health - no log file" -ForegroundColor Red
 }
@@ -228,44 +361,51 @@ if ($latestLog) {
 
 ### **🔴 CRITICAL (Check First)**
 1. **Error Analysis** - Look for new errors since last check
-2. **Trading Activity** - Monitor trade executions and patterns
-3. **Signal Success Rate** - Monitor signal pass/fail rates
-4. **RSI Logic Status** - Verify RSI validation is working
-5. **Pullback Validation** - Confirm pullback fix is active
+2. **Database Health** - Verify database is growing and accessible
+3. **Trading Activity** - Monitor trade executions and patterns
+4. **Signal Success Rate** - Monitor signal pass/fail rates
+5. **RSI Logic Status** - Verify RSI validation is working
+6. **Pullback Validation** - Confirm pullback fix is active
 
 ### **🟡 HIGH PRIORITY**
-6. **CSV Data Collection** - Check if new records are being generated
-7. **FinBERT Integration** - Verify AI analysis is working
-8. **Database Health** - Check database growth and integrity
+7. **CSV Data Collection** - Check if new records are being generated
+8. **FinBERT Integration** - Verify AI analysis is working (both calendar and news)
+9. **Data Quality** - Check for data integrity issues
 
 ### **🟢 MEDIUM PRIORITY**
-9. **System Performance** - Monitor log size and throttling
-10. **Data Quality** - Check for data integrity issues
+10. **System Performance** - Monitor log size and throttling
+11. **Memory & Connection** - Check for system resource issues
 
 ## **Expected Findings & Quick Diagnostics**
 
 ### **✅ Good Signs (System Working)**
+- Database size growing and recently modified (<1 hour)
 - Pullback Success Rate >90%
 - RSI Success Rate >20%
-- CSV records increasing daily
+- CSV records increasing daily with recent activity (<30 minutes)
 - Error count <10 in recent logs
-- FinBERT confidence >0.5
+- FinBERT confidence >0.5 (both calendar and news)
 - Regular trading activity detected
+- Database file accessible and not corrupted
 
 ### **❌ Warning Signs (Issues Detected)**
+- Database not updated in last 24 hours
 - RSI Success Rate = 0%
 - No new CSV records for >1 hour
 - Error count >20 in recent logs
 - Pullback Success Rate <50%
 - FinBERT confidence <0.3
 - No trading activity for extended periods
+- Empty rejection reasons in CSV data
 
 ### **�� Critical Issues (Immediate Action)**
+- Database file not found or corrupted
 - Error 4203 count >10
 - Error 10019/10046 appearing
 - No signal analysis for >10 minutes
-- Database not growing
-- FinBERT analysis missing
+- Database not growing for >2 hours
+- FinBERT analysis missing (both files)
+- No CSV data activity for >2 hours
 
 ## **Quick Analysis Template**
 
@@ -278,9 +418,21 @@ $logPath = Get-ChildItem "$env:APPDATA\MetaQuotes\Terminal\*\MQL5\Logs" -Directo
 $latestLog = Get-ChildItem "$($logPath.FullName)\*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $mt5Path = Get-ChildItem "$env:APPDATA\MetaQuotes\Terminal\*" -Directory | Where-Object {Test-Path "$($_.FullName)\MQL5"} | Select-Object -First 1
 $todayCSV = "$($mt5Path.FullName)\MQL5\Files\FinBERT_Data_EURUSD!_$(Get-Date -Format 'yyyy.MM.dd').csv"
+$dbFile = "$($mt5Path.FullName)\MQL5\Files\GrandeTradingData.db"
+$calendarAnalysisFile = "$env:APPDATA\MetaQuotes\Terminal\Common\Files\integrated_calendar_analysis.json"
+$newsAnalysisFile = "$env:APPDATA\MetaQuotes\Terminal\Common\Files\integrated_news_analysis.json"
 
-# 2. Run all checks
-# [Insert all the analysis commands above]
+# 2. Run all checks in priority order
+# [Insert all the analysis commands above in this order:]
+# 1. Error Analysis
+# 2. Database Health Analysis  
+# 3. Trading Activity Analysis
+# 4. Signal Success Rate Analysis
+# 5. RSI Logic Verification
+# 6. Pullback Validation Check
+# 7. Enhanced CSV Data Analysis
+# 8. FinBERT Status Check (both calendar and news)
+# 9. System Health Metrics
 
 # 3. Summary
 Write-Host "`n=== ANALYSIS COMPLETE ===" -ForegroundColor Green
@@ -298,8 +450,10 @@ Provide analysis in this structure:
 ## **Usage Notes**
 - **Frequency**: Run every 1-2 hours during active trading
 - **Focus**: Only analyze data since last check
-- **Priority**: Always check errors and RSI logic first
-- **Action**: Reload EA if RSI fix not active
-- **Monitoring**: Watch for signal success rate improvements
+- **Priority**: Always check errors, database health, and RSI logic first
+- **Action**: Reload EA if RSI fix not active or database not growing
+- **Monitoring**: Watch for signal success rate improvements and database growth
+- **Critical**: Database must be growing - if not, system is not functioning properly
+- **FinBERT**: Check both calendar and news analysis files for complete AI integration status
 
-This optimized prompt focuses on **incremental analysis** using **proven PowerShell commands** that have worked effectively in our testing, making it perfect for regular system monitoring and quick health checks.
+This optimized prompt focuses on **incremental analysis** using **proven PowerShell commands** that have worked effectively in our testing, making it perfect for regular system monitoring and quick health checks. **Database monitoring is now a critical priority** to ensure data persistence and system functionality.

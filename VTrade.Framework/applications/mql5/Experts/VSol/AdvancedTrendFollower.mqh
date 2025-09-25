@@ -299,9 +299,13 @@ bool CAdvancedTrendFollower::IsBullish()
     if(!m_isInitialized || ArraySize(m_emaFastH1) < 1)
         return false;
     
-    // === RELAXED CONDITIONS FOR BETTER TRADE EXECUTION ===
-    // Fast EMA > Slow EMA on H1 (primary condition)
+    // === CRITICAL FIX: H1 EMA alignment is MANDATORY for trend direction ===
+    // Fast EMA > Slow EMA on H1 (primary condition - MUST be true)
     bool h1EmaAlignment = (m_emaFastH1[0] > m_emaSlowH1[0]);
+    
+    // If H1 EMA is not bullish, we cannot be bullish regardless of other indicators
+    if(!h1EmaAlignment)
+        return false;
     
     // H4 and D1 alignment (bonus points, not required)
     bool h4EmaAlignment = (ArraySize(m_emaFastH4) > 0 && ArraySize(m_emaSlowH4) > 0) ? 
@@ -318,9 +322,8 @@ bool CAdvancedTrendFollower::IsBullish()
     // RSI (H1) > threshold (more lenient: >45 instead of >50)
     bool rsiCondition = (m_rsiH1[0] > MathMax(InpRsiThreshold - 5.0, 45.0));
     
-    // === SCORING SYSTEM: Need 3/5 conditions instead of ALL ===
-    int score = 0;
-    if(h1EmaAlignment) score += 2;  // Primary condition worth 2 points
+    // === SCORING SYSTEM: Need 3/5 conditions (H1 EMA already required) ===
+    int score = 2; // Start with 2 points for H1 EMA alignment (already confirmed)
     if(h4EmaAlignment) score++;
     if(d1EmaAlignment) score++; 
     if(adxCondition) score++;
@@ -356,7 +359,7 @@ bool CAdvancedTrendFollower::IsBullish()
               " ADX:", DoubleToString(m_adxH1[0], 0), " RSI:", DoubleToString(m_rsiH1[0], 0));
     }
     
-    // Need at least 3 points (was requiring all 7 before!)
+    // Need at least 3 points total (H1 EMA + 1 more condition)
     return (score >= 3);
 }
 
@@ -368,9 +371,13 @@ bool CAdvancedTrendFollower::IsBearish()
     if(!m_isInitialized || ArraySize(m_emaFastH1) < 1)
         return false;
     
-    // === RELAXED CONDITIONS FOR BETTER TRADE EXECUTION ===
-    // Fast EMA < Slow EMA on H1 (primary condition)
+    // === CRITICAL FIX: H1 EMA alignment is MANDATORY for trend direction ===
+    // Fast EMA < Slow EMA on H1 (primary condition - MUST be true)
     bool h1EmaAlignment = (m_emaFastH1[0] < m_emaSlowH1[0]);
+    
+    // If H1 EMA is not bearish, we cannot be bearish regardless of other indicators
+    if(!h1EmaAlignment)
+        return false;
     
     // H4 and D1 alignment (bonus points, not required)
     bool h4EmaAlignment = (ArraySize(m_emaFastH4) > 0 && ArraySize(m_emaSlowH4) > 0) ? 
@@ -387,9 +394,8 @@ bool CAdvancedTrendFollower::IsBearish()
     // RSI (H1) < threshold (more lenient: <55 instead of <50)
     bool rsiCondition = (m_rsiH1[0] < MathMin(InpRsiThreshold + 5.0, 55.0));
     
-    // === SCORING SYSTEM: Need 3/5 conditions instead of ALL ===
-    int score = 0;
-    if(h1EmaAlignment) score += 2;  // Primary condition worth 2 points
+    // === SCORING SYSTEM: Need 3/5 conditions (H1 EMA already required) ===
+    int score = 2; // Start with 2 points for H1 EMA alignment (already confirmed)
     if(h4EmaAlignment) score++;
     if(d1EmaAlignment) score++; 
     if(adxCondition) score++;
@@ -425,7 +431,7 @@ bool CAdvancedTrendFollower::IsBearish()
               " ADX:", DoubleToString(m_adxH1[0], 0), " RSI:", DoubleToString(m_rsiH1[0], 0));
     }
     
-    // Need at least 3 points (was requiring all 7 before!)
+    // Need at least 3 points total (H1 EMA + 1 more condition)
     return (score >= 3);
 }
 
@@ -1004,16 +1010,15 @@ void CAdvancedTrendFollower::UpdateDiagnosticUI()
         trendMode = "🔴 STRONG BEAR";
     else
     {
-        // Show primary trend direction based on majority timeframes
+        // Show primary trend direction based on H1 EMA (most reliable indicator)
         bool h1Aligned = (ArraySize(m_emaFastH1) > 0) ? (m_emaFastH1[0] > m_emaSlowH1[0]) : false;
         bool h4Aligned = (ArraySize(m_emaFastH4) > 0) ? (m_emaFastH4[0] > m_emaSlowH4[0]) : false;
         bool d1Aligned = (ArraySize(m_emaFastD1) > 0) ? (m_emaFastD1[0] > m_emaSlowD1[0]) : false;
         
-        int bullishCount = (h1Aligned ? 1 : 0) + (h4Aligned ? 1 : 0) + (d1Aligned ? 1 : 0);
-        
-        if(bullishCount >= 2)
+        // H1 EMA takes priority for weak signals
+        if(h1Aligned)
             trendMode = "⚡ WEAK BULL";
-        else if(bullishCount <= 1)
+        else
             trendMode = "⚡ WEAK BEAR";
     }
     
@@ -1062,16 +1067,15 @@ void CAdvancedTrendFollower::MCP_UI_UpdatePanel()
         trendMode = "🔴 STRONG BEAR";
     else
     {
-        // Show primary trend direction based on majority timeframes
+        // Show primary trend direction based on H1 EMA (most reliable indicator)
         bool h1Aligned = (ArraySize(m_emaFastH1) > 0) ? (m_emaFastH1[0] > m_emaSlowH1[0]) : false;
         bool h4Aligned = (ArraySize(m_emaFastH4) > 0) ? (m_emaFastH4[0] > m_emaSlowH4[0]) : false;
         bool d1Aligned = (ArraySize(m_emaFastD1) > 0) ? (m_emaFastD1[0] > m_emaSlowD1[0]) : false;
         
-        int bullishCount = (h1Aligned ? 1 : 0) + (h4Aligned ? 1 : 0) + (d1Aligned ? 1 : 0);
-        
-        if(bullishCount >= 2)
+        // H1 EMA takes priority for weak signals
+        if(h1Aligned)
             trendMode = "⚡ WEAK BULL";
-        else if(bullishCount <= 1)
+        else
             trendMode = "⚡ WEAK BEAR";
     }
     
@@ -1201,5 +1205,5 @@ bool CAdvancedTrendFollower::EnsureSeriesReady(const ENUM_TIMEFRAMES tf)
         Sleep(10);
         attempts++;
     }
-    return SeriesInfoInteger(_Symbol, tf, SERIES_SYNCHRONIZED);
+    return (SeriesInfoInteger(_Symbol, tf, SERIES_SYNCHRONIZED) != 0);
 }
