@@ -83,6 +83,14 @@ input int    InpMinModifyCooldownSec = 180;      // Cooldown between SL/TP modif
 input double InpMinStopDistanceMultiplier = 1.5; // Multiplier for minimum stop distance
 input bool   InpValidateStopLevels = true;       // Enable comprehensive stop level validation
 
+input group "=== Intelligent Position Scaling ==="
+input bool   InpEnableIntelligentScaling = true; // Enable intelligent position scaling
+input int    InpScalingRangePeriods = 20;        // 15-min periods for range calculation
+input double InpScalingRangeBuffer = 0.1;        // Buffer as fraction of range (0.1 = 10%)
+input int    InpMaxScalingPositions = 3;         // Maximum positions for scaling
+input double InpMinRangeSizePips = 20.0;         // Minimum range size to enable scaling
+input bool   InpLogScalingDecisions = true;      // Log scaling decisions for analysis
+
 input group "=== Signal Settings ==="
 input int    InpEMA50Period = 50;                // 50 EMA Period
 input int    InpEMA200Period = 200;              // 200 EMA Period
@@ -112,11 +120,11 @@ input double InpTFRsiThreshold = 50.0;           // TF RSI Threshold
 
 // RSI Risk Management Settings
 input bool   InpEnableMTFRSI = true;              // Gate entries by H4/D1 RSI
-input double InpH4RSIOverbought = 68.0;           // H4 RSI overbought
-input double InpH4RSIOversold  = 32.0;            // H4 RSI oversold
+input double InpH4RSIOverbought = 75.0;           // H4 RSI overbought
+input double InpH4RSIOversold  = 25.0;            // H4 RSI oversold
 input bool   InpUseD1RSI = true;                  // Also gate by D1 extremes
-input double InpD1RSIOverbought = 70.0;
-input double InpD1RSIOversold  = 30.0;
+input double InpD1RSIOverbought = 80.0;
+input double InpD1RSIOversold  = 20.0;
 
 input bool   InpDisableRiskManagerTemp = false;   // EMERGENCY: Disable risk manager (error recovery)
 input bool   InpEnableRSIExits = true;            // Enable RSI-based exits
@@ -144,9 +152,10 @@ input bool   InpShowRegimeTrendArrows = true;    // Show Regime Trend Arrows
 input bool   InpShowADXStrengthMeter = true;     // Show ADX Strength Meter
 input bool   InpShowRegimeAlerts = true;         // Show Regime Change Alerts
 input bool   InpLogDetailedInfo = true;          // Log Detailed Trade Information
-input bool   InpLogVerbose = true;              // Verbose Logging (recommended for monitoring)
+input bool   InpLogVerbose = false;             // Verbose Logging (reduced noise - only important changes)
 input bool   InpLogDebugInfo = false;            // Log Debug Information (Risk Manager)
 input bool   InpLogAllErrors = true;             // Log ALL Errors and Retries (CRITICAL)
+input bool   InpLogImportantOnly = true;         // Log only important events (signals, trades, errors)
 
 input group "=== Update Settings ==="
 input int    InpRegimeUpdateSeconds = 5;         // Regime Update Interval (seconds)
@@ -196,7 +205,7 @@ datetime                      g_lastRiskUpdate;
 datetime                      g_lastSignalAnalysisTime = 0;
 string                        g_lastRejectionReason = "";
 MARKET_REGIME                 g_lastAnalysisRegime = REGIME_RANGING;
-int                           g_signalAnalysisThrottleSeconds = 30; // Throttle signal analysis for 30 seconds after rejection
+int                           g_signalAnalysisThrottleSeconds = 10; // Reduced from 30 to 10 seconds for faster analysis
 datetime                      g_lastCalendarUpdate;
 
 // Cached RSI values per management cycle
@@ -208,6 +217,20 @@ double                        g_cachedRsiD1  = EMPTY_VALUE;
 // Database data collection variables
 datetime                      g_lastDataCollectionTime = 0;
 datetime                      g_lastBarTime = 0;
+
+// Intelligent Position Scaling variables
+struct RangeInfo {
+    double upperBound;
+    double lowerBound;
+    datetime rangeStartTime;
+    bool isValid;
+    int touchCount;
+    double rangeSize;
+};
+
+RangeInfo                     g_currentRange;
+datetime                      g_lastRangeUpdate = 0;
+int                           g_rangeHandle15M = INVALID_HANDLE;
 
 // Cooldown storage per ticket for partial closes
 struct SRsiExitState {
@@ -969,6 +992,9 @@ void OnTimer()
         }
         g_lastRiskUpdate = currentTime;
     }
+    
+    // Update intelligent position scaling range information
+    UpdateRangeInfo();
     
     // Update regime detection
     if(g_regimeDetector != NULL && 
@@ -1893,10 +1919,12 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
 {
     string logPrefix = "[TRADE DECISION] ";
     
+    // Check position status first
+    bool hasPosition = HasOpenPositionForSymbolAndMagic(_Symbol, InpMagicNumber);
+    
     // Enhanced logging - show analysis periodically even with positions
     static datetime lastAnalysisLog = 0;
-    bool hasPosition = HasOpenPositionForSymbolAndMagic(_Symbol, InpMagicNumber);
-    bool shouldLogAnalysis = (TimeCurrent() - lastAnalysisLog >= 300); // Log every 5 minutes
+    bool shouldLogAnalysis = (TimeCurrent() - lastAnalysisLog >= 600); // Log every 10 minutes (reduced from 5)
     
     if(InpLogDetailedInfo && shouldLogAnalysis)
     {
@@ -1906,14 +1934,35 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
               " | Spread: ", SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), " pts | Regime: ", g_regimeDetector.RegimeToString(rs.regime));
         lastAnalysisLog = TimeCurrent();
     }
-    else if(InpLogVerbose) // Verbose mode shows all analyses
+    else if(InpLogImportantOnly && !hasPosition) // Only log when no position (potential trading opportunity)
     {
-        Print(logPrefix + "=== ANALYZING TRADE OPPORTUNITY ===");
-        Print(logPrefix + "Timestamp: ", TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES));
-        Print(logPrefix + "Symbol: ", _Symbol);
-        Print(logPrefix + "Current Price: ", DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits));
-        Print(logPrefix + "Spread: ", SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), " points");
-        Print(logPrefix + "Has Position: ", hasPosition ? "YES" : "NO");
+        Print(logPrefix + "🔍 Checking for trading opportunity - No position");
+    }
+    else if(InpLogVerbose) // Smart verbose mode - only show important changes
+    {
+        static datetime lastVerboseLog = 0;
+        static bool lastPositionStatus = false;
+        static double lastPrice = 0.0;
+        static int lastSpread = -1;
+        
+        bool positionChanged = (hasPosition != lastPositionStatus);
+        bool priceChanged = (MathAbs(SymbolInfoDouble(_Symbol, SYMBOL_BID) - lastPrice) > 0.0001);
+        bool spreadChanged = (SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) != lastSpread);
+        bool timeForSummary = (TimeCurrent() - lastVerboseLog >= 300); // Every 5 minutes
+        
+        if(positionChanged || priceChanged || spreadChanged || timeForSummary)
+        {
+            Print(logPrefix + "=== MARKET UPDATE ===");
+            if(positionChanged) Print(logPrefix + "Position Status: ", hasPosition ? "OPEN" : "CLOSED");
+            if(priceChanged) Print(logPrefix + "Price: ", DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits));
+            if(spreadChanged) Print(logPrefix + "Spread: ", SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), " points");
+            if(timeForSummary) Print(logPrefix + "Periodic check - ", hasPosition ? "Position open" : "No position");
+            
+            lastVerboseLog = TimeCurrent();
+            lastPositionStatus = hasPosition;
+            lastPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            lastSpread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+        }
     }
     
     // Prepare decision tracking data
@@ -2000,28 +2049,33 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         }
     }
     
-    // Check if we already have position for this symbol & magic (avoid blocking other symbols)
-    if(HasOpenPositionForSymbolAndMagic(_Symbol, InpMagicNumber))
+    // Check if we already have position for this symbol & magic
+    // MODIFIED: Allow signal evaluation even with position open (for scaling/grid strategies)
+    
+    if(hasPosition)
     {
-        // Smart logging - only show once until position is closed
-        static bool hasWarnedAboutOpenPosition = false;
-        if(!hasWarnedAboutOpenPosition && InpLogDetailedInfo)
+        // Log periodically but don't block signal analysis
+        static datetime lastPositionLog = 0;
+        if(InpLogDetailedInfo && (TimeCurrent() - lastPositionLog >= 600)) // Every 10 minutes
         {
-            Print(logPrefix + "❌ BLOCKED: Position already open for symbol/magic (suppressing further messages)");
-            hasWarnedAboutOpenPosition = true;
+            Print(logPrefix + "ℹ️ Position open - continuing signal analysis for potential scaling");
+            lastPositionLog = TimeCurrent();
         }
         
-        // Track rejection (but less frequently to avoid reporter spam)
-        static datetime lastReportTime = 0;
-        if(g_reporter != NULL && (TimeCurrent() - lastReportTime) >= 300) // Report only every 5 minutes
+        // Track that we're analyzing with position open
+        if(g_reporter != NULL)
         {
-            decision.signal_type = "PRE_SIGNAL_CHECK";
-            decision.decision = "BLOCKED";
-            decision.rejection_reason = "Position already open for symbol/magic";
-            g_reporter.RecordDecision(decision);
-            lastReportTime = TimeCurrent();
+            static datetime lastReportTime = 0;
+            if((TimeCurrent() - lastReportTime) >= 300) // Report every 5 minutes
+            {
+                decision.signal_type = "PRE_SIGNAL_CHECK";
+                decision.decision = "ANALYZING_WITH_POSITION";
+                decision.rejection_reason = "Position open but continuing analysis";
+                g_reporter.RecordDecision(decision);
+                lastReportTime = TimeCurrent();
+            }
         }
-        return;
+        // Don't return - continue with signal analysis
     }
     else
     {
@@ -2231,6 +2285,14 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
                 finbert_signal = g_newsSentiment.GetCalendarSignal();
                 finbert_score = g_newsSentiment.GetCalendarScore();
                 finbert_confidence = g_newsSentiment.GetCalendarConfidence();
+                
+                if(InpLogDetailedInfo)
+                    Print(logPrefix + "📊 Calendar Analysis Loaded: ", finbert_signal, " (Conf: ", DoubleToString(finbert_confidence, 2), ")");
+            }
+            else
+            {
+                if(InpLogDetailedInfo)
+                    Print(logPrefix + "⚠️ Calendar Analysis unavailable - using neutral sentiment");
             }
         }
         
@@ -2545,6 +2607,27 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     }
     */
     
+    // Check intelligent position scaling
+    int existingPositions = 0;
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(PositionGetSymbol(i) == _Symbol && PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+        {
+            existingPositions++;
+        }
+    }
+    
+    // Apply intelligent scaling logic
+    if(!ShouldAllowIntelligentScaling(existingPositions, bullish))
+    {
+        if(InpLogScalingDecisions)
+        {
+            Print(StringFormat("[SCALING] Trend trade BLOCKED - Positions: %d, Buy: %s, Range valid: %s",
+                  existingPositions, bullish ? "true" : "false", g_currentRange.isValid ? "true" : "false"));
+        }
+        return;
+    }
+    
     if(InpLogDetailedInfo)
     {
         Print(logPrefix + "Trade Parameters:");
@@ -2574,6 +2657,12 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
                        lot,
                        (MathAbs(tp-price)/MathMax(1e-10, MathAbs(price-sl))),
                        (sentimentSupports?" senti=YES":"")));
+    
+    // Log scaling decision for successful trades
+    if(tradeResult)
+    {
+        LogScalingDecision(existingPositions + 1, price, bullish);
+    }
 
     // Track execution result
     execution.calculated_lot = lot;
@@ -2802,6 +2891,28 @@ void BreakoutTrade(const RegimeSnapshot &rs)
     lot = NormalizeVolumeToStep(_Symbol, lot);
     NormalizeStops(isBuyStop, breakoutLevel, breakoutSL, breakoutTP);
 
+    // Check intelligent position scaling for breakout trades
+    int existingPositions = 0;
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(PositionGetSymbol(i) == _Symbol && PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+        {
+            existingPositions++;
+        }
+    }
+    
+    // Apply intelligent scaling logic
+    bool isBuyBreakout = strongestLevel.isResistance;
+    if(!ShouldAllowIntelligentScaling(existingPositions, isBuyBreakout))
+    {
+        if(InpLogScalingDecisions)
+        {
+            Print(StringFormat("[SCALING] Breakout trade BLOCKED - Positions: %d, Buy: %s, Range valid: %s",
+                  existingPositions, isBuyBreakout ? "true" : "false", g_currentRange.isValid ? "true" : "false"));
+        }
+        return;
+    }
+    
     // Place order (market order for momentum surge, stop order for normal breakout)
     bool tradeResult = false;
     if(strongMomentumSurge)
@@ -3315,7 +3426,7 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     double pullbackDistance = MathAbs(currentPrice - ema20);
     
     // *** FINBERT-BASED DYNAMIC PULLBACK ADJUSTMENT ***
-    double pullbackMultiplier = 2.0; // Default ATR multiplier (increased from 1.0 for better market adaptation)
+    double pullbackMultiplier = 3.5; // Increased from 2.0 to 3.5 for better market adaptation (was too strict)
     string finbert_signal = "";
     double finbert_confidence = 0.0;
     
@@ -3333,9 +3444,9 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
             if((bullish && sentiment_bullish) || (!bullish && sentiment_bearish))
             {
                 if(finbert_confidence >= 0.7)
-                    pullbackMultiplier = 3.0; // Allow 3x ATR for high confidence supporting sentiment
+                    pullbackMultiplier = 4.5; // Allow 4.5x ATR for high confidence supporting sentiment (increased from 3.0)
                 else if(finbert_confidence >= 0.5)
-                    pullbackMultiplier = 2.5; // Allow 2.5x ATR for medium confidence
+                    pullbackMultiplier = 4.0; // Allow 4.0x ATR for medium confidence (increased from 2.5)
                 
                 if(InpLogDetailedInfo)
                     Print(logPrefix + "📊 FinBERT supports trade direction - pullback tolerance increased to ", DoubleToString(pullbackMultiplier, 1), "x ATR");
@@ -3343,7 +3454,7 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
             // If sentiment opposes but with low confidence, slightly relax
             else if(finbert_confidence < 0.6)
             {
-                pullbackMultiplier = 2.2; // Slight relaxation for low confidence opposition (increased from 1.2)
+                pullbackMultiplier = 3.0; // Slight relaxation for low confidence opposition (increased from 2.2)
                 if(InpLogDetailedInfo)
                     Print(logPrefix + "📊 FinBERT low confidence - slight pullback tolerance increase to ", DoubleToString(pullbackMultiplier, 1), "x ATR");
             }
@@ -3522,22 +3633,22 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         return false;
     }
     
-    // FIX: Improved RSI logic for trend trading
+    // FIX: Improved RSI logic for trend trading - more flexible for trending markets
     // For BULLISH (long): Avoid extreme overbought (RSI > 80) 
     // For BEARISH (short): Avoid extreme oversold (RSI < 20)
-    // This allows trading in trending conditions where RSI stays extended
+    // Allow trading in trending conditions where RSI can be rising or falling
     bool rsiCondition = false;
     if(bullish)
     {
-        // For longs: RSI not extreme overbought AND rising
-        rsiCondition = (rsi < 80 && rsi > rsi_prev);
+        // For longs: RSI not extreme overbought (allow both rising and falling)
+        rsiCondition = (rsi < 80);
         // Optional: Also avoid extreme oversold for longs
         if(rsi < 25) rsiCondition = false; // Don't catch falling knives
     }
     else // bearish
     {
-        // For shorts: RSI not extreme oversold AND falling
-        rsiCondition = (rsi > 20 && rsi < rsi_prev);
+        // For shorts: RSI not extreme oversold (allow both rising and falling)
+        rsiCondition = (rsi > 20);
         // Optional: Also avoid extreme overbought for shorts
         if(rsi > 75) rsiCondition = false; // Don't short at exhaustion tops
     }
@@ -5952,6 +6063,28 @@ void ExecuteTriangleTrade(const STriangleSignal &signal, const RegimeSnapshot &c
     }
     */
     
+    // Check intelligent position scaling for triangle trades
+    int existingPositions = 0;
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(PositionGetSymbol(i) == _Symbol && PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+        {
+            existingPositions++;
+        }
+    }
+    
+    // Apply intelligent scaling logic
+    bool isBuyTriangle = (signal.orderType == ORDER_TYPE_BUY);
+    if(!ShouldAllowIntelligentScaling(existingPositions, isBuyTriangle))
+    {
+        if(InpLogScalingDecisions)
+        {
+            Print(StringFormat("[SCALING] Triangle trade BLOCKED - Positions: %d, Buy: %s, Range valid: %s",
+                  existingPositions, isBuyTriangle ? "true" : "false", g_currentRange.isValid ? "true" : "false"));
+        }
+        return;
+    }
+    
     if(InpLogDetailedInfo)
     {
         Print(logPrefix + "Trade Parameters:");
@@ -5988,6 +6121,12 @@ void ExecuteTriangleTrade(const STriangleSignal &signal, const RegimeSnapshot &c
                        (MathAbs(signal.takeProfit - signal.entryPrice) / MathMax(1e-10, MathAbs(signal.entryPrice - signal.stopLoss))),
                        g_triangleDetector.GetPatternTypeString(),
                        (triangleSenti?" senti=YES":"")));
+    
+    // Log scaling decision for successful trades
+    if(success)
+    {
+        LogScalingDecision(existingPositions + 1, signal.entryPrice, isBuyTriangle);
+    }
     
     if(success)
     {
@@ -6395,4 +6534,134 @@ void ConfigureTradeFillingMode()
     // If symbol supports FOK or IOC, set accordingly. Otherwise, RETURN is safest.
     // SYMBOL_FILLING_MODE returns bitmask in some brokers; be conservative.
     g_trade.SetTypeFilling(ORDER_FILLING_FOK);
+}
+
+//+------------------------------------------------------------------+
+//| Intelligent Position Scaling Functions                          |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Update 15-minute range information                              |
+//+------------------------------------------------------------------+
+void UpdateRangeInfo()
+{
+    if (!InpEnableIntelligentScaling) return;
+    
+    datetime currentTime = TimeCurrent();
+    if (currentTime - g_lastRangeUpdate < 900) return; // Update every 15 minutes
+    
+    double high[], low[];
+    ArraySetAsSeries(high, true);
+    ArraySetAsSeries(low, true);
+    
+    int copied = CopyHigh(_Symbol, PERIOD_M15, 0, InpScalingRangePeriods, high);
+    int copiedLow = CopyLow(_Symbol, PERIOD_M15, 0, InpScalingRangePeriods, low);
+    
+    if (copied > 0 && copiedLow > 0) {
+        // Find highest high and lowest low in the range
+        double maxHigh = high[ArrayMaximum(high, 0, InpScalingRangePeriods)];
+        double minLow = low[ArrayMinimum(low, 0, InpScalingRangePeriods)];
+        
+        g_currentRange.upperBound = maxHigh;
+        g_currentRange.lowerBound = minLow;
+        g_currentRange.rangeSize = maxHigh - minLow;
+        g_currentRange.rangeStartTime = currentTime;
+        g_currentRange.isValid = (g_currentRange.rangeSize >= InpMinRangeSizePips * _Point);
+        g_currentRange.touchCount = 0;
+        
+        if (InpLogScalingDecisions && g_currentRange.isValid) {
+            Print(StringFormat("[SCALING] Range Updated - Upper: %s, Lower: %s, Size: %.1f pips",
+                  DoubleToString(g_currentRange.upperBound, _Digits),
+                  DoubleToString(g_currentRange.lowerBound, _Digits),
+                  g_currentRange.rangeSize / _Point));
+        }
+    }
+    
+    g_lastRangeUpdate = currentTime;
+}
+
+//+------------------------------------------------------------------+
+//| Check if intelligent scaling should be allowed                  |
+//+------------------------------------------------------------------+
+bool ShouldAllowIntelligentScaling(int existingPositions, bool isBuySignal)
+{
+    if (!InpEnableIntelligentScaling) return false;
+    if (existingPositions >= InpMaxScalingPositions) return false;
+    if (!g_currentRange.isValid) return false;
+    
+    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double rangeSize = g_currentRange.rangeSize;
+    double buffer = rangeSize * InpScalingRangeBuffer;
+    
+    // First position: Allow if conditions are met
+    if (existingPositions == 0) {
+        return true;
+    }
+    
+    // Second position: Wait for price to move toward range boundaries
+    if (existingPositions == 1) {
+        if (isBuySignal) {
+            // For BUY: Second position at upper bound (price goes against you, better entry)
+            bool nearUpper = (currentPrice >= g_currentRange.upperBound - buffer);
+            if (nearUpper && InpLogScalingDecisions) {
+                Print(StringFormat("[SCALING] BUY position 2 opportunity - Price: %s, Upper: %s",
+                      DoubleToString(currentPrice, _Digits),
+                      DoubleToString(g_currentRange.upperBound, _Digits)));
+            }
+            return nearUpper;
+        } else {
+            // For SELL: Second position at lower bound (price goes against you, better entry)
+            bool nearLower = (currentPrice <= g_currentRange.lowerBound + buffer);
+            if (nearLower && InpLogScalingDecisions) {
+                Print(StringFormat("[SCALING] SELL position 2 opportunity - Price: %s, Lower: %s",
+                      DoubleToString(currentPrice, _Digits),
+                      DoubleToString(g_currentRange.lowerBound, _Digits)));
+            }
+            return nearLower;
+        }
+    }
+    
+    // Third position: Even more favorable price
+    if (existingPositions == 2) {
+        if (isBuySignal) {
+            // For BUY: Third position at lower bound (most favorable)
+            bool nearLower = (currentPrice <= g_currentRange.lowerBound + buffer);
+            if (nearLower && InpLogScalingDecisions) {
+                Print(StringFormat("[SCALING] BUY position 3 opportunity - Price: %s, Lower: %s",
+                      DoubleToString(currentPrice, _Digits),
+                      DoubleToString(g_currentRange.lowerBound, _Digits)));
+            }
+            return nearLower;
+        } else {
+            // For SELL: Third position at upper bound (most favorable)
+            bool nearUpper = (currentPrice >= g_currentRange.upperBound - buffer);
+            if (nearUpper && InpLogScalingDecisions) {
+                Print(StringFormat("[SCALING] SELL position 3 opportunity - Price: %s, Upper: %s",
+                      DoubleToString(currentPrice, _Digits),
+                      DoubleToString(g_currentRange.upperBound, _Digits)));
+            }
+            return nearUpper;
+        }
+    }
+    
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Log scaling decision for analysis                               |
+//+------------------------------------------------------------------+
+void LogScalingDecision(int positionCount, double entryPrice, bool isBuySignal)
+{
+    if (!InpLogScalingDecisions) return;
+    
+    string logMsg = StringFormat("[SCALING] Position %d @%s | %s | Range: %s-%s (%.1f pips) | %s",
+        positionCount,
+        DoubleToString(entryPrice, _Digits),
+        isBuySignal ? "BUY" : "SELL",
+        DoubleToString(g_currentRange.lowerBound, _Digits),
+        DoubleToString(g_currentRange.upperBound, _Digits),
+        g_currentRange.rangeSize / _Point,
+        g_currentRange.isValid ? "VALID_RANGE" : "NO_RANGE");
+    
+    Print(logMsg);
 }

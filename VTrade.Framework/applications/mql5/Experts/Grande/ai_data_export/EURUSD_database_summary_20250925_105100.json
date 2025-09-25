@@ -1,0 +1,14 @@
+{
+  "market_data": 0,
+  "market_regimes": 0,
+  "key_levels": 0,
+  "trade_decisions": 0,
+  "sentiment_data": 0,
+  "economic_events": 0,
+  "performance_metrics": 0,
+  "config_snapshots": 0,
+  "date_range": {
+    "start": null,
+    "end": null
+  }
+}
