@@ -363,8 +363,26 @@ private:
         
         if(handle == INVALID_HANDLE) return 0.0;
         
-        if(CopyBuffer(handle, 0, 0, 1, m_adx_buffer) <= 0)
+        // Check if indicator data is ready before attempting to copy
+        if(BarsCalculated(handle) <= 0)
             return 0.0;
+            
+        ResetLastError();
+        int copied = CopyBuffer(handle, 0, 0, 1, m_adx_buffer);
+        if(copied <= 0)
+        {
+            int error = GetLastError();
+            if(error != 0 && error != 4806) // Don't log 4806 as it's expected during startup
+            {
+                ulong nowTick = GetTickCount();
+                if(m_lastAtrErrorTick == 0 || (nowTick - m_lastAtrErrorTick) >= 10000)
+                {
+                    Print("[GrandeRegime] ADX data copy failed for tf=", (int)timeframe, " Err=", error);
+                    m_lastAtrErrorTick = nowTick;
+                }
+            }
+            return 0.0;
+        }
             
         return m_adx_buffer[0];
     }
@@ -385,8 +403,26 @@ private:
             
         if(handle == INVALID_HANDLE) return 0.0;
         
-        if(CopyBuffer(handle, 1, 0, 1, m_plus_di_buffer) <= 0)
+        // Check if indicator data is ready before attempting to copy
+        if(BarsCalculated(handle) <= 0)
             return 0.0;
+            
+        ResetLastError();
+        int copied = CopyBuffer(handle, 1, 0, 1, m_plus_di_buffer);
+        if(copied <= 0)
+        {
+            int error = GetLastError();
+            if(error != 0 && error != 4806) // Don't log 4806 as it's expected during startup
+            {
+                ulong nowTick = GetTickCount();
+                if(m_lastAtrErrorTick == 0 || (nowTick - m_lastAtrErrorTick) >= 10000)
+                {
+                    Print("[GrandeRegime] PlusDI data copy failed for tf=", (int)timeframe, " Err=", error);
+                    m_lastAtrErrorTick = nowTick;
+                }
+            }
+            return 0.0;
+        }
             
         return m_plus_di_buffer[0];
     }
@@ -407,8 +443,26 @@ private:
             
         if(handle == INVALID_HANDLE) return 0.0;
         
-        if(CopyBuffer(handle, 2, 0, 1, m_minus_di_buffer) <= 0)
+        // Check if indicator data is ready before attempting to copy
+        if(BarsCalculated(handle) <= 0)
             return 0.0;
+            
+        ResetLastError();
+        int copied = CopyBuffer(handle, 2, 0, 1, m_minus_di_buffer);
+        if(copied <= 0)
+        {
+            int error = GetLastError();
+            if(error != 0 && error != 4806) // Don't log 4806 as it's expected during startup
+            {
+                ulong nowTick = GetTickCount();
+                if(m_lastAtrErrorTick == 0 || (nowTick - m_lastAtrErrorTick) >= 10000)
+                {
+                    Print("[GrandeRegime] MinusDI data copy failed for tf=", (int)timeframe, " Err=", error);
+                    m_lastAtrErrorTick = nowTick;
+                }
+            }
+            return 0.0;
+        }
             
         return m_minus_di_buffer[0];
     }

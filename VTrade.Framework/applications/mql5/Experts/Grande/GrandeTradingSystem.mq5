@@ -2188,8 +2188,18 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         bool isMarketDataError    = (lastErr >= 4301 && lastErr <= 4307); // ERR_MARKET_*
         if(isIndicatorDataError || isMarketDataError)
         {
-            if(InpLogDetailedInfo)
-                Print("[Grande] INFO: Data not ready (err=", lastErr, ") — monitoring continues");
+            // Specifically handle ERR_INDICATOR_DATA_NOT_FOUND (4806) as expected during startup
+            if(lastErr == 4806)
+            {
+                // This is expected when indicators are still calculating - suppress logging
+                if(InpLogVerbose)
+                    Print("[Grande] DEBUG: Indicator data still calculating (err=4806) — normal during startup");
+            }
+            else
+            {
+                if(InpLogDetailedInfo)
+                    Print("[Grande] INFO: Data not ready (err=", lastErr, ") — monitoring continues");
+            }
         }
         else
         {

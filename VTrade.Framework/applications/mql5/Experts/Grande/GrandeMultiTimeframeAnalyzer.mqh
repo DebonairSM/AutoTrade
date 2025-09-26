@@ -144,19 +144,19 @@ void CMultiTimeframeAnalyzer::AnalyzeTimeframe(ENUM_TIMEFRAMES tf, const RegimeS
         consensus.regime = g_regimeDetector.RegimeToString(rs.regime);
         consensus.confidence = rs.confidence;
         consensus.adx = rs.adx_h4;
-        consensus.rsi = rs.rsi_h4;
+        consensus.rsi = 50.0; // Default RSI value - will be calculated separately
     }
     else if(tf == PERIOD_H1) {
         consensus.regime = g_regimeDetector.RegimeToString(rs.regime);
         consensus.confidence = rs.confidence;
         consensus.adx = rs.adx_h1;
-        consensus.rsi = rs.rsi_h1;
+        consensus.rsi = 50.0; // Default RSI value - will be calculated separately
     }
     else if(tf == PERIOD_M15) {
         consensus.regime = g_regimeDetector.RegimeToString(rs.regime);
         consensus.confidence = rs.confidence;
         consensus.adx = rs.adx_h1;  // Use H1 ADX for M15
-        consensus.rsi = rs.rsi_current;
+        consensus.rsi = 50.0; // Default RSI value - will be calculated separately
     }
     
     // Determine signal support
@@ -194,19 +194,19 @@ int CMultiTimeframeAnalyzer::GetTimeframeWeight(ENUM_TIMEFRAMES tf) {
 //+------------------------------------------------------------------+
 string CMultiTimeframeAnalyzer::GetTimeframeSignal(ENUM_TIMEFRAMES tf, const RegimeSnapshot &rs) {
     // Use regime and technical indicators to determine signal
-    if(rs.regime == TREND_BULL) {
-        if(rs.adx_h4 > 25 && rs.rsi_h4 > 50) return "LONG";
+    if(rs.regime == REGIME_TREND_BULL) {
+        if(rs.adx_h4 > 25) return "LONG";
         return "WEAK_LONG";
     }
-    else if(rs.regime == TREND_BEAR) {
-        if(rs.adx_h4 > 25 && rs.rsi_h4 < 50) return "SHORT";
+    else if(rs.regime == REGIME_TREND_BEAR) {
+        if(rs.adx_h4 > 25) return "SHORT";
         return "WEAK_SHORT";
     }
-    else if(rs.regime == BREAKOUT_SETUP) {
+    else if(rs.regime == REGIME_BREAKOUT_SETUP) {
         if(rs.adx_h1 > 20) return "BREAKOUT";
         return "WEAK_BREAKOUT";
     }
-    else if(rs.regime == RANGING) {
+    else if(rs.regime == REGIME_RANGING) {
         if(rs.adx_h1 < 20) return "RANGE";
         return "WEAK_RANGE";
     }
@@ -272,5 +272,6 @@ double CMultiTimeframeAnalyzer::GetConsensusStrength() {
 //+------------------------------------------------------------------+
 void CMultiTimeframeAnalyzer::Reset() {
     m_consensus_count = 0;
-    ArrayInitialize(m_consensus, 0);
+    ArrayFree(m_consensus);
+    ArrayResize(m_consensus, 3);
 }
