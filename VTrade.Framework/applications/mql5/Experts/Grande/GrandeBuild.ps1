@@ -257,7 +257,6 @@ function Build-SingleComponent {
             # Copy only essential files (not the entire directory with dependencies)
             $essentialFiles = @(
                 "finbert_calendar_analyzer.py",
-                "requirements.txt", 
                 "GrandeNewsSentimentIntegration.mqh"
             )
             

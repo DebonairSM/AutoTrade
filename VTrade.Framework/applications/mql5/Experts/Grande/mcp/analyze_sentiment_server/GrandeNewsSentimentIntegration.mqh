@@ -194,8 +194,8 @@ bool CNewsSentimentIntegration::Initialize(string server_url = "http://localhost
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::RunNewsAnalysis()
 {
-    // News analysis removed in finbert-only cleanup; keep method as no-op for compatibility
-    Print("Grande News Sentiment: News analysis is disabled in this build.");
+    // News analysis completely disabled - using stale data was causing 0% success rate
+    Print("Grande News Sentiment: News analysis DISABLED - stale data removed for system reliability.");
     return false;
 }
 
@@ -204,39 +204,19 @@ bool CNewsSentimentIntegration::RunNewsAnalysis()
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::LoadLatestAnalysis()
 {
-    string file_path = m_news_analysis_file;
+    // News analysis disabled - no longer loading stale data
+    Print("Grande News Sentiment: News analysis DISABLED - not loading stale data.");
     
-    // Try to open from the Common Files directory first (shared across terminals)
-    int file_handle = FileOpen(file_path, FILE_READ|FILE_TXT|FILE_COMMON);
-    if (file_handle == INVALID_HANDLE)
-    {
-        // Fallback to local MQL5\\Files directory
-        file_handle = FileOpen(file_path, FILE_READ|FILE_TXT);
-        if (file_handle == INVALID_HANDLE)
-        {
-            string common_dir = TerminalInfoString(TERMINAL_COMMONDATA_PATH) + "\\Files\\";
-            Print("WARNING: News analysis file not found in Common or Local Files: ", file_path);
-            Print("Expected Common path: ", common_dir, file_path);
-            return false;
-        }
-    }
+    // Reset sentiment data to neutral
+    m_current_sentiment.signal = "NEUTRAL";
+    m_current_sentiment.strength = 0.0;
+    m_current_sentiment.confidence = 0.0;
+    m_current_sentiment.reasoning = "News analysis disabled - stale data removed";
+    m_current_sentiment.article_count = 0;
+    m_current_sentiment.avg_sentiment = 0.0;
+    m_current_sentiment.timestamp = TimeCurrent();
     
-    // Read the entire file
-    string json_data = "";
-    while (!FileIsEnding(file_handle))
-    {
-        json_data += FileReadString(file_handle);
-    }
-    FileClose(file_handle);
-    
-    // Parse the JSON data
-    if (ParseSentimentData(json_data))
-    {
-        Print("Grande News Sentiment: Loaded latest analysis");
-        return true;
-    }
-    
-    return false;
+    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -282,21 +262,8 @@ bool CNewsSentimentIntegration::IsAnalysisFresh()
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::ShouldEnterLong()
 {
-    if (!ValidateSentimentData())
-        return false;
-    
-    // Strong buy signal
-    if (m_current_sentiment.signal == "STRONG_BUY" && m_current_sentiment.confidence >= 0.7)
-        return true;
-    
-    // Buy signal with good confidence
-    if (m_current_sentiment.signal == "BUY" && m_current_sentiment.confidence >= 0.5)
-        return true;
-    
-    // Positive sentiment with high strength
-    if (m_current_sentiment.avg_sentiment >= 0.6 && m_current_sentiment.confidence >= 0.6)
-        return true;
-    
+    // News analysis disabled - always return false to prevent bad decisions
+    Print("Grande News Sentiment: ShouldEnterLong() DISABLED - news analysis removed");
     return false;
 }
 
@@ -305,21 +272,8 @@ bool CNewsSentimentIntegration::ShouldEnterLong()
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::ShouldEnterShort()
 {
-    if (!ValidateSentimentData())
-        return false;
-    
-    // Strong sell signal
-    if (m_current_sentiment.signal == "STRONG_SELL" && m_current_sentiment.confidence >= 0.7)
-        return true;
-    
-    // Sell signal with good confidence
-    if (m_current_sentiment.signal == "SELL" && m_current_sentiment.confidence >= 0.5)
-        return true;
-    
-    // Negative sentiment with high strength
-    if (m_current_sentiment.avg_sentiment <= -0.6 && m_current_sentiment.confidence >= 0.6)
-        return true;
-    
+    // News analysis disabled - always return false to prevent bad decisions
+    Print("Grande News Sentiment: ShouldEnterShort() DISABLED - news analysis removed");
     return false;
 }
 
@@ -328,17 +282,8 @@ bool CNewsSentimentIntegration::ShouldEnterShort()
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::ShouldExitPosition()
 {
-    if (!ValidateSentimentData())
-        return false;
-    
-    // Exit if sentiment becomes neutral or opposite
-    if (m_current_sentiment.signal == "NEUTRAL" && m_current_sentiment.confidence >= 0.5)
-        return true;
-    
-    // Exit if confidence drops significantly
-    if (m_current_sentiment.confidence < 0.3)
-        return true;
-    
+    // News analysis disabled - always return false to prevent bad decisions
+    Print("Grande News Sentiment: ShouldExitPosition() DISABLED - news analysis removed");
     return false;
 }
 
