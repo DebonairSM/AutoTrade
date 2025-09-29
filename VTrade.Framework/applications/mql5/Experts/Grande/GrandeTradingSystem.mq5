@@ -86,7 +86,7 @@ input bool   InpValidateStopLevels = true;       // Enable comprehensive stop le
 input group "=== Intelligent Position Scaling ==="
 input bool   InpEnableIntelligentScaling = true; // Enable intelligent position scaling
 input int    InpScalingRangePeriods = 20;        // 15-min periods for range calculation
-input double InpScalingRangeBuffer = 0.1;        // Buffer as fraction of range (0.1 = 10%)
+input double InpScalingRangeBuffer = 0.25;       // Buffer as fraction of range (0.25 = 25%)
 input int    InpMaxScalingPositions = 3;         // Maximum positions for scaling
 input double InpMinRangeSizePips = 20.0;         // Minimum range size to enable scaling
 input bool   InpLogScalingDecisions = true;      // Log scaling decisions for analysis
@@ -815,7 +815,7 @@ void OnTimer()
             {
                 // ERROR 4203 THROTTLING: If we've had multiple 4203 errors recently, throttle risk manager calls
                 bool shouldThrottleRiskManager = false;
-                if(consecutive4203Errors >= 3 && TimeCurrent() - last4203ErrorTime < 60) // 3 errors in last minute
+                if(consecutive4203Errors >= 10 && TimeCurrent() - last4203ErrorTime < 120) // 10 errors in last 2 minutes
                 {
                     shouldThrottleRiskManager = true;
                     if(InpLogDetailedInfo && consecutive4203Errors % 10 == 0) // Log every 10th throttled call

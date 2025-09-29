@@ -394,14 +394,14 @@ bool InitializeGrandeComponents()
                     else
                     {
                         retryCount++;
-                        Print("Failed to load calendar analysis, retry ", retryCount, "/3");
+                        Print("Calendar analysis not yet available, retry ", retryCount, "/3");
                         Sleep(1000); // Wait 1 second before retry
                     }
                 }
                 
                 if(!loaded)
                 {
-                    Print("Warning: Could not load calendar analysis after 3 attempts");
+                    Print("Info: Calendar analysis not available during initialization - will retry on next update cycle");
                 }
             }
         }
@@ -520,19 +520,19 @@ void UpdateAllComponents()
                 Print("Monitor: Loaded existing calendar analysis");
                 calendarInitialized = true;
             }
-            else
-            {
-                calendarLoadAttempts++;
-                if(calendarLoadAttempts < 5)
-                {
-                    Print("Monitor: Calendar analysis load attempt ", calendarLoadAttempts, "/5");
-                }
                 else
                 {
-                    Print("Monitor: Calendar analysis not available after 5 attempts");
-                    calendarInitialized = true; // Stop trying
+                    calendarLoadAttempts++;
+                    if(calendarLoadAttempts < 5)
+                    {
+                        Print("Monitor: Calendar analysis not yet available (attempt ", calendarLoadAttempts, "/5) - will retry");
+                    }
+                    else
+                    {
+                        Print("Monitor: Calendar analysis not available - will retry on next update cycle");
+                        calendarInitialized = true; // Stop trying
+                    }
                 }
-            }
             lastCalendarUpdate = currentTime;
         }
         
