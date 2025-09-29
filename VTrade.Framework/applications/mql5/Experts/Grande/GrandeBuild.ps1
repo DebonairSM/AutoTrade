@@ -5,6 +5,41 @@ param(
     [switch]$IndicatorOnly = $false
 )
 
+function Get-MT5BaseDirectory {
+    # Try to get MT5 terminal ID from environment variable first
+    $terminalId = $env:MT5_TERMINAL_ID
+    if ($terminalId) {
+        $mt5Path = Join-Path $env:APPDATA "MetaQuotes\Terminal\$terminalId"
+        if (Test-Path $mt5Path) {
+            Write-Host "Using MT5 terminal from environment variable: $terminalId" -ForegroundColor Green
+            return $mt5Path
+        }
+    }
+    
+    # Auto-detect MT5 terminal directory
+    $mt5TerminalsPath = Join-Path $env:APPDATA "MetaQuotes\Terminal"
+    if (Test-Path $mt5TerminalsPath) {
+        $terminalDirs = Get-ChildItem -Path $mt5TerminalsPath -Directory | Where-Object { 
+            Test-Path (Join-Path $_.FullName "MQL5") 
+        }
+        
+        if ($terminalDirs.Count -gt 0) {
+            $selectedTerminal = $terminalDirs[0]
+            Write-Host "Auto-detected MT5 terminal: $($selectedTerminal.Name)" -ForegroundColor Green
+            Write-Host "To use a specific terminal, set MT5_TERMINAL_ID environment variable" -ForegroundColor Yellow
+            return $selectedTerminal.FullName
+        }
+    }
+    
+    # Fallback: prompt user or use default
+    Write-Host "Could not auto-detect MT5 terminal directory." -ForegroundColor Red
+    Write-Host "Please set MT5_TERMINAL_ID environment variable with your terminal ID." -ForegroundColor Yellow
+    Write-Host "Example: `$env:MT5_TERMINAL_ID = '5C659F0E64BA794E712EE4C936BCFED5'" -ForegroundColor Yellow
+    
+    # Return a default path that will likely fail, but gives user clear error
+    return Join-Path $env:APPDATA "MetaQuotes\Terminal\UNKNOWN"
+}
+
 function Build-GrandeComponent {
     param(
         [string]$ComponentName = "GrandeTradingSystem",
@@ -20,10 +55,14 @@ function Build-GrandeComponent {
     elseif ($IndicatorOnly) { Write-Host "Mode: Indicator Only" -ForegroundColor Yellow }
     else { Write-Host "Mode: Build Only" -ForegroundColor White }
     
-    $sourceDir = "C:\Users\romme\source\repos\AutoTrade\VTrade.Framework\applications\mql5\Experts\Grande"
+    # Get current script directory as source directory
+    $sourceDir = $PSScriptRoot
     $buildDir = Join-Path $sourceDir "Build"
-    $mt5ExpertsDir = "C:\Users\romme\AppData\Roaming\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Experts\Grande"
-    $mt5IndicatorsDir = "C:\Users\romme\AppData\Roaming\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Indicators\Grande"
+    
+    # Get MT5 paths dynamically
+    $mt5BaseDir = Get-MT5BaseDirectory
+    $mt5ExpertsDir = Join-Path $mt5BaseDir "MQL5\Experts\Grande"
+    $mt5IndicatorsDir = Join-Path $mt5BaseDir "MQL5\Indicators\Grande"
     
     Write-Host "Changing to Grande directory..." -ForegroundColor Yellow
     Set-Location $sourceDir
@@ -281,9 +320,9 @@ function Build-SingleComponent {
     # Verify deployment
     Write-Host "Verifying deployment..." -ForegroundColor Yellow
     if (Test-Path $mt5MainFile) {
-        Write-Host "✓ Main file verified: $mt5MainFile" -ForegroundColor Green
+        Write-Host "Main file verified: $mt5MainFile" -ForegroundColor Green
     } else {
-        Write-Host "✗ Main file NOT found: $mt5MainFile" -ForegroundColor Red
+        Write-Host "Main file NOT found: $mt5MainFile" -ForegroundColor Red
     }
     
     # Check dependencies
@@ -291,9 +330,9 @@ function Build-SingleComponent {
     foreach ($dependency in $component.Dependencies) {
         $mt5DepFile = Join-Path $targetDir $dependency
         if (Test-Path $mt5DepFile) {
-            Write-Host "✓ Dependency verified: $dependency" -ForegroundColor Green
+            Write-Host "Dependency verified: $dependency" -ForegroundColor Green
         } else {
-            Write-Host "✗ Dependency NOT found: $dependency" -ForegroundColor Red
+            Write-Host "Dependency NOT found: $dependency" -ForegroundColor Red
             $allDepsDeployed = $false
         }
     }
@@ -370,7 +409,7 @@ function Generate-TestReportTemplate {
 
 ## Test Categories
 
-### 🔍 Regime Detection Tests
+### Regime Detection Tests
 - [ ] Initialization Test
 - [ ] ADX Calculation Accuracy
 - [ ] Regime Classification Logic
@@ -379,24 +418,24 @@ function Generate-TestReportTemplate {
 - [ ] Confidence Calculation
 - [ ] Threshold Adjustment
 
-### 🎯 Key Level Detection Tests
+### Key Level Detection Tests
 - [ ] Initialization Test
 - [ ] Level Detection Accuracy
 - [ ] Strength Calculation
 - [ ] Touch Zone Adjustment
 - [ ] Timeframe Scaling
 
-### ⚡ Performance Tests
+### Performance Tests
 - [ ] Regime Detection Performance
 - [ ] Key Level Detection Performance
 - [ ] Memory Usage Test
 
-### 💪 Stress Tests
+### Stress Tests
 - [ ] High Frequency Updates
 - [ ] Large Dataset Handling
 - [ ] Error Recovery
 
-### ⏰ Multi-Timeframe Tests
+### Multi-Timeframe Tests
 - [ ] Timeframe-Specific Behavior
 - [ ] Cross-Platform Consistency
 

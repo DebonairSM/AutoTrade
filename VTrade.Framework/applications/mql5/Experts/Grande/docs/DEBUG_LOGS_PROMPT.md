@@ -18,7 +18,7 @@ You are analyzing the Grande Trading System, an MQL5 Expert Advisor with FinBERT
 $logPaths = @(
     "$env:APPDATA\MetaQuotes\Terminal\*\MQL5\Logs",
     "$env:USERPROFILE\AppData\Roaming\MetaQuotes\Terminal\*\MQL5\Logs",
-    "C:\Users\$env:USERNAME\AppData\Roaming\MetaQuotes\Terminal\*\MQL5\Logs"
+    "$env:APPDATA\MetaQuotes\Terminal\*\MQL5\Logs"
 )
 
 $logPath = $null
@@ -43,7 +43,7 @@ if ($logPath) {
 $mt5Paths = @(
     "$env:APPDATA\MetaQuotes\Terminal\*",
     "$env:USERPROFILE\AppData\Roaming\MetaQuotes\Terminal\*",
-    "C:\Users\$env:USERNAME\AppData\Roaming\MetaQuotes\Terminal\*"
+    "$env:APPDATA\MetaQuotes\Terminal\*"
 )
 
 $mt5Path = $null
@@ -78,7 +78,7 @@ if ($mt5Path) {
 $commonPaths = @(
     "$env:APPDATA\MetaQuotes\Terminal\Common\Files",
     "$env:USERPROFILE\AppData\Roaming\MetaQuotes\Terminal\Common\Files",
-    "C:\Users\$env:USERNAME\AppData\Roaming\MetaQuotes\Terminal\Common\Files"
+    "$env:APPDATA\MetaQuotes\Terminal\Common\Files"
 )
 
 $commonPath = $null

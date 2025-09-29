@@ -37,11 +37,17 @@ This builds and deploys only the GrandeMonitorIndicator to the MT5 Indicators fo
 
 ### Expert Advisors
 - **Source**: `GrandeTradingSystem.mq5`
-- **Deployed to**: `C:\Users\romme\AppData\Roaming\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Experts\Grande\`
+- **Deployed to**: `%APPDATA%\MetaQuotes\Terminal\{TERMINAL_ID}\MQL5\Experts\Grande\`
 
 ### Indicators
 - **Source**: `GrandeMonitorIndicator.mq5`
-- **Deployed to**: `C:\Users\romme\AppData\Roaming\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Indicators\Grande\`
+- **Deployed to**: `%APPDATA%\MetaQuotes\Terminal\{TERMINAL_ID}\MQL5\Indicators\Grande\`
+
+### Path Configuration
+The build script automatically detects your MT5 terminal directory. You can also set a specific terminal ID using:
+```powershell
+$env:MT5_TERMINAL_ID = "YOUR_TERMINAL_ID_HERE"
+```
 
 ## GrandeMonitorIndicator Features
 

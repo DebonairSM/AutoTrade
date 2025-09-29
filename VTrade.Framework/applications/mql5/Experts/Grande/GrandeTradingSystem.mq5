@@ -260,6 +260,15 @@ void NormalizeStops(const bool isBuy, const double entryPrice, double &sl, doubl
 bool IsPendingPriceValid(const bool isBuyStop, const double levelPrice);
 bool HasSimilarPendingOrderForBreakout(const bool isBuyStop, const double levelPrice, const int tolerancePoints);
 void CollectMarketDataForDatabase();
+void CollectEnhancedMarketDataForFinBERT();
+string CreateComprehensiveMarketContext();
+double GetVolumeAverage(int periods);
+double GetATRValue();
+double GetATRAverage(int periods);
+double GetEMAValue(int period);
+string GetKeyLevelsJson();
+string GetEconomicCalendarJson();
+void SaveMarketContextToFile(string jsonData);
 // Core function forward declarations
 bool ValidateInputParameters();
 void ConfigureTradeFillingMode();
@@ -738,6 +747,12 @@ void OnTick()
     if(InpEnableDatabase && g_databaseManager != NULL)
     {
         CollectMarketDataForDatabase();
+    }
+    
+    // Collect enhanced market data for FinBERT analysis if enabled
+    if(InpEnableCalendarAI)
+    {
+        CollectEnhancedMarketDataForFinBERT();
     }
     
     // All periodic updates are handled in OnTimer to prevent per-tick thrashing
@@ -2136,22 +2151,39 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         Print(logPrefix + "ATR Average: ", DoubleToString(rs.atr_avg, _Digits));
     }
     
-    // DISABLED: News sentiment refresh (commented out - only using free economic calendar data)
-    /*
-    // Optionally refresh sentiment before decisions (rate-limited)
-    static datetime s_lastSentimentRun = 0;
-    if(TimeCurrent() - s_lastSentimentRun > 300 && !g_newsSentiment.IsAnalysisFresh())
+    // Enhanced FinBERT analysis integration
+    static datetime s_lastFinBERTRun = 0;
+    bool finbertAnalysisAvailable = false;
+    string finbertSignal = "NEUTRAL";
+    double finbertConfidence = 0.0;
+    double finbertScore = 0.0;
+    string finbertReasoning = "";
+    
+    // Run enhanced FinBERT analysis if enabled and time has passed
+    if(InpEnableCalendarAI && (TimeCurrent() - s_lastFinBERTRun > 300))
     {
-        if(g_newsSentiment.RunNewsAnalysis())
+        if(g_newsSentiment.RunCalendarAnalysis())
         {
+            finbertAnalysisAvailable = true;
+            finbertSignal = g_newsSentiment.GetCalendarSignal();
+            finbertConfidence = g_newsSentiment.GetCalendarConfidence();
+            finbertScore = g_newsSentiment.GetCalendarScore();
+            finbertReasoning = g_newsSentiment.GetCalendarReasoning();
+            
             if(InpLogDetailedInfo)
             {
-                Print(logPrefix + "Sentiment refreshed: ", g_newsSentiment.GetSentimentDescription());
+                Print(logPrefix + "Enhanced FinBERT Analysis: ", finbertSignal, 
+                      " (Confidence: ", DoubleToString(finbertConfidence, 2), 
+                      ", Score: ", DoubleToString(finbertScore, 2), ")");
+                Print(logPrefix + "FinBERT Reasoning: ", finbertReasoning);
             }
         }
-        s_lastSentimentRun = TimeCurrent();
+        s_lastFinBERTRun = TimeCurrent();
     }
-    */
+    
+    // Store FinBERT data in decision tracking
+    decision.calendar_signal = finbertSignal;
+    decision.calendar_confidence = finbertConfidence;
 
     // Execute trading strategy with comprehensive error handling
     ResetLastError();
@@ -2160,19 +2192,19 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
     {
         case REGIME_TREND_BULL:   
             if(InpLogVerbose) Print(logPrefix + "→ Analyzing BULLISH TREND opportunity...");
-            TrendTrade(true, rs);   
+            TrendTrade(true, rs, finbertSignal, finbertConfidence, finbertScore);   
             break;
         case REGIME_TREND_BEAR:   
             if(InpLogVerbose) Print(logPrefix + "→ Analyzing BEARISH TREND opportunity...");
-            TrendTrade(false, rs);  
+            TrendTrade(false, rs, finbertSignal, finbertConfidence, finbertScore);  
             break;
         case REGIME_BREAKOUT_SETUP: 
             if(InpLogVerbose) Print(logPrefix + "→ Analyzing BREAKOUT opportunity...");
-            BreakoutTrade(rs);    
+            BreakoutTrade(rs, finbertSignal, finbertConfidence, finbertScore);    
             break;
         case REGIME_RANGING:      
             if(InpLogVerbose) Print(logPrefix + "→ Analyzing RANGE TRADING opportunity...");
-            RangeTrade(rs);         
+            RangeTrade(rs, finbertSignal, finbertConfidence, finbertScore);         
             break;
         default: 
             if(InpLogDetailedInfo) Print(logPrefix + "❌ BLOCKED: High volatility regime - no trading");
@@ -2215,7 +2247,7 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
 //+------------------------------------------------------------------+
 //| Trend trading logic                                              |
 //+------------------------------------------------------------------+
-void TrendTrade(bool bullish, const RegimeSnapshot &rs)
+void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", double finbertConfidence = 0.0, double finbertScore = 0.0)
 {
     string logPrefix = "[TREND SIGNAL] ";
     string direction = bullish ? "BULLISH" : "BEARISH";
@@ -2274,100 +2306,88 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
     if(InpLogDetailedInfo)
         Print(logPrefix + "✅ ", direction, " trend signal CONFIRMED - proceeding with trade execution");
     
-    // *** FINBERT SENTIMENT INTEGRATION ***
-    // Get FinBERT sentiment data
-    string finbert_signal = "";
-    double finbert_score = 0.0;
-    double finbert_confidence = 0.0;
+    // *** ENHANCED FINBERT SENTIMENT INTEGRATION ***
+    // Use enhanced FinBERT analysis data passed from ExecuteTradeLogic
+    string finbert_signal = finbertSignal;
+    double finbert_score = finbertScore;
+    double finbert_confidence = finbertConfidence;
     double sentiment_multiplier = 1.0;
     
-    if(InpEnableCalendarAI)
+    // Store FinBERT data in execution tracking
+    execution.calendar_signal = finbert_signal;
+    execution.calendar_confidence = finbert_confidence;
+    
+    if(InpEnableCalendarAI && finbert_confidence > 0.0)
     {
-        finbert_signal = g_newsSentiment.GetCalendarSignal();
-        finbert_score = g_newsSentiment.GetCalendarScore();
-        finbert_confidence = g_newsSentiment.GetCalendarConfidence();
-        
-        // If no signal is loaded, try to load existing analysis file
-        if(StringLen(finbert_signal) == 0 || finbert_confidence == 0.0)
+        // Enhanced FinBERT analysis is available
+        if(InpLogDetailedInfo)
         {
-            if(g_newsSentiment.LoadLatestCalendarAnalysis())
-            {
-                finbert_signal = g_newsSentiment.GetCalendarSignal();
-                finbert_score = g_newsSentiment.GetCalendarScore();
-                finbert_confidence = g_newsSentiment.GetCalendarConfidence();
-                
-                if(InpLogDetailedInfo)
-                    Print(logPrefix + "📊 Calendar Analysis Loaded: ", finbert_signal, " (Conf: ", DoubleToString(finbert_confidence, 2), ")");
-            }
-            else
-            {
-                if(InpLogDetailedInfo)
-                    Print(logPrefix + "⚠️ Calendar Analysis unavailable - using neutral sentiment");
-            }
+            Print(logPrefix + "Enhanced FinBERT Analysis: ", finbert_signal, 
+                  " (Confidence: ", DoubleToString(finbert_confidence, 2), 
+                  ", Score: ", DoubleToString(finbert_score, 2), ")");
         }
         
-        // Store sentiment data for tracking
-        execution.calendar_signal = finbert_signal;
-        execution.calendar_confidence = finbert_confidence;
-        
-        if(StringLen(finbert_signal) > 0 && finbert_confidence >= 0.4)
+        // Apply FinBERT sentiment filter
+        bool finbertSupportsTrade = false;
+        if(bullish && (finbert_signal == "BUY" || finbert_signal == "STRONG_BUY"))
         {
-            // Check sentiment alignment with trade direction
-            bool sentiment_bullish = (finbert_signal == "STRONG_BUY" || finbert_signal == "BUY");
-            bool sentiment_bearish = (finbert_signal == "STRONG_SELL" || finbert_signal == "SELL");
-            bool sentiment_neutral = (finbert_signal == "NEUTRAL");
+            finbertSupportsTrade = true;
+            sentiment_multiplier = 1.0 + (finbert_confidence * 0.5); // Up to 50% boost
+        }
+        else if(!bullish && (finbert_signal == "SELL" || finbert_signal == "STRONG_SELL"))
+        {
+            finbertSupportsTrade = true;
+            sentiment_multiplier = 1.0 + (finbert_confidence * 0.5); // Up to 50% boost
+        }
+        else if(finbert_signal == "NEUTRAL")
+        {
+            finbertSupportsTrade = true;
+            sentiment_multiplier = 1.0; // No boost, no penalty
+        }
+        else
+        {
+            // FinBERT opposes the trade direction
+            finbertSupportsTrade = false;
+            sentiment_multiplier = 0.3; // Significant penalty
+        }
+        
+        if(!finbertSupportsTrade && finbert_confidence > 0.7)
+        {
+            // High confidence FinBERT signal opposes trade - reject
+            execution.decision = "REJECTED";
+            execution.rejection_reason = "FinBERT sentiment opposes trade direction with high confidence";
             
             if(InpLogDetailedInfo)
             {
-                Print(logPrefix + "📊 FinBERT Analysis: ", finbert_signal, " (score: ", DoubleToString(finbert_score, 2), 
-                      ", confidence: ", DoubleToString(finbert_confidence, 2), ")");
+                Print(logPrefix + "❌ ", direction, " trend signal REJECTED - FinBERT opposes with high confidence");
+                Print(logPrefix + "FinBERT Signal: ", finbert_signal, " (Confidence: ", DoubleToString(finbert_confidence, 2), ")");
             }
             
-            // Apply sentiment-based adjustments
-            if((bullish && sentiment_bullish) || (!bullish && sentiment_bearish))
-            {
-                // Sentiment supports trade direction - boost position size
-                if(finbert_confidence >= 0.7)
-                    sentiment_multiplier = 1.3; // 30% increase for high confidence
-                else if(finbert_confidence >= 0.5)
-                    sentiment_multiplier = 1.15; // 15% increase for medium confidence
-                
-                if(InpLogDetailedInfo)
-                    Print(logPrefix + "✅ FinBERT SUPPORTS trade direction - position multiplier: ", DoubleToString(sentiment_multiplier, 2));
-            }
-            else if((bullish && sentiment_bearish) || (!bullish && sentiment_bullish))
-            {
-                // Sentiment opposes trade direction
-                if(finbert_confidence >= 0.7)
-                {
-                    // High confidence opposing signal - block trade
-                    execution.decision = "REJECTED";
-                    execution.rejection_reason = StringFormat("FinBERT opposing signal: %s (conf %.2f)", finbert_signal, finbert_confidence);
-                    if(g_reporter != NULL) g_reporter.RecordDecision(execution);
-                    
-                    if(InpLogDetailedInfo)
-                        Print(logPrefix + "❌ TRADE BLOCKED: FinBERT high-confidence opposing signal (", finbert_signal, ")");
-                    return;
-                }
-                else
-                {
-                    // Lower confidence opposing - reduce position size
-                    sentiment_multiplier = 0.7; // 30% reduction
-                    if(InpLogDetailedInfo)
-                        Print(logPrefix + "⚠️ FinBERT OPPOSES trade direction - reducing position size: ", DoubleToString(sentiment_multiplier, 2));
-                }
-            }
-            else if(sentiment_neutral && finbert_confidence >= 0.6)
-            {
-                // High confidence neutral - slight reduction
-                sentiment_multiplier = 0.9; // 10% reduction
-                if(InpLogDetailedInfo)
-                    Print(logPrefix + "⚖️ FinBERT NEUTRAL - slight position reduction: ", DoubleToString(sentiment_multiplier, 2));
-            }
+            if(g_reporter != NULL)
+                g_reporter.RecordDecision(execution);
+            return;
         }
-        else if(InpLogDetailedInfo)
+        
+        if(InpLogDetailedInfo)
         {
-            Print(logPrefix + "📊 FinBERT: No reliable sentiment data (signal: ", finbert_signal, ", conf: ", DoubleToString(finbert_confidence, 2), ")");
+            Print(logPrefix + "FinBERT Sentiment Multiplier: ", DoubleToString(sentiment_multiplier, 2));
+        }
+    }
+    else
+    {
+        // No enhanced FinBERT analysis available
+        if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "No enhanced FinBERT analysis available - proceeding with technical analysis only");
+        }
+    }
+    
+    // Apply sentiment multiplier to position sizing
+    if(sentiment_multiplier != 1.0)
+    {
+        if(InpLogDetailedInfo)
+        {
+            Print(logPrefix + "Applying FinBERT sentiment multiplier to position sizing: ", DoubleToString(sentiment_multiplier, 2));
         }
     }
     
@@ -2715,7 +2735,7 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs)
 //+------------------------------------------------------------------+
 //| Breakout trading logic                                           |
 //+------------------------------------------------------------------+
-void BreakoutTrade(const RegimeSnapshot &rs)
+void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", double finbertConfidence = 0.0, double finbertScore = 0.0)
 {
     string logPrefix = "[BREAKOUT SIGNAL] ";
     
@@ -2973,7 +2993,7 @@ void BreakoutTrade(const RegimeSnapshot &rs)
 //+------------------------------------------------------------------+
 //| Range trading logic                                              |
 //+------------------------------------------------------------------+
-void RangeTrade(const RegimeSnapshot &rs)
+void RangeTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", double finbertConfidence = 0.0, double finbertScore = 0.0)
 {
     string logPrefix = "[RANGE SIGNAL] ";
     
@@ -6443,6 +6463,331 @@ void CollectMarketDataForDatabase()
             rs.atr_current,
             volatilityLevel
         );
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Enhanced Market Data Collection for FinBERT Analysis            |
+//+------------------------------------------------------------------+
+void CollectEnhancedMarketDataForFinBERT()
+{
+    datetime currentTime = TimeCurrent();
+    
+    // Check if we should collect data (based on interval)
+    if((currentTime - g_lastDataCollectionTime) < InpDataCollectionInterval)
+        return;
+    
+    // Check if we have a new bar
+    datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+    if(currentBarTime == g_lastBarTime)
+        return;
+    
+    // Create comprehensive market context JSON
+    string marketContextJson = CreateComprehensiveMarketContext();
+    
+    // Save to file for FinBERT analysis
+    SaveMarketContextToFile(marketContextJson);
+    
+    if(InpLogDetailedInfo)
+    {
+        Print("[GrandeFinBERT] Enhanced market data collected and saved for analysis");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Create Comprehensive Market Context JSON                         |
+//+------------------------------------------------------------------+
+string CreateComprehensiveMarketContext()
+{
+    datetime currentTime = TimeCurrent();
+    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double open = iOpen(_Symbol, PERIOD_CURRENT, 0);
+    double high = iHigh(_Symbol, PERIOD_CURRENT, 0);
+    double low = iLow(_Symbol, PERIOD_CURRENT, 0);
+    double close = iClose(_Symbol, PERIOD_CURRENT, 0);
+    double volume = iRealVolume(_Symbol, PERIOD_CURRENT, 0);
+    
+    // Calculate price change
+    double changePips = (close - open) / _Point;
+    double changePercent = ((close - open) / open) * 100.0;
+    
+    // Get volume average
+    double volumeAverage = GetVolumeAverage(20);
+    double volumeRatio = volumeAverage > 0 ? volume / volumeAverage : 1.0;
+    
+    // Get technical indicators
+    double atr = GetATRValue();
+    double atrAverage = GetATRAverage(90);
+    double rsiCurrent = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+    double rsiH4 = GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0);
+    double rsiD1 = InpUseD1RSI ? GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0) : 0;
+    
+    // Get EMA values
+    double ema20 = GetEMAValue(InpEMA20Period);
+    double ema50 = GetEMAValue(InpEMA50Period);
+    double ema200 = GetEMAValue(InpEMA200Period);
+    
+    // Determine trend direction and strength
+    string trendDirection = "NEUTRAL";
+    double trendStrength = 0.0;
+    if(ema20 > ema50 && ema50 > ema200)
+    {
+        trendDirection = "BULLISH";
+        trendStrength = MathMin(1.0, (ema20 - ema200) / (ema200 * 0.01));
+    }
+    else if(ema20 < ema50 && ema50 < ema200)
+    {
+        trendDirection = "BEARISH";
+        trendStrength = MathMin(1.0, (ema200 - ema20) / (ema200 * 0.01));
+    }
+    
+    // Get RSI status
+    string rsiStatus = "NEUTRAL";
+    if(rsiCurrent > 70) rsiStatus = "OVERBOUGHT";
+    else if(rsiCurrent < 30) rsiStatus = "OVERSOLD";
+    else if(rsiCurrent > 60) rsiStatus = "NEUTRAL_TO_BULLISH";
+    else if(rsiCurrent < 40) rsiStatus = "NEUTRAL_TO_BEARISH";
+    
+    // Get stochastic values
+    double stochK = 0, stochD = 0;
+    int stochHandle = iStochastic(_Symbol, PERIOD_CURRENT, InpStochPeriod, InpStochK, InpStochD, MODE_SMA, STO_LOWHIGH);
+    if(stochHandle != INVALID_HANDLE)
+    {
+        double stochKBuffer[], stochDBuffer[];
+        if(CopyBuffer(stochHandle, 0, 0, 1, stochKBuffer) > 0 && CopyBuffer(stochHandle, 1, 0, 1, stochDBuffer) > 0)
+        {
+            stochK = stochKBuffer[0];
+            stochD = stochDBuffer[0];
+        }
+        IndicatorRelease(stochHandle);
+    }
+    
+    string stochSignal = "NEUTRAL";
+    if(stochK > 80) stochSignal = "OVERBOUGHT_WARNING";
+    else if(stochK < 20) stochSignal = "OVERSOLD_WARNING";
+    
+    // Get volatility level
+    string volatilityLevel = "NORMAL";
+    if(atrAverage > 0)
+    {
+        double atrRatio = atr / atrAverage;
+        if(atrRatio > InpHighVolMultiplier)
+            volatilityLevel = "ABOVE_AVERAGE";
+        else if(atrRatio < 0.5)
+            volatilityLevel = "BELOW_AVERAGE";
+    }
+    
+    // Get market regime
+    string currentRegime = "RANGING";
+    double regimeConfidence = 0.0;
+    double adxH1 = 0, adxH4 = 0, adxD1 = 0;
+    double plusDI = 0, minusDI = 0;
+    
+    if(g_regimeDetector != NULL)
+    {
+        RegimeSnapshot rs = g_regimeDetector.DetectCurrentRegime();
+        currentRegime = g_regimeDetector.RegimeToString(rs.regime);
+        regimeConfidence = rs.confidence;
+        adxH1 = rs.adx_h1;
+        adxH4 = rs.adx_h4;
+        adxD1 = rs.adx_d1;
+        plusDI = rs.plus_di;
+        minusDI = rs.minus_di;
+    }
+    
+    // Get key levels
+    string keyLevelsJson = GetKeyLevelsJson();
+    
+    // Get economic calendar data
+    string economicCalendarJson = GetEconomicCalendarJson();
+    
+    // Build comprehensive JSON
+    string json = "{";
+    json += "\"timestamp\":\"" + TimeToString(currentTime, TIME_DATE|TIME_SECONDS) + "\",";
+    json += "\"symbol\":\"" + _Symbol + "\",";
+    json += "\"timeframe\":\"" + EnumToString(Period()) + "\",";
+    json += "\"market_data\":{";
+    json += "\"price\":{";
+    json += "\"current\":" + DoubleToString(currentPrice, _Digits) + ",";
+    json += "\"open\":" + DoubleToString(open, _Digits) + ",";
+    json += "\"high\":" + DoubleToString(high, _Digits) + ",";
+    json += "\"low\":" + DoubleToString(low, _Digits) + ",";
+    json += "\"change_pips\":" + DoubleToString(changePips, 1) + ",";
+    json += "\"change_percent\":" + DoubleToString(changePercent, 3);
+    json += "},";
+    json += "\"volume\":{";
+    json += "\"current\":" + DoubleToString(volume, 0) + ",";
+    json += "\"average_20\":" + DoubleToString(volumeAverage, 0) + ",";
+    json += "\"ratio\":" + DoubleToString(volumeRatio, 2);
+    json += "}";
+    json += "},";
+    json += "\"technical_indicators\":{";
+    json += "\"trend\":{";
+    json += "\"ema_20\":" + DoubleToString(ema20, _Digits) + ",";
+    json += "\"ema_50\":" + DoubleToString(ema50, _Digits) + ",";
+    json += "\"ema_200\":" + DoubleToString(ema200, _Digits) + ",";
+    json += "\"trend_direction\":\"" + trendDirection + "\",";
+    json += "\"trend_strength\":" + DoubleToString(trendStrength, 2);
+    json += "},";
+    json += "\"momentum\":{";
+    json += "\"rsi_current\":" + DoubleToString(rsiCurrent, 1) + ",";
+    json += "\"rsi_h4\":" + DoubleToString(rsiH4, 1) + ",";
+    json += "\"rsi_d1\":" + DoubleToString(rsiD1, 1) + ",";
+    json += "\"rsi_status\":\"" + rsiStatus + "\"";
+    json += "},";
+    json += "\"volatility\":{";
+    json += "\"atr_current\":" + DoubleToString(atr, _Digits) + ",";
+    json += "\"atr_average\":" + DoubleToString(atrAverage, _Digits) + ",";
+    json += "\"volatility_level\":\"" + volatilityLevel + "\"";
+    json += "},";
+    json += "\"oscillators\":{";
+    json += "\"stoch_k\":" + DoubleToString(stochK, 1) + ",";
+    json += "\"stoch_d\":" + DoubleToString(stochD, 1) + ",";
+    json += "\"stoch_signal\":\"" + stochSignal + "\"";
+    json += "}";
+    json += "},";
+    json += "\"market_regime\":{";
+    json += "\"current_regime\":\"" + currentRegime + "\",";
+    json += "\"confidence\":" + DoubleToString(regimeConfidence, 2) + ",";
+    json += "\"adx_h1\":" + DoubleToString(adxH1, 1) + ",";
+    json += "\"adx_h4\":" + DoubleToString(adxH4, 1) + ",";
+    json += "\"adx_d1\":" + DoubleToString(adxD1, 1) + ",";
+    json += "\"plus_di\":" + DoubleToString(plusDI, 1) + ",";
+    json += "\"minus_di\":" + DoubleToString(minusDI, 1);
+    json += "},";
+    json += "\"key_levels\":" + keyLevelsJson + ",";
+    json += "\"economic_calendar\":" + economicCalendarJson;
+    json += "}";
+    
+    return json;
+}
+
+//+------------------------------------------------------------------+
+//| Helper Functions for Market Context Creation                    |
+//+------------------------------------------------------------------+
+double GetVolumeAverage(int periods)
+{
+    double totalVolume = 0;
+    int validBars = 0;
+    
+    for(int i = 1; i <= periods; i++)
+    {
+        double volume = iRealVolume(_Symbol, PERIOD_CURRENT, i);
+        if(volume > 0)
+        {
+            totalVolume += volume;
+            validBars++;
+        }
+    }
+    
+    return validBars > 0 ? totalVolume / validBars : 0;
+}
+
+double GetATRValue()
+{
+    int atrHandle = iATR(_Symbol, PERIOD_CURRENT, InpATRPeriod);
+    if(atrHandle == INVALID_HANDLE)
+        return 0;
+    
+    double atrBuffer[];
+    double atr = 0;
+    if(CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) > 0)
+        atr = atrBuffer[0];
+    
+    IndicatorRelease(atrHandle);
+    return atr;
+}
+
+double GetATRAverage(int periods)
+{
+    double totalATR = 0;
+    int validBars = 0;
+    
+    for(int i = 1; i <= periods; i++)
+    {
+        int atrHandle = iATR(_Symbol, PERIOD_CURRENT, InpATRPeriod);
+        if(atrHandle != INVALID_HANDLE)
+        {
+            double atrBuffer[];
+            if(CopyBuffer(atrHandle, 0, i, 1, atrBuffer) > 0)
+            {
+                totalATR += atrBuffer[0];
+                validBars++;
+            }
+            IndicatorRelease(atrHandle);
+        }
+    }
+    
+    return validBars > 0 ? totalATR / validBars : 0;
+}
+
+double GetEMAValue(int period)
+{
+    int emaHandle = iMA(_Symbol, PERIOD_CURRENT, period, 0, MODE_EMA, PRICE_CLOSE);
+    if(emaHandle == INVALID_HANDLE)
+        return 0;
+    
+    double emaBuffer[];
+    double ema = 0;
+    if(CopyBuffer(emaHandle, 0, 0, 1, emaBuffer) > 0)
+        ema = emaBuffer[0];
+    
+    IndicatorRelease(emaHandle);
+    return ema;
+}
+
+string GetKeyLevelsJson()
+{
+    string json = "{";
+    json += "\"support_levels\":[";
+    json += "],";
+    json += "\"resistance_levels\":[";
+    json += "],";
+    json += "\"nearest_support\":{\"price\":0.0,\"distance_pips\":0.0},";
+    json += "\"nearest_resistance\":{\"price\":0.0,\"distance_pips\":0.0}";
+    json += "}";
+    
+    // TODO: Integrate with key level detector when available
+    return json;
+}
+
+string GetEconomicCalendarJson()
+{
+    string json = "{";
+    json += "\"events_today\":0,";
+    json += "\"high_impact_events\":0,";
+    json += "\"finbert_signal\":\"NEUTRAL\",";
+    json += "\"finbert_confidence\":0.0,";
+    json += "\"next_event\":{";
+    json += "\"time\":\"\",";
+    json += "\"currency\":\"\",";
+    json += "\"name\":\"\",";
+    json += "\"impact\":\"\"";
+    json += "}";
+    json += "}";
+    
+    // TODO: Integrate with economic calendar when available
+    return json;
+}
+
+void SaveMarketContextToFile(string jsonData)
+{
+    string filename = "market_context_" + _Symbol + "_" + TimeToString(TimeCurrent(), TIME_DATE) + ".json";
+    int fileHandle = FileOpen(filename, FILE_WRITE|FILE_TXT|FILE_COMMON);
+    
+    if(fileHandle != INVALID_HANDLE)
+    {
+        FileWriteString(fileHandle, jsonData);
+        FileClose(fileHandle);
+        
+        if(InpLogDetailedInfo)
+        {
+            Print("[GrandeFinBERT] Market context saved to: ", filename);
+        }
+    }
+    else
+    {
+        Print("[GrandeFinBERT] ERROR: Failed to save market context to file");
     }
 }
 

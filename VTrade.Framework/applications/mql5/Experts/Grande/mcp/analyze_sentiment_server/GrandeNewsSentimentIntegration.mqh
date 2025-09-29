@@ -77,6 +77,8 @@ public:
     // Calendar analysis
     bool              RunCalendarAnalysis();
     bool              LoadLatestCalendarAnalysis();
+    bool              LoadLatestEnhancedAnalysis();
+    bool              ParseEnhancedAnalysisData(string json_data);
     
     // Sentiment data access
     string            GetCurrentSignal() { return m_current_sentiment.signal; }
@@ -725,7 +727,35 @@ if (news_sentiment.ShouldExitPosition())
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::RunCalendarAnalysisFileBased()
 {
-    Print("Grande Calendar Sentiment: Running file-based analysis...");
+    Print("Grande Calendar Sentiment: Running enhanced FinBERT analysis...");
+    
+    // First run the enhanced FinBERT analyzer
+    string enhanced_script_path = "mcp/analyze_sentiment_server/enhanced_finbert_analyzer.py";
+    string enhanced_result = ExecutePythonScript(enhanced_script_path);
+    
+    if(enhanced_result != "")
+    {
+        // Wait for enhanced analysis to complete
+        bool enhanced_loaded = false;
+        for(int attempt = 0; attempt < 30; ++attempt)
+        {
+            if(LoadLatestEnhancedAnalysis())
+            {
+                enhanced_loaded = true;
+                break;
+            }
+            Sleep(500);
+        }
+        
+        if(enhanced_loaded)
+        {
+            Print("Grande Calendar Sentiment: Enhanced FinBERT analysis completed successfully");
+            return true;
+        }
+    }
+    
+    // Fallback to original calendar analyzer
+    Print("Grande Calendar Sentiment: Falling back to standard calendar analysis...");
     string script_path = "mcp/analyze_sentiment_server/finbert_calendar_analyzer.py";
     string result = ExecutePythonScript(script_path);
     if(result == "")
@@ -772,6 +802,184 @@ bool CNewsSentimentIntegration::LoadEconomicEventsFromFile(string &events_json)
         events_json += FileReadString(fh);
     FileClose(fh);
     return true;
+}
+
+//+------------------------------------------------------------------+
+//| Load the latest enhanced FinBERT analysis results              |
+//+------------------------------------------------------------------+
+bool CNewsSentimentIntegration::LoadLatestEnhancedAnalysis()
+{
+    // Try to load enhanced analysis file
+    string file_path = "enhanced_finbert_analysis.json";
+    int fh = FileOpen(file_path, FILE_READ|FILE_TXT|FILE_COMMON);
+    if(fh == INVALID_HANDLE)
+        fh = FileOpen(file_path, FILE_READ|FILE_TXT);
+    if(fh == INVALID_HANDLE)
+        return false;
+    
+    string json_data = "";
+    while(!FileIsEnding(fh))
+        json_data += FileReadString(fh);
+    FileClose(fh);
+    
+    // Parse enhanced analysis data
+    return ParseEnhancedAnalysisData(json_data);
+}
+
+//+------------------------------------------------------------------+
+//| Parse enhanced analysis data from JSON string                   |
+//+------------------------------------------------------------------+
+bool CNewsSentimentIntegration::ParseEnhancedAnalysisData(string json_data)
+{
+    // Parse enhanced FinBERT analysis results with comprehensive fields
+    // signal
+    string patt_sig = "\"signal\": \"";
+    int p = StringFind(json_data, patt_sig);
+    if(p >= 0)
+    {
+        p += StringLen(patt_sig);
+        int q = StringFind(json_data, "\"", p);
+        if(q > p) m_calendar_sentiment.signal = StringSubstr(json_data, p, q - p);
+    }
+    
+    // confidence
+    string patt_conf = "\"confidence\": ";
+    p = StringFind(json_data, patt_conf);
+    if(p >= 0)
+    {
+        p += StringLen(patt_conf);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.confidence = StringToDouble(s);
+    }
+    
+    // weighted_score
+    string patt_score = "\"weighted_score\": ";
+    p = StringFind(json_data, patt_score);
+    if(p >= 0)
+    {
+        p += StringLen(patt_score);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.score = StringToDouble(s);
+    }
+    
+    // reasoning
+    string patt_reas = "\"reasoning\": \"";
+    p = StringFind(json_data, patt_reas);
+    if(p >= 0)
+    {
+        p += StringLen(patt_reas);
+        int q = StringFind(json_data, "\"", p);
+        if(q > p) m_calendar_sentiment.reasoning = StringSubstr(json_data, p, q - p);
+    }
+    
+    // risk_level
+    string patt_risk = "\"risk_level\": \"";
+    p = StringFind(json_data, patt_risk);
+    if(p >= 0)
+    {
+        p += StringLen(patt_risk);
+        int q = StringFind(json_data, "\"", p);
+        if(q > p) 
+        {
+            string risk_level = StringSubstr(json_data, p, q - p);
+            // Store risk level in reasoning for now (could add new field)
+            m_calendar_sentiment.reasoning += " | Risk: " + risk_level;
+        }
+    }
+    
+    // confluence_score
+    string patt_confluence = "\"confluence_score\": ";
+    p = StringFind(json_data, patt_confluence);
+    if(p >= 0)
+    {
+        p += StringLen(patt_confluence);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.signal_consistency = StringToDouble(s);
+    }
+    
+    // processing_time_ms
+    string patt_time = "\"processing_time_ms\": ";
+    p = StringFind(json_data, patt_time);
+    if(p >= 0)
+    {
+        p += StringLen(patt_time);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        m_calendar_sentiment.processing_time_ms = StringToDouble(s);
+    }
+    
+    // Additional enhanced fields
+    // technical_score
+    string patt_tech = "\"technical_score\": ";
+    p = StringFind(json_data, patt_tech);
+    if(p >= 0)
+    {
+        p += StringLen(patt_tech);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        // Store technical score in reasoning
+        m_calendar_sentiment.reasoning += " | Tech: " + DoubleToString(StringToDouble(s), 2);
+    }
+    
+    // regime_score
+    string patt_regime = "\"regime_score\": ";
+    p = StringFind(json_data, patt_regime);
+    if(p >= 0)
+    {
+        p += StringLen(patt_regime);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        // Store regime score in reasoning
+        m_calendar_sentiment.reasoning += " | Regime: " + DoubleToString(StringToDouble(s), 2);
+    }
+    
+    // economic_score
+    string patt_econ = "\"economic_score\": ";
+    p = StringFind(json_data, patt_econ);
+    if(p >= 0)
+    {
+        p += StringLen(patt_econ);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        // Store economic score in reasoning
+        m_calendar_sentiment.reasoning += " | Econ: " + DoubleToString(StringToDouble(s), 2);
+    }
+    
+    // position_size_multiplier
+    string patt_pos = "\"position_size_multiplier\": ";
+    p = StringFind(json_data, patt_pos);
+    if(p >= 0)
+    {
+        p += StringLen(patt_pos);
+        int q = StringFind(json_data, ",", p);
+        if(q < 0) q = StringFind(json_data, "}", p);
+        if(q < 0) q = StringLen(json_data);
+        string s = StringSubstr(json_data, p, q - p);
+        // Store position size multiplier in reasoning
+        m_calendar_sentiment.reasoning += " | Size: " + DoubleToString(StringToDouble(s), 2);
+    }
+    
+    m_calendar_sentiment.timestamp = TimeCurrent();
+    m_calendar_sentiment.event_count = 1; // Enhanced analysis counts as 1 comprehensive event
+    
+    return m_calendar_sentiment.signal != "" && m_calendar_sentiment.confidence > 0;
 }
 
 
