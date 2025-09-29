@@ -92,10 +92,16 @@ foreach ($path in $commonPaths) {
 if ($commonPath) {
     $calendarAnalysisFile = "$commonPath\integrated_calendar_analysis.json"
     $newsAnalysisFile = "$commonPath\integrated_news_analysis.json"
+    $economicEventsFile = "$commonPath\economic_events.json"
 } else {
     $calendarAnalysisFile = $null
     $newsAnalysisFile = $null
+    $economicEventsFile = $null
 }
+
+# Check FinBERT Python script and dependencies
+$finbertScriptPath = "mcp\analyze_sentiment_server\finbert_calendar_analyzer.py"
+$finbertScriptExists = Test-Path $finbertScriptPath
 ```
 
 ### **5. Database Analysis**
@@ -230,16 +236,69 @@ if (Test-Path $calendarAnalysisFile) {
     $calendarContent = Get-Content $calendarAnalysisFile | ConvertFrom-Json
     Write-Host "FinBERT Calendar Signal: $($calendarContent.signal) | Confidence: $($calendarContent.confidence)" -ForegroundColor Green
     Write-Host "Event Count: $($calendarContent.event_count) | Processing Time: $($calendarContent.metrics.processing_time_ms)ms" -ForegroundColor Cyan
+    
+    # Check enhanced metrics if available
+    if ($calendarContent.metrics) {
+        Write-Host "Surprise Accuracy: $($calendarContent.metrics.surprise_accuracy) | Signal Consistency: $($calendarContent.metrics.signal_consistency)" -ForegroundColor Cyan
+        Write-Host "High Confidence Predictions: $($calendarContent.metrics.high_confidence_predictions)/$($calendarContent.event_count)" -ForegroundColor Cyan
+    }
+    
+    # Check timestamp freshness
+    if ($calendarContent.timestamp) {
+        $analysisTime = [DateTime]::ParseExact($calendarContent.timestamp, "yyyy-MM-ddTHH:mm:ss.fffZ", $null)
+        $timeSinceAnalysis = (Get-Date) - $analysisTime
+        if ($timeSinceAnalysis.TotalHours -lt 1) {
+            Write-Host "✅ FinBERT analysis is fresh ($([math]::Round($timeSinceAnalysis.TotalMinutes, 1)) minutes ago)" -ForegroundColor Green
+        } elseif ($timeSinceAnalysis.TotalHours -lt 24) {
+            Write-Host "⚠️ FinBERT analysis is $([math]::Round($timeSinceAnalysis.TotalHours, 1)) hours old" -ForegroundColor Yellow
+        } else {
+            Write-Host "❌ FinBERT analysis is stale ($([math]::Round($timeSinceAnalysis.TotalDays, 1)) days old)" -ForegroundColor Red
+        }
+    }
 } else {
     Write-Host "❌ FinBERT calendar analysis not available" -ForegroundColor Red
 }
 
-# Verify FinBERT integration - News Analysis
+# Verify FinBERT integration - News Analysis (DISABLED)
 if (Test-Path $newsAnalysisFile) {
     $newsContent = Get-Content $newsAnalysisFile | ConvertFrom-Json
     Write-Host "FinBERT News Signal: $($newsContent.signal) | Confidence: $($newsContent.confidence)" -ForegroundColor Green
 } else {
-    Write-Host "❌ FinBERT news analysis not available" -ForegroundColor Red
+    Write-Host "ℹ️ FinBERT news analysis disabled (stale data removed)" -ForegroundColor Yellow
+}
+
+# Check economic events input file
+if (Test-Path $economicEventsFile) {
+    $eventsContent = Get-Content $economicEventsFile | ConvertFrom-Json
+    $eventCount = if ($eventsContent.events) { $eventsContent.events.Count } else { 0 }
+    Write-Host "Economic Events Available: $eventCount events" -ForegroundColor Cyan
+    
+    if ($eventCount -gt 0) {
+        # Show recent events
+        $recentEvents = $eventsContent.events | Sort-Object time_utc -Descending | Select-Object -First 3
+        Write-Host "Recent Events:" -ForegroundColor Cyan
+        $recentEvents | ForEach-Object { 
+            Write-Host "  $($_.time_utc) - $($_.currency) $($_.name) ($($_.impact))" -ForegroundColor Gray 
+        }
+    }
+} else {
+    Write-Host "❌ Economic events file not found" -ForegroundColor Red
+}
+
+# Check FinBERT Python script availability
+if ($finbertScriptExists) {
+    Write-Host "✅ FinBERT Python script available" -ForegroundColor Green
+    
+    # Check script modification time
+    $scriptInfo = Get-ChildItem $finbertScriptPath
+    $scriptAge = (Get-Date) - $scriptInfo.LastWriteTime
+    if ($scriptAge.TotalDays -lt 7) {
+        Write-Host "✅ FinBERT script recently updated ($([math]::Round($scriptAge.TotalDays, 1)) days ago)" -ForegroundColor Green
+    } else {
+        Write-Host "⚠️ FinBERT script is $([math]::Round($scriptAge.TotalDays, 1)) days old" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "❌ FinBERT Python script not found at expected location" -ForegroundColor Red
 }
 ```
 
@@ -326,7 +385,56 @@ if (Test-Path $todayCSV) {
 }
 ```
 
-### **10. System Health Metrics**
+### **10. FinBERT Trading Integration Analysis**
+```powershell
+# Check FinBERT integration in trading decisions
+if ($latestLog) {
+    Write-Host "=== FINBERT TRADING INTEGRATION ===" -ForegroundColor Magenta
+    
+    # Check for FinBERT sentiment usage in trading decisions
+    $finbertLogs = Get-Content $latestLog.FullName -Tail 1000 | Where-Object {$_ -match "FinBERT|finbert|FinBERT.*SUPPORTS|FinBERT.*OPPOSES|FinBERT.*NEUTRAL|FinBERT.*BLOCKED"}
+    
+    if ($finbertLogs.Count -gt 0) {
+        Write-Host "FinBERT Trading Decisions: $($finbertLogs.Count)" -ForegroundColor Cyan
+        
+        # Count different FinBERT actions
+        $supports = ($finbertLogs | Where-Object {$_ -match "FinBERT.*SUPPORTS"}).Count
+        $opposes = ($finbertLogs | Where-Object {$_ -match "FinBERT.*OPPOSES"}).Count
+        $neutral = ($finbertLogs | Where-Object {$_ -match "FinBERT.*NEUTRAL"}).Count
+        $blocked = ($finbertLogs | Where-Object {$_ -match "FinBERT.*BLOCKED"}).Count
+        
+        Write-Host "FinBERT Actions:" -ForegroundColor Cyan
+        Write-Host "  Supports Trade: $supports" -ForegroundColor Green
+        Write-Host "  Opposes Trade: $opposes" -ForegroundColor Yellow
+        Write-Host "  Neutral: $neutral" -ForegroundColor Gray
+        Write-Host "  Blocked Trade: $blocked" -ForegroundColor Red
+        
+        # Show recent FinBERT decisions
+        Write-Host "`nRecent FinBERT Decisions:" -ForegroundColor Cyan
+        $finbertLogs | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
+        
+        # Check sentiment multiplier usage
+        $multiplierLogs = Get-Content $latestLog.FullName -Tail 500 | Where-Object {$_ -match "sentiment_multiplier|position multiplier"}
+        if ($multiplierLogs.Count -gt 0) {
+            Write-Host "`nSentiment Multiplier Usage: $($multiplierLogs.Count)" -ForegroundColor Cyan
+            $multiplierLogs | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
+        }
+    } else {
+        Write-Host "No FinBERT trading decisions found in recent logs" -ForegroundColor Yellow
+    }
+    
+    # Check for FinBERT analysis execution
+    $analysisLogs = Get-Content $latestLog.FullName -Tail 500 | Where-Object {$_ -match "Running file-based analysis|calendar analysis|FinBERT.*analysis"}
+    if ($analysisLogs.Count -gt 0) {
+        Write-Host "`nFinBERT Analysis Executions: $($analysisLogs.Count)" -ForegroundColor Cyan
+        $analysisLogs | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
+    }
+} else {
+    Write-Host "❌ Cannot check FinBERT trading integration - no log file" -ForegroundColor Red
+}
+```
+
+### **11. System Health Metrics**
 ```powershell
 # Check system health
 if ($latestLog) {
@@ -369,12 +477,14 @@ if ($latestLog) {
 
 ### **🟡 HIGH PRIORITY**
 7. **CSV Data Collection** - Check if new records are being generated
-8. **FinBERT Integration** - Verify AI analysis is working (both calendar and news)
-9. **Data Quality** - Check for data integrity issues
+8. **FinBERT Integration** - Verify AI analysis is working (calendar analysis active, news disabled)
+9. **Economic Events Data** - Check if economic calendar data is available
+10. **Data Quality** - Check for data integrity issues
 
 ### **🟢 MEDIUM PRIORITY**
-10. **System Performance** - Monitor log size and throttling
-11. **Memory & Connection** - Check for system resource issues
+11. **System Performance** - Monitor log size and throttling
+12. **Memory & Connection** - Check for system resource issues
+13. **FinBERT Script Health** - Check Python script availability and age
 
 ## **Expected Findings & Quick Diagnostics**
 
@@ -384,7 +494,9 @@ if ($latestLog) {
 - RSI Success Rate >20%
 - CSV records increasing daily with recent activity (<30 minutes)
 - Error count <10 in recent logs
-- FinBERT confidence >0.5 (both calendar and news)
+- FinBERT calendar confidence >0.5 (news analysis disabled)
+- Economic events file available with recent data
+- FinBERT Python script accessible and recently updated
 - Regular trading activity detected
 - Database file accessible and not corrupted
 
@@ -394,7 +506,9 @@ if ($latestLog) {
 - No new CSV records for >1 hour
 - Error count >20 in recent logs
 - Pullback Success Rate <50%
-- FinBERT confidence <0.3
+- FinBERT calendar confidence <0.3
+- Economic events file missing or empty
+- FinBERT analysis stale (>24 hours old)
 - No trading activity for extended periods
 - Empty rejection reasons in CSV data
 
@@ -404,7 +518,9 @@ if ($latestLog) {
 - Error 10019/10046 appearing
 - No signal analysis for >10 minutes
 - Database not growing for >2 hours
-- FinBERT analysis missing (both files)
+- FinBERT calendar analysis missing
+- FinBERT Python script not found
+- Economic events file missing
 - No CSV data activity for >2 hours
 
 ## **Quick Analysis Template**
@@ -421,6 +537,8 @@ $todayCSV = "$($mt5Path.FullName)\MQL5\Files\FinBERT_Data_EURUSD!_$(Get-Date -Fo
 $dbFile = "$($mt5Path.FullName)\MQL5\Files\GrandeTradingData.db"
 $calendarAnalysisFile = "$env:APPDATA\MetaQuotes\Terminal\Common\Files\integrated_calendar_analysis.json"
 $newsAnalysisFile = "$env:APPDATA\MetaQuotes\Terminal\Common\Files\integrated_news_analysis.json"
+$economicEventsFile = "$env:APPDATA\MetaQuotes\Terminal\Common\Files\economic_events.json"
+$finbertScriptPath = "mcp\analyze_sentiment_server\finbert_calendar_analyzer.py"
 
 # 2. Run all checks in priority order
 # [Insert all the analysis commands above in this order:]
@@ -431,8 +549,9 @@ $newsAnalysisFile = "$env:APPDATA\MetaQuotes\Terminal\Common\Files\integrated_ne
 # 5. RSI Logic Verification
 # 6. Pullback Validation Check
 # 7. Enhanced CSV Data Analysis
-# 8. FinBERT Status Check (both calendar and news)
-# 9. System Health Metrics
+# 8. FinBERT Status Check (calendar analysis + economic events + Python script)
+# 9. FinBERT Trading Integration Analysis
+# 10. System Health Metrics
 
 # 3. Summary
 Write-Host "`n=== ANALYSIS COMPLETE ===" -ForegroundColor Green
@@ -454,6 +573,6 @@ Provide analysis in this structure:
 - **Action**: Reload EA if RSI fix not active or database not growing
 - **Monitoring**: Watch for signal success rate improvements and database growth
 - **Critical**: Database must be growing - if not, system is not functioning properly
-- **FinBERT**: Check both calendar and news analysis files for complete AI integration status
+- **FinBERT**: Check calendar analysis file, economic events input, and Python script for complete AI integration status (news analysis disabled)
 
 This optimized prompt focuses on **incremental analysis** using **proven PowerShell commands** that have worked effectively in our testing, making it perfect for regular system monitoring and quick health checks. **Database monitoring is now a critical priority** to ensure data persistence and system functionality.
