@@ -125,15 +125,15 @@ public:
                 }
                 else
                 {
-                    // Last resort: create sample events for testing FinBERT
-                    Print("[GrandeMT5News] WARNING: No calendar events found. Creating sample events for FinBERT testing.");
-                    CreateSampleEconomicEvents();
+                    // No calendar events found - return empty result
+                    Print("[GrandeMT5News] WARNING: No calendar events found in ultra-wide window.");
+                    m_event_count = 0;
                 }
             }
             else
             {
-                Print("[GrandeMT5News] WARNING: MT5 calendar appears unavailable; creating sample events for FinBERT testing");
-                CreateSampleEconomicEvents();
+                Print("[GrandeMT5News] WARNING: MT5 calendar appears unavailable.");
+                m_event_count = 0;
             }
         }
         else
@@ -766,27 +766,4 @@ private:
         return result;
     }
     
-    //+------------------------------------------------------------------+
-    //| Create sample economic events for FinBERT testing               |
-    //+------------------------------------------------------------------+
-    void CreateSampleEconomicEvents()
-    {
-        datetime now = TimeCurrent();
-        
-        // Recent events (past 24 hours) with actual vs forecast data
-        AddEvent(now - 3600, "USD", "Non-Farm Payrolls", "185K", "180K", "175K", NEWS_IMPACT_HIGH, "US employment data shows stronger than expected job growth");
-        AddEvent(now - 7200, "EUR", "ECB Interest Rate Decision", "4.25%", "4.00%", "4.00%", NEWS_IMPACT_CRITICAL, "European Central Bank raises rates more than expected");
-        AddEvent(now - 10800, "GBP", "UK GDP Growth Rate", "0.3%", "0.2%", "0.1%", NEWS_IMPACT_HIGH, "UK economy shows stronger growth than forecast");
-        AddEvent(now - 14400, "USD", "Core CPI", "3.8%", "3.5%", "3.6%", NEWS_IMPACT_HIGH, "US core inflation rises above expectations");
-        AddEvent(now - 18000, "JPY", "Bank of Japan Rate Decision", "-0.10%", "-0.10%", "-0.10%", NEWS_IMPACT_MEDIUM, "BoJ maintains ultra-low rates as expected");
-        
-        // Upcoming events (next 24 hours)
-        AddEvent(now + 3600, "USD", "Federal Reserve Chair Speech", "Hawkish", "Neutral", "Dovish", NEWS_IMPACT_HIGH, "Fed Chair expected to discuss monetary policy outlook");
-        AddEvent(now + 7200, "EUR", "German Manufacturing PMI", "52.0", "50.5", "49.8", NEWS_IMPACT_MEDIUM, "German manufacturing shows continued expansion");
-        AddEvent(now + 10800, "GBP", "UK Retail Sales", "0.5%", "0.2%", "-0.1%", NEWS_IMPACT_MEDIUM, "UK consumer spending expected to recover");
-        AddEvent(now + 14400, "USD", "Initial Jobless Claims", "210K", "215K", "220K", NEWS_IMPACT_MEDIUM, "US unemployment claims expected to remain low");
-        AddEvent(now + 18000, "AUD", "RBA Meeting Minutes", "Neutral", "Dovish", "Dovish", NEWS_IMPACT_MEDIUM, "Reserve Bank of Australia policy outlook");
-        
-        Print(StringFormat("[GrandeMT5News] Created %d sample economic events for FinBERT testing", m_event_count));
-    }
 };

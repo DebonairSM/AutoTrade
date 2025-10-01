@@ -105,6 +105,7 @@ input bool   InpEnableDatabase = true;          // Enable Database Logging
 input string InpDatabasePath = "GrandeTradingData.db"; // Database File Path
 input bool   InpDatabaseDebug = false;           // Enable Database Debug Prints
 input int    InpDataCollectionInterval = 60;     // Data Collection Interval (seconds)
+input int    InpFinBERTAnalysisInterval = 300;   // FinBERT Analysis Interval (seconds)
 
 input group "=== Advanced Trend Follower ==="
 input bool   InpEnableTrendFollower = true;      // Enable Trend Follower Confirmation
@@ -217,6 +218,7 @@ double                        g_cachedRsiD1  = EMPTY_VALUE;
 // Database data collection variables
 datetime                      g_lastDataCollectionTime = 0;
 datetime                      g_lastBarTime = 0;
+datetime                      g_lastFinBERTAnalysisTime = 0;
 
 // Intelligent Position Scaling variables
 struct RangeInfo {
@@ -5758,6 +5760,19 @@ bool ValidateInputParameters()
         isValid = false;
     }
     
+    // Database Settings
+    if(InpDataCollectionInterval < 30 || InpDataCollectionInterval > 3600)
+    {
+        Print("ERROR: InpDataCollectionInterval must be between 30 and 3600. Current: ", InpDataCollectionInterval);
+        isValid = false;
+    }
+    
+    if(InpFinBERTAnalysisInterval < 60 || InpFinBERTAnalysisInterval > 1800)
+    {
+        Print("ERROR: InpFinBERTAnalysisInterval must be between 60 and 1800. Current: ", InpFinBERTAnalysisInterval);
+        isValid = false;
+    }
+    
     if(isValid && InpLogDebugInfo)
     {
         Print("✅ All input parameters validated successfully");
@@ -6473,14 +6488,16 @@ void CollectEnhancedMarketDataForFinBERT()
 {
     datetime currentTime = TimeCurrent();
     
-    // Check if we should collect data (based on interval)
-    if((currentTime - g_lastDataCollectionTime) < InpDataCollectionInterval)
+    // Check if we should collect data (based on FinBERT analysis interval)
+    if((currentTime - g_lastFinBERTAnalysisTime) < InpFinBERTAnalysisInterval)
         return;
     
     // Check if we have a new bar
     datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
     if(currentBarTime == g_lastBarTime)
         return;
+    
+    g_lastFinBERTAnalysisTime = currentTime;
     
     // Create comprehensive market context JSON
     string marketContextJson = CreateComprehensiveMarketContext();
