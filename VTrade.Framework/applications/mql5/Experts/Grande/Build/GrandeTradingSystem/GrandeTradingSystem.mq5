@@ -29,14 +29,14 @@
 input group "=== Market Regime Settings ==="
 input double InpADXTrendThreshold = 25.0;        // ADX Threshold for Trending
 input double InpADXBreakoutMin = 18.0;           // ADX Minimum for Breakout Setup
-input int    InpATRPeriod = 14;                  // ATR Period
+input int    InpATRPeriod = 21;                  // ATR Period (optimized for H4)
 input int    InpATRAvgPeriod = 90;               // ATR Average Period
 input double InpHighVolMultiplier = 2.0;         // High Volatility Multiplier
 
 input group "=== Key Level Detection Settings ==="
-input int    InpLookbackPeriod = 300;            // Lookback Period for Key Levels
+input int    InpLookbackPeriod = 200;            // Lookback Period for Key Levels (reduced for H4)
 input double InpMinStrength = 0.40;              // Minimum Level Strength
-input double InpTouchZone = 0.0010;              // Touch Zone (0 = auto)
+input double InpTouchZone = 0.0015;              // Touch Zone (wider for H4)
 input int    InpMinTouches = 1;                  // Minimum Touches Required
 
 input group "=== Trading Settings ==="
@@ -54,24 +54,24 @@ input double InpTriangleRiskPct = 2.0;           // Risk % for Triangle Trades
 input bool   InpTriangleAllowEarlyEntry = false; // Allow Early Entry (Pre-breakout)
 
 input group "=== Risk Management Settings ==="
-input double InpRiskPctTrend = 2.5;              // Risk % for Trend Trades
-input double InpRiskPctRange = 1.0;              // Risk % for Range Trades
-input double InpRiskPctBreakout = 4.5;           // Risk % for Breakout Trades
+input double InpRiskPctTrend = 2.0;              // Risk % for Trend Trades (reduced for H4)
+input double InpRiskPctRange = 0.8;              // Risk % for Range Trades (reduced for H4)
+input double InpRiskPctBreakout = 3.5;           // Risk % for Breakout Trades (reduced for H4)
 input double InpMaxRiskPerTrade = 5.0;           // Maximum Risk % per Trade
 input double InpMaxDrawdownPct = 30.0;           // Maximum Account Drawdown %
 input double InpEquityPeakReset = 5.0;           // Reset Peak after X% Recovery
 input int    InpMaxPositions = 7;                // Maximum Concurrent Positions
 
 input group "=== Stop Loss & Take Profit ==="
-input double InpSLATRMultiplier = 1.2;           // Stop Loss ATR Multiplier
+input double InpSLATRMultiplier = 1.8;           // Stop Loss ATR Multiplier (wider for H4)
 input double InpTPRewardRatio = 3.0;             // Take Profit Reward Ratio (R:R)
-input double InpBreakevenATR = 1.0;              // Move to Breakeven after X ATR
-input double InpPartialCloseATR = 1.5;           // Partial Close after X ATR
+input double InpBreakevenATR = 1.5;              // Move to Breakeven after X ATR (delayed for H4)
+input double InpPartialCloseATR = 2.0;           // Partial Close after X ATR (delayed for H4)
 input double InpBreakevenBuffer = 0.5;           // Breakeven Buffer (pips)
 
 input group "=== Position Management ==="
 input bool   InpEnableTrailingStop = true;       // Enable Trailing Stops
-input double InpTrailingATRMultiplier = 0.6;     // Trailing Stop ATR Multiplier
+input double InpTrailingATRMultiplier = 0.8;     // Trailing Stop ATR Multiplier (wider for H4)
 input bool   InpEnablePartialCloses = true;      // Enable Partial Profit Taking
 input double InpPartialClosePercent = 33.0;      // % of Position to Close
 input bool   InpEnableBreakeven = true;          // Enable Breakeven Stops
@@ -92,7 +92,7 @@ input double InpMinRangeSizePips = 20.0;         // Minimum range size to enable
 input bool   InpLogScalingDecisions = true;      // Log scaling decisions for analysis
 
 input group "=== Signal Settings ==="
-input int    InpEMA50Period = 50;                // 50 EMA Period
+input int    InpEMA50Period = 76;                // 76 EMA Period (optimal for H4)
 input int    InpEMA200Period = 200;              // 200 EMA Period
 input int    InpEMA20Period = 20;                // 20 EMA Period
 input int    InpRSIPeriod = 14;                  // RSI Period
