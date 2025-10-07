@@ -5,11 +5,28 @@
 //+------------------------------------------------------------------+
 // Pattern from: MetaTrader 5 MQL5 Documentation
 // Reference: Expert Advisor OnInit/OnTick/OnDeinit event handling patterns
+//
+// MULTI-CURRENCY PAIR COMPATIBILITY:
+// This EA is designed to work with all major FX pairs:
+//   - EUR/USD, GBP/USD, USD/CHF, USD/CAD (4-5 digit pairs)
+//   - USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY (2-3 digit JPY pairs)
+//   - AUD/USD, NZD/USD (commodity currency pairs)
+//
+// Key features for universal compatibility:
+//   1. GetPipSize() handles different digit formats automatically
+//   2. ATR-based calculations adapt to each pair's volatility
+//   3. Symbol properties queried dynamically (volume steps, stop levels)
+//   4. PointValueUSD() calculates correct pip values for any pair
+//   5. Touch zones use ATR instead of fixed pips (InpTouchZone = 0)
+//
+// IMPORTANT: Always backtest on specific pair before live trading
+//+------------------------------------------------------------------+
 
 #property copyright "Copyright 2024, Grande Tech"
 #property link      "https://www.grandetech.com.br"
-#property version   "1.00"
+#property version   "1.01"
 #property description "Advanced trading system combining market regime detection with key level analysis"
+#property description "Universal multi-currency pair support for all major FX pairs"
 
 #include "GrandeMarketRegimeDetector.mqh"
 #include "GrandeKeyLevelDetector.mqh"
@@ -36,7 +53,7 @@ input double InpHighVolMultiplier = 2.0;         // High Volatility Multiplier
 input group "=== Key Level Detection Settings ==="
 input int    InpLookbackPeriod = 200;            // Lookback Period for Key Levels (reduced for H4)
 input double InpMinStrength = 0.40;              // Minimum Level Strength
-input double InpTouchZone = 0.0015;              // Touch Zone (wider for H4)
+input double InpTouchZone = 0.0;                 // Touch Zone (0 = auto ATR-based, or manual value)
 input int    InpMinTouches = 1;                  // Minimum Touches Required
 
 input group "=== Trading Settings ==="
@@ -1560,7 +1577,8 @@ void LogRegimeChange(const RegimeSnapshot &snapshot)
             if(g_keyLevelDetector.GetStrongestLevel(strongestLevel))
             {
                 double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                bool nearStrongLevel = MathAbs(currentPrice - strongestLevel.price) <= 0.0020; // Within 20 pips
+                double pipSize = GetPipSize();
+                bool nearStrongLevel = MathAbs(currentPrice - strongestLevel.price) <= (20.0 * pipSize); // Within 20 pips (universal)
                 
                 if(nearStrongLevel)
                 {
@@ -5510,6 +5528,66 @@ bool ValidateInputParameters()
 {
     bool isValid = true;
     
+    // Symbol validation and compatibility check
+    string symbol = _Symbol;
+    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    
+    // Validate symbol is a Forex pair
+    if(StringLen(symbol) < 6)
+    {
+        Print("WARNING: Symbol name too short. Expected format: EURUSD, GBPJPY, etc.");
+    }
+    
+    // Check if this is a known major pair
+    bool isKnownMajor = (
+        symbol == "EURUSD" || symbol == "GBPUSD" || symbol == "USDJPY" || 
+        symbol == "USDCHF" || symbol == "USDCAD" || symbol == "AUDUSD" || 
+        symbol == "NZDUSD" || symbol == "EURJPY" || symbol == "GBPJPY" || 
+        symbol == "AUDJPY" || symbol == "EURGBP" || symbol == "EURAUD" ||
+        symbol == "EURCHF" || symbol == "GBPAUD" || symbol == "GBPCAD" ||
+        symbol == "AUDCAD" || symbol == "AUDNZD"
+    );
+    
+    if(!isKnownMajor)
+    {
+        Print("INFO: Trading on ", symbol, " - Not in standard tested major pairs list");
+        Print("INFO: EA should work but requires thorough backtesting for this pair");
+    }
+    else
+    {
+        Print("INFO: Trading on ", symbol, " - Recognized major currency pair");
+    }
+    
+    // Validate digit count
+    if(digits != 2 && digits != 3 && digits != 4 && digits != 5)
+    {
+        Print("WARNING: Unusual digit count (", digits, ") for ", symbol);
+        Print("WARNING: Expected 2-3 digits (JPY pairs) or 4-5 digits (other pairs)");
+    }
+    else
+    {
+        if(digits == 2 || digits == 3)
+            Print("INFO: JPY pair detected (", digits, " digits) - pip calculations adjusted");
+        else
+            Print("INFO: Standard pair detected (", digits, " digits)");
+    }
+    
+    // Validate minimum lot size is reasonable
+    double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+    if(minLot <= 0 || maxLot <= 0)
+    {
+        Print("ERROR: Invalid lot sizes for ", symbol, " (Min: ", minLot, ", Max: ", maxLot, ")");
+        isValid = false;
+    }
+    
+    // Check if trading is allowed for this symbol
+    if(!SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE))
+    {
+        Print("ERROR: Trading not allowed for ", symbol);
+        isValid = false;
+    }
+    
     // Market Regime Settings
     if(InpADXTrendThreshold < 15.0 || InpADXTrendThreshold > 40.0)
     {
@@ -5554,9 +5632,10 @@ bool ValidateInputParameters()
         isValid = false;
     }
     
-    if(InpTouchZone != 0.0 && (InpTouchZone < 0.0001 || InpTouchZone > 0.0050))
+    if(InpTouchZone != 0.0 && (InpTouchZone < 0.00005 || InpTouchZone > 0.0100))
     {
-        Print("ERROR: InpTouchZone must be 0 (auto) or between 0.0001 and 0.0050. Current: ", InpTouchZone);
+        Print("ERROR: InpTouchZone must be 0 (auto ATR-based) or between 0.00005 and 0.0100. Current: ", InpTouchZone);
+        Print("INFO: For most major pairs, use 0 for automatic ATR-based touch zones");
         isValid = false;
     }
     

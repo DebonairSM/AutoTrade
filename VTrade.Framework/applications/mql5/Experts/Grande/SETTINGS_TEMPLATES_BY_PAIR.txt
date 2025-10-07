@@ -1,0 +1,122 @@
+===============================================================================
+GRANDE TRADING SYSTEM - SETTINGS TEMPLATES
+Version 1.01 - Universal Multi-Currency Support
+===============================================================================
+
+CRITICAL: ALWAYS SET InpTouchZone = 0 (auto-calculate from ATR)
+
+===============================================================================
+TEMPLATE 1: EUR/USD, USD/CHF, USD/CAD (Low Volatility)
+===============================================================================
+InpTouchZone = 0
+InpSLATRMultiplier = 1.8
+InpTPRewardRatio = 3.0
+InpRiskPctTrend = 2.0
+InpMinRangeSizePips = 15
+InpMinModifyPips = 7.0
+InpMaxPositions = 7
+
+===============================================================================
+TEMPLATE 2: GBP/USD (High Volatility)
+===============================================================================
+InpTouchZone = 0
+InpSLATRMultiplier = 2.0
+InpTPRewardRatio = 2.5
+InpRiskPctTrend = 1.5
+InpMinRangeSizePips = 30
+InpMinModifyPips = 10.0
+InpMaxPositions = 5
+
+===============================================================================
+TEMPLATE 3: USD/JPY, EUR/JPY (JPY Pairs)
+===============================================================================
+InpTouchZone = 0  // CRITICAL for JPY pairs
+InpSLATRMultiplier = 1.8
+InpTPRewardRatio = 3.0
+InpRiskPctTrend = 2.0
+InpMinRangeSizePips = 25
+InpMinModifyPips = 10.0
+InpMaxPositions = 7
+
+===============================================================================
+TEMPLATE 4: GBP/JPY (Very High Volatility)
+===============================================================================
+InpTouchZone = 0
+InpSLATRMultiplier = 2.5
+InpTPRewardRatio = 2.0
+InpRiskPctTrend = 1.0
+InpMinRangeSizePips = 50
+InpMinModifyPips = 15.0
+InpMaxPositions = 3
+
+===============================================================================
+TEMPLATE 5: AUD/USD, NZD/USD (Commodity Pairs)
+===============================================================================
+InpTouchZone = 0
+InpSLATRMultiplier = 1.8
+InpTPRewardRatio = 3.0
+InpRiskPctTrend = 2.0
+InpMinRangeSizePips = 18
+InpMinModifyPips = 7.0
+InpMaxPositions = 7
+
+===============================================================================
+TEMPLATE 6: EUR/GBP, EUR/AUD (Cross Pairs)
+===============================================================================
+InpTouchZone = 0
+InpSLATRMultiplier = 1.9
+InpTPRewardRatio = 2.8
+InpRiskPctTrend = 1.8
+InpMinRangeSizePips = 18
+InpMinModifyPips = 8.0
+InpMaxPositions = 6
+
+===============================================================================
+UNIVERSAL SETTINGS (All Pairs)
+===============================================================================
+
+// Technical Indicators
+InpEMA50Period = 76
+InpEMA200Period = 200
+InpEMA20Period = 20
+InpRSIPeriod = 14
+InpATRPeriod = 21
+
+// Market Regime
+InpADXTrendThreshold = 25.0
+InpADXBreakoutMin = 18.0
+InpLookbackPeriod = 200
+InpMinStrength = 0.40
+
+// Advanced Features
+InpEnableTrendFollower = true
+InpEnableMTFRSI = true
+InpEnableCalendarAI = true
+InpEnableDatabase = true
+
+===============================================================================
+QUICK VOLATILITY ADJUSTMENT
+===============================================================================
+
+MORE VOLATILE:
+- Increase InpSLATRMultiplier by 0.2-0.5
+- Decrease InpRiskPctTrend by 0.5%
+- Increase InpMinRangeSizePips by 5-10
+
+LESS VOLATILE:
+- Decrease InpSLATRMultiplier by 0.2
+- Increase InpRiskPctTrend by 0.5%
+- Decrease InpMinRangeSizePips by 5
+
+===============================================================================
+TESTING CHECKLIST
+===============================================================================
+
+☐ Load template for your pair type
+☐ VERIFY InpTouchZone = 0
+☐ Run Strategy Tester (3+ months)
+☐ Check for errors
+☐ Test on Demo (1-2 weeks)
+☐ Start live with 0.01 lot
+
+===============================================================================
