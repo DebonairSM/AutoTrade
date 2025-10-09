@@ -5,16 +5,31 @@
 //+------------------------------------------------------------------+
 // Pattern from: MetaTrader 5 MQL5 Documentation
 // Reference: Expert Advisor OnInit/OnTick/OnDeinit event handling patterns
+//
+// MULTI-CURRENCY PAIR COMPATIBILITY:
+// This EA is designed to work with all major FX pairs:
+//   - EUR/USD, GBP/USD, USD/CHF, USD/CAD (4-5 digit pairs)
+//   - USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY (2-3 digit JPY pairs)
+//   - AUD/USD, NZD/USD (commodity currency pairs)
+//
+// Key features for universal compatibility:
+//   1. GetPipSize() handles different digit formats automatically
+//   2. ATR-based calculations adapt to each pair's volatility
+//   3. Symbol properties queried dynamically (volume steps, stop levels)
+//   4. PointValueUSD() calculates correct pip values for any pair
+//   5. Touch zones use ATR instead of fixed pips (InpTouchZone = 0)
+//
+// IMPORTANT: Always backtest on specific pair before live trading
+//+------------------------------------------------------------------+
 
 #property copyright "Copyright 2024, Grande Tech"
 #property link      "https://www.grandetech.com.br"
-#property version   "1.00"
+#property version   "1.01"
 #property description "Advanced trading system combining market regime detection with key level analysis"
+#property description "Universal multi-currency pair support for all major FX pairs"
 
 #include "GrandeMarketRegimeDetector.mqh"
 #include "GrandeKeyLevelDetector.mqh"
-#include "GrandeTrianglePatternDetector.mqh"
-#include "GrandeTriangleTradingRules.mqh"
 #include "mcp/analyze_sentiment_server/GrandeNewsSentimentIntegration.mqh"
 #include "GrandeMT5CalendarReader.mqh"
 #include "GrandeIntelligentReporter.mqh"
@@ -36,7 +51,7 @@ input double InpHighVolMultiplier = 2.0;         // High Volatility Multiplier
 input group "=== Key Level Detection Settings ==="
 input int    InpLookbackPeriod = 200;            // Lookback Period for Key Levels (reduced for H4)
 input double InpMinStrength = 0.40;              // Minimum Level Strength
-input double InpTouchZone = 0.0015;              // Touch Zone (wider for H4)
+input double InpTouchZone = 0.0;                 // Touch Zone (0 = auto ATR-based, or manual value)
 input int    InpMinTouches = 1;                  // Minimum Touches Required
 
 input group "=== Trading Settings ==="
@@ -44,14 +59,6 @@ input bool   InpEnableTrading = true;           // Enable Live Trading
 input int    InpMagicNumber = 123456;            // Magic Number for Trades
 input int    InpSlippage = 30;                   // Slippage in Points
 input string InpOrderTag = "[GRANDE]";           // Order comment tag for identification
-
-input group "=== Triangle Pattern Settings ==="
-input bool   InpEnableTriangleTrading = true;    // Enable Triangle Pattern Trading
-input double InpTriangleMinConfidence = 0.6;     // Minimum Pattern Confidence
-input double InpTriangleMinBreakoutProb = 0.6;   // Minimum Breakout Probability
-input bool   InpTriangleRequireVolume = true;    // Require Volume Confirmation
-input double InpTriangleRiskPct = 2.0;           // Risk % for Triangle Trades
-input bool   InpTriangleAllowEarlyEntry = false; // Allow Early Entry (Pre-breakout)
 
 input group "=== Risk Management Settings ==="
 input double InpRiskPctTrend = 2.0;              // Risk % for Trend Trades (reduced for H4)
@@ -90,6 +97,23 @@ input double InpScalingRangeBuffer = 0.25;       // Buffer as fraction of range 
 input int    InpMaxScalingPositions = 3;         // Maximum positions for scaling
 input double InpMinRangeSizePips = 20.0;         // Minimum range size to enable scaling
 input bool   InpLogScalingDecisions = true;      // Log scaling decisions for analysis
+
+input group "=== Cool-Off Period Settings ==="
+input bool   InpEnableCooloffPeriod = true;      // Enable cool-off period after position closes
+input int    InpTPCooloffMinutes = 30;           // Minutes to wait after TP hit (0=disabled)
+input int    InpSLCooloffMinutes = 15;           // Minutes to wait after SL hit (0=disabled)
+input bool   InpAllowDirectionChangeOverride = true;  // Allow re-entry if direction changes
+input bool   InpLogCooloffDecisions = true;      // Log cool-off blocking decisions
+
+input group "=== Cool-Off Advanced Settings ==="
+input bool   InpEnableDynamicCooloff = true;     // Enable ATR-based dynamic cool-off adjustment
+input double InpATRHighVolMultiplier = 1.5;      // Multiplier for high volatility (>1.5x avg ATR)
+input double InpATRLowVolMultiplier = 0.7;       // Multiplier for low volatility (<0.7x avg ATR)
+input bool   InpEnableRegimeAwareCooloff = true; // Enable regime-based cool-off adjustment
+input double InpTrendingCooloffMultiplier = 0.7; // Multiplier for strong trends (shorter wait)
+input double InpRangingCooloffMultiplier = 1.3;  // Multiplier for ranging markets (longer wait)
+input bool   InpEnableCooloffStatistics = true;  // Track cool-off effectiveness statistics
+input int    InpStatisticsReportMinutes = 60;    // Minutes between statistics reports
 
 input group "=== Signal Settings ==="
 input int    InpEMA50Period = 76;                // 76 EMA Period (optimal for H4)
@@ -168,7 +192,7 @@ input bool   InpEnableCalendarAI        = true;  // Enable Calendar AI analysis
 input int    InpCalendarUpdateMinutes   = 15;    // Calendar AI update interval (minutes)
 input int    InpCalendarLookaheadHours  = 24;    // Lookahead window for calendar events (hours)
 input double InpCalendarMinConfidence   = 0.60;  // Log highlight threshold for confidence
-input bool   InpCalendarOnlyOnTimeframe = true;  // Run calendar only on a specific timeframe
+input bool   InpCalendarOnlyOnTimeframe = false; // Run calendar only on a specific timeframe
 input ENUM_TIMEFRAMES InpCalendarRunTimeframe = PERIOD_H1; // Timeframe to run calendar
 
 // DISABLED: News Service (commented out - only using free economic calendar data)
@@ -182,8 +206,6 @@ input ENUM_TIMEFRAMES InpCalendarRunTimeframe = PERIOD_H1; // Timeframe to run c
 //+------------------------------------------------------------------+
 CGrandeMarketRegimeDetector*  g_regimeDetector;
 CGrandeKeyLevelDetector*      g_keyLevelDetector;
-CGrandeTrianglePatternDetector* g_triangleDetector;
-CGrandeTriangleTradingRules*  g_triangleTrading;
 CAdvancedTrendFollower*       g_trendFollower;
 CGrandeRiskManager*           g_riskManager;
 CGrandeIntelligentReporter*   g_reporter;
@@ -194,10 +216,8 @@ CGrandeMT5NewsReader          g_calendarReader;
 CTrade                        g_trade;
 RegimeConfig                  g_regimeConfig;
 RiskConfig                    g_riskConfig;
-TriangleTradingConfig         g_triangleConfig;
 datetime                      g_lastRegimeUpdate;
 datetime                      g_lastKeyLevelUpdate;
-datetime                      g_lastTriangleUpdate;
 datetime                      g_lastDisplayUpdate;
 long                          g_chartID;
 datetime                      g_lastRiskUpdate;
@@ -233,6 +253,34 @@ struct RangeInfo {
 RangeInfo                     g_currentRange;
 datetime                      g_lastRangeUpdate = 0;
 int                           g_rangeHandle15M = INVALID_HANDLE;
+
+// Cool-off period tracking
+struct CoolOffInfo
+{
+    datetime lastExitTime;
+    double lastExitPrice;
+    int lastDirection;      // 0=BUY, 1=SELL
+    int exitReason;         // 0=TP, 1=SL, 2=OTHER
+    bool isActive;
+};
+
+CoolOffInfo                   g_coolOffState;
+int                           g_lastPositionCount = 0;  // Track position count changes
+
+// Cool-off statistics tracking
+struct CoolOffStats
+{
+    int tradesBlocked;           // Total trades blocked by cool-off
+    int tradesAllowed;           // Total trades allowed after cool-off expired
+    int overridesUsed;           // Direction change overrides used
+    int blockedWouldWin;         // Blocked trades that would have won (estimated)
+    int blockedWouldLose;        // Blocked trades that would have lost (estimated)
+    int allowedWins;             // Allowed trades that won
+    int allowedLosses;           // Allowed trades that lost
+    datetime lastReportTime;     // Last statistics report time
+};
+
+CoolOffStats                  g_coolOffStats;
 
 // Cooldown storage per ticket for partial closes
 struct SRsiExitState {
@@ -409,74 +457,6 @@ int OnInit()
         return INIT_FAILED;
     }
     
-    // Configure triangle trading settings
-    g_triangleConfig.minConfidence = InpTriangleMinConfidence;
-    g_triangleConfig.minBreakoutProb = InpTriangleMinBreakoutProb;
-    g_triangleConfig.requireVolumeConfirm = InpTriangleRequireVolume;
-    g_triangleConfig.maxRiskPercent = InpTriangleRiskPct;
-    g_triangleConfig.allowEarlyEntry = InpTriangleAllowEarlyEntry;
-    
-    // Create and initialize triangle pattern detector (if enabled)
-    g_triangleDetector = NULL;
-    g_triangleTrading = NULL;
-    if(InpEnableTriangleTrading)
-    {
-        g_triangleDetector = new CGrandeTrianglePatternDetector();
-        if(g_triangleDetector == NULL)
-        {
-            Print("ERROR: Failed to create Triangle Pattern Detector");
-            delete g_regimeDetector;
-            delete g_keyLevelDetector;
-            g_regimeDetector = NULL;
-            g_keyLevelDetector = NULL;
-            return INIT_FAILED;
-        }
-        
-        TriangleConfig triangleConfig;
-        if(!g_triangleDetector.Initialize(_Symbol, triangleConfig))
-        {
-            Print("ERROR: Failed to initialize Triangle Pattern Detector");
-            delete g_regimeDetector;
-            delete g_keyLevelDetector;
-            delete g_triangleDetector;
-            g_regimeDetector = NULL;
-            g_keyLevelDetector = NULL;
-            g_triangleDetector = NULL;
-            return INIT_FAILED;
-        }
-        
-        // Create and initialize triangle trading rules
-        g_triangleTrading = new CGrandeTriangleTradingRules();
-        if(g_triangleTrading == NULL)
-        {
-            Print("ERROR: Failed to create Triangle Trading Rules");
-            delete g_regimeDetector;
-            delete g_keyLevelDetector;
-            delete g_triangleDetector;
-            g_regimeDetector = NULL;
-            g_keyLevelDetector = NULL;
-            g_triangleDetector = NULL;
-            return INIT_FAILED;
-        }
-        
-        if(!g_triangleTrading.Initialize(_Symbol, g_triangleConfig))
-        {
-            Print("ERROR: Failed to initialize Triangle Trading Rules");
-            delete g_regimeDetector;
-            delete g_keyLevelDetector;
-            delete g_triangleDetector;
-            delete g_triangleTrading;
-            g_regimeDetector = NULL;
-            g_keyLevelDetector = NULL;
-            g_triangleDetector = NULL;
-            g_triangleTrading = NULL;
-            return INIT_FAILED;
-        }
-        
-        if(InpLogDebugInfo)
-            Print("[Grande] Triangle Pattern Detection and Trading initialized");
-    }
-    
     // Create and initialize trend follower (if enabled)
     g_trendFollower = NULL;
     if(InpEnableTrendFollower)
@@ -634,7 +614,6 @@ int OnInit()
     // Initialize update times
     g_lastRegimeUpdate = 0;
     g_lastKeyLevelUpdate = 0;
-    g_lastTriangleUpdate = 0;
     g_lastDisplayUpdate = 0;
     g_lastRiskUpdate = 0;
     
@@ -658,6 +637,38 @@ int OnInit()
               ", TrendFollower=", InpShowTrendFollowerPanel ? "ON" : "OFF");
     }
     
+    // Initialize cool-off state
+    g_coolOffState.isActive = false;
+    g_lastPositionCount = 0;
+    LoadCooloffState(); // Load any persisted state
+    
+    // Initialize cool-off statistics
+    g_coolOffStats.tradesBlocked = 0;
+    g_coolOffStats.tradesAllowed = 0;
+    g_coolOffStats.overridesUsed = 0;
+    g_coolOffStats.blockedWouldWin = 0;
+    g_coolOffStats.blockedWouldLose = 0;
+    g_coolOffStats.allowedWins = 0;
+    g_coolOffStats.allowedLosses = 0;
+    g_coolOffStats.lastReportTime = 0;
+    
+    if(InpLogCooloffDecisions && InpEnableCooloffPeriod)
+    {
+        Print(StringFormat("[COOL-OFF] Initialized - TP: %dm, SL: %dm, Direction Override: %s",
+              InpTPCooloffMinutes,
+              InpSLCooloffMinutes,
+              InpAllowDirectionChangeOverride ? "YES" : "NO"));
+        
+        if(InpEnableDynamicCooloff)
+            Print("[COOL-OFF] Dynamic adjustment: ENABLED (ATR-based)");
+        
+        if(InpEnableRegimeAwareCooloff)
+            Print("[COOL-OFF] Regime-aware adjustment: ENABLED");
+        
+        if(InpEnableCooloffStatistics)
+            Print(StringFormat("[COOL-OFF] Statistics tracking: ENABLED (reports every %dm)", InpStatisticsReportMinutes));
+    }
+    
     return INIT_SUCCEEDED;
 }
 
@@ -668,6 +679,12 @@ void OnDeinit(const int reason)
 {
     if(InpLogDebugInfo)
         Print("Deinitializing Grande Trading System. Reason: ", reason);
+    
+    // Cool-off state cleanup (persisted in GlobalVariables)
+    if(reason == REASON_REMOVE)
+    {
+        ClearCooloffState();
+    }
     
     // Clean up timer
     EventKillTimer();
@@ -696,17 +713,6 @@ void OnDeinit(const int reason)
         g_keyLevelDetector = NULL;
     }
     
-    if(g_triangleDetector != NULL)
-    {
-        delete g_triangleDetector;
-        g_triangleDetector = NULL;
-    }
-    
-    if(g_triangleTrading != NULL)
-    {
-        delete g_triangleTrading;
-        g_triangleTrading = NULL;
-    }
     
     if(g_trendFollower != NULL)
     {
@@ -740,6 +746,9 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
+    // Check for position closure to activate cool-off period
+    CheckForPositionClosure();
+    
     // Minimize OnTick work and avoid any logging or trade/risk operations here.
     // Check if trading is allowed
     if(!MQLInfoInteger(MQL_TRADE_ALLOWED) || !InpEnableTrading)
@@ -785,6 +794,9 @@ void OnTimer()
         g_reporter.GenerateHourlyReport();
         g_reporter.GenerateFinBERTDataset(); // Also save data for FinBERT
     }
+    
+    // Report cool-off statistics periodically
+    ReportCooloffStatistics();
     
     // Periodic risk manager updates (trailing stop, breakeven, etc.)
     if(g_riskManager != NULL && currentTime - g_lastRiskUpdate >= InpRiskUpdateSeconds)
@@ -1050,41 +1062,6 @@ void OnTimer()
                 g_keyLevelDetector.PrintKeyLevelsReport();
         }
         g_lastKeyLevelUpdate = currentTime;
-    }
-    
-    // Update triangle pattern detection and trading
-    if(g_triangleDetector != NULL && g_triangleTrading != NULL && 
-       InpEnableTriangleTrading && currentTime - g_lastTriangleUpdate >= InpRegimeUpdateSeconds)
-    {
-        // CRITICAL: Only proceed if risk manager allows trading
-        if(g_riskManager != NULL && !g_riskManager.IsTradingEnabled())
-        {
-            // Risk manager has disabled trading - skip triangle detection
-            g_lastTriangleUpdate = currentTime;
-            return;
-        }
-        
-        // Update triangle pattern detection
-        if(g_triangleDetector.DetectTrianglePattern(100))
-        {
-            // Generate trading signals if pattern detected
-            STriangleSignal signal = g_triangleTrading.GenerateSignal();
-            if(signal.isValid && InpEnableTrading)
-            {
-                // CRITICAL: Validate regime compatibility before executing
-                RegimeSnapshot currentRegime = g_regimeDetector.GetLastSnapshot();
-                if(IsTriangleRegimeCompatible(currentRegime.regime))
-                {
-                    // Execute triangle-based trades with full validation
-                    ExecuteTriangleTrade(signal, currentRegime);
-                }
-                else if(InpLogDetailedInfo)
-                {
-                    Print("[Grande] Triangle trade skipped: Incompatible regime - ", GetRegimeString(currentRegime.regime));
-                }
-            }
-        }
-        g_lastTriangleUpdate = currentTime;
     }
     
     // Update trend follower
@@ -1560,7 +1537,8 @@ void LogRegimeChange(const RegimeSnapshot &snapshot)
             if(g_keyLevelDetector.GetStrongestLevel(strongestLevel))
             {
                 double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                bool nearStrongLevel = MathAbs(currentPrice - strongestLevel.price) <= 0.0020; // Within 20 pips
+                double pipSize = GetPipSize();
+                bool nearStrongLevel = MathAbs(currentPrice - strongestLevel.price) <= (20.0 * pipSize); // Within 20 pips (universal)
                 
                 if(nearStrongLevel)
                 {
@@ -2639,6 +2617,12 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "
     }
     */
     
+    // CHECK COOL-OFF PERIOD
+    if(IsInCooloffPeriod(bullish))
+    {
+        return; // Cool-off active, skip trade
+    }
+    
     // Check intelligent position scaling
     int existingPositions = 0;
     for(int i = 0; i < PositionsTotal(); i++)
@@ -2671,6 +2655,16 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "
         Print(logPrefix + "  Position Size: ", DoubleToString(lot, 2), " lots");
         Print(logPrefix + "  Comment: ", comment);
         Print(logPrefix + "→ EXECUTING ", direction, " TREND TRADE...");
+    }
+    
+    // CRITICAL: Validate margin before executing trade
+    ENUM_ORDER_TYPE orderType = bullish ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+    if(!ValidateMarginBeforeTrade(orderType, lot, price, "TREND"))
+    {
+        execution.decision = "REJECTED";
+        execution.rejection_reason = "Insufficient margin";
+        if(g_reporter != NULL) g_reporter.RecordDecision(execution);
+        return;
     }
     
     bool tradeResult = false;
@@ -2945,6 +2939,14 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
         return;
     }
     
+    // CRITICAL: Validate margin before placing order
+    ENUM_ORDER_TYPE orderType = strongestLevel.isResistance ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+    double checkPrice = strongMomentumSurge ? (strongestLevel.isResistance ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID)) : breakoutLevel;
+    if(!ValidateMarginBeforeTrade(orderType, lot, checkPrice, "BREAKOUT"))
+    {
+        return;
+    }
+    
     // Place order (market order for momentum surge, stop order for normal breakout)
     bool tradeResult = false;
     if(strongMomentumSurge)
@@ -2956,9 +2958,9 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
             tradeResult = g_trade.Sell(NormalizeDouble(lot, 2), _Symbol, 0, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
         
         if(tradeResult)
-            Print(StringFormat("[BREAKOUT-SURGE] 💥 MARKET ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
+            Print(StringFormat("[BREAKOUT-SURGE] MARKET ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
         else
-            Print(StringFormat("[BREAKOUT-SURGE] 💥 MARKET ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
+            Print(StringFormat("[BREAKOUT-SURGE] MARKET ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
     }
     else
     {
@@ -3097,6 +3099,12 @@ void RangeTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", doub
             Print(logPrefix + "→ EXECUTING RANGE SELL...");
         }
         
+        // CRITICAL: Validate margin before executing trade
+        if(!ValidateMarginBeforeTrade(ORDER_TYPE_SELL, lot, SymbolInfoDouble(_Symbol, SYMBOL_BID), "RANGE-SELL"))
+        {
+            return;
+        }
+        
         bool tradeResult = g_trade.Sell(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_BID), sl, tp, StringFormat("%s Range-Sell", InpOrderTag));
         // Always-on concise outcome
         Print(StringFormat("[RANGE] %s SELL @%s SL=%s TP=%s lot=%.2f rr=%.2f",
@@ -3148,6 +3156,12 @@ void RangeTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", doub
             Print(logPrefix + "  Target: Mid-range (", DoubleToString(midRange, _Digits), ")");
             Print(logPrefix + "  Position Size: ", DoubleToString(lot, 2), " lots");
             Print(logPrefix + "→ EXECUTING RANGE BUY...");
+        }
+        
+        // CRITICAL: Validate margin before executing trade
+        if(!ValidateMarginBeforeTrade(ORDER_TYPE_BUY, lot, SymbolInfoDouble(_Symbol, SYMBOL_ASK), "RANGE-BUY"))
+        {
+            return;
         }
         
         bool tradeResult = g_trade.Buy(lot, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_ASK), sl, tp, StringFormat("%s Range-Buy", InpOrderTag));
@@ -5510,6 +5524,66 @@ bool ValidateInputParameters()
 {
     bool isValid = true;
     
+    // Symbol validation and compatibility check
+    string symbol = _Symbol;
+    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    
+    // Validate symbol is a Forex pair
+    if(StringLen(symbol) < 6)
+    {
+        Print("WARNING: Symbol name too short. Expected format: EURUSD, GBPJPY, etc.");
+    }
+    
+    // Check if this is a known major pair
+    bool isKnownMajor = (
+        symbol == "EURUSD" || symbol == "GBPUSD" || symbol == "USDJPY" || 
+        symbol == "USDCHF" || symbol == "USDCAD" || symbol == "AUDUSD" || 
+        symbol == "NZDUSD" || symbol == "EURJPY" || symbol == "GBPJPY" || 
+        symbol == "AUDJPY" || symbol == "EURGBP" || symbol == "EURAUD" ||
+        symbol == "EURCHF" || symbol == "GBPAUD" || symbol == "GBPCAD" ||
+        symbol == "AUDCAD" || symbol == "AUDNZD"
+    );
+    
+    if(!isKnownMajor)
+    {
+        Print("INFO: Trading on ", symbol, " - Not in standard tested major pairs list");
+        Print("INFO: EA should work but requires thorough backtesting for this pair");
+    }
+    else
+    {
+        Print("INFO: Trading on ", symbol, " - Recognized major currency pair");
+    }
+    
+    // Validate digit count
+    if(digits != 2 && digits != 3 && digits != 4 && digits != 5)
+    {
+        Print("WARNING: Unusual digit count (", digits, ") for ", symbol);
+        Print("WARNING: Expected 2-3 digits (JPY pairs) or 4-5 digits (other pairs)");
+    }
+    else
+    {
+        if(digits == 2 || digits == 3)
+            Print("INFO: JPY pair detected (", digits, " digits) - pip calculations adjusted");
+        else
+            Print("INFO: Standard pair detected (", digits, " digits)");
+    }
+    
+    // Validate minimum lot size is reasonable
+    double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+    double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+    if(minLot <= 0 || maxLot <= 0)
+    {
+        Print("ERROR: Invalid lot sizes for ", symbol, " (Min: ", minLot, ", Max: ", maxLot, ")");
+        isValid = false;
+    }
+    
+    // Check if trading is allowed for this symbol
+    if(!SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE))
+    {
+        Print("ERROR: Trading not allowed for ", symbol);
+        isValid = false;
+    }
+    
     // Market Regime Settings
     if(InpADXTrendThreshold < 15.0 || InpADXTrendThreshold > 40.0)
     {
@@ -5554,9 +5628,10 @@ bool ValidateInputParameters()
         isValid = false;
     }
     
-    if(InpTouchZone != 0.0 && (InpTouchZone < 0.0001 || InpTouchZone > 0.0050))
+    if(InpTouchZone != 0.0 && (InpTouchZone < 0.00005 || InpTouchZone > 0.0100))
     {
-        Print("ERROR: InpTouchZone must be 0 (auto) or between 0.0001 and 0.0050. Current: ", InpTouchZone);
+        Print("ERROR: InpTouchZone must be 0 (auto ATR-based) or between 0.00005 and 0.0100. Current: ", InpTouchZone);
+        Print("INFO: For most major pairs, use 0 for automatic ATR-based touch zones");
         isValid = false;
     }
     
@@ -6006,232 +6081,6 @@ double CloseSymbolFifoVolume(const string symbol,
     return closed;
 }
 
-//+------------------------------------------------------------------+
-//| Execute Triangle Pattern Trade with Full Integration            |
-//+------------------------------------------------------------------+
-void ExecuteTriangleTrade(const STriangleSignal &signal, const RegimeSnapshot &currentRegime)
-{
-    if(!signal.isValid)
-        return;
-    
-    string logPrefix = "[TRIANGLE TRADE] ";
-    
-    // CRITICAL: Check if we already have a triangle trade open
-    if(HasTrianglePositionOpen())
-    {
-        if(InpLogDetailedInfo)
-            Print(logPrefix + "Triangle trade already open, skipping new signal");
-        return;
-    }
-    
-    // CRITICAL: Check for conflicting positions
-    if(HasConflictingPosition(signal.orderType))
-    {
-        if(InpLogDetailedInfo)
-            Print(logPrefix + "Conflicting position exists, skipping triangle trade");
-        return;
-    }
-    
-    // CRITICAL: Validate trade setup with triangle trading rules
-    if(!g_triangleTrading.ValidateTradeSetup())
-    {
-        if(InpLogDetailedInfo)
-            Print(logPrefix + "Triangle trade setup validation failed");
-        return;
-    }
-    
-    // CRITICAL: Use Risk Manager for position sizing and validation
-    double stopDistancePips = MathAbs(signal.stopLoss - signal.entryPrice) / _Point;
-    double lotSize = 0.0;
-    
-    if(g_riskManager != NULL)
-    {
-        // Use Grande Risk Manager for position sizing
-        lotSize = g_riskManager.CalculateLotSize(stopDistancePips, currentRegime.regime);
-        
-        // Risk manager validation is handled by CalculateLotSize returning 0 for invalid setups
-        
-        if(InpLogDetailedInfo)
-        {
-            Print(logPrefix + "Risk Manager Integration:");
-            Print(logPrefix + "  Stop Distance: ", DoubleToString(stopDistancePips, 1), " pips");
-            Print(logPrefix + "  Lot Size (Risk Manager): ", DoubleToString(lotSize, 2));
-            Print(logPrefix + "  Regime: ", GetRegimeString(currentRegime.regime));
-        }
-    }
-    else
-    {
-        // Fallback to triangle trading rules position sizing
-        double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-        double riskAmount = g_triangleTrading.CalculateRiskAmount(accountBalance);
-        lotSize = g_triangleTrading.CalculatePositionSize(accountBalance, riskAmount);
-        
-        if(InpLogDetailedInfo)
-            Print(logPrefix + "Using fallback position sizing: ", DoubleToString(lotSize, 2));
-    }
-    
-    if(lotSize <= 0)
-    {
-        Print(logPrefix + "ERROR: Invalid lot size calculated (", DoubleToString(lotSize, 2), ")");
-        return;
-    }
-    
-    // CRITICAL: Final risk validation
-    double currentRisk = CalculateCurrentAccountRisk();
-    double triangleRisk = (MathAbs(signal.stopLoss - signal.entryPrice) * lotSize) / AccountInfoDouble(ACCOUNT_BALANCE) * 100;
-    
-    if(currentRisk + triangleRisk > InpMaxRiskPerTrade)
-    {
-        Print(logPrefix + "Trade blocked: Risk limit exceeded (", DoubleToString(currentRisk + triangleRisk, 1), "% > ", InpMaxRiskPerTrade, "%)");
-        return;
-    }
-    
-    // Execute the trade with proper integration
-    bool success = false;
-    string comment = StringFormat("[GRANDE-TRIANGLE-%s] %s", 
-                                 GetRegimeString(currentRegime.regime),
-                                 g_triangleTrading.GetSignalTypeString());
-    // DISABLED: News sentiment support for triangle trades (commented out - only using free economic calendar data)
-    bool triangleSenti = false; // Always false since news sentiment is disabled
-    /*
-    // Append concise sentiment tag if sentiment aligns
-    if(g_newsSentiment.GetCurrentSignal() != "")
-    {
-        if(signal.orderType == ORDER_TYPE_BUY)
-            triangleSenti = g_newsSentiment.ShouldEnterLong();
-        else if(signal.orderType == ORDER_TYPE_SELL)
-            triangleSenti = g_newsSentiment.ShouldEnterShort();
-        if(triangleSenti)
-        {
-            comment += "|SENTI";
-        }
-    }
-    */
-    
-    // Check intelligent position scaling for triangle trades
-    int existingPositions = 0;
-    for(int i = 0; i < PositionsTotal(); i++)
-    {
-        if(PositionGetSymbol(i) == _Symbol && PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
-        {
-            existingPositions++;
-        }
-    }
-    
-    // Apply intelligent scaling logic
-    bool isBuyTriangle = (signal.orderType == ORDER_TYPE_BUY);
-    if(!ShouldAllowIntelligentScaling(existingPositions, isBuyTriangle))
-    {
-        if(InpLogScalingDecisions)
-        {
-            Print(StringFormat("[SCALING] Triangle trade BLOCKED - Positions: %d, Buy: %s, Range valid: %s",
-                  existingPositions, isBuyTriangle ? "true" : "false", g_currentRange.isValid ? "true" : "false"));
-        }
-        return;
-    }
-    
-    if(InpLogDetailedInfo)
-    {
-        Print(logPrefix + "Trade Parameters:");
-        Print(logPrefix + "  Direction: ", g_triangleTrading.GetSignalTypeString());
-        Print(logPrefix + "  Entry Price: ", DoubleToString(signal.entryPrice, _Digits));
-        Print(logPrefix + "  Stop Loss: ", DoubleToString(signal.stopLoss, _Digits));
-        Print(logPrefix + "  Take Profit: ", DoubleToString(signal.takeProfit, _Digits));
-        Print(logPrefix + "  Lot Size: ", DoubleToString(lotSize, 2));
-        Print(logPrefix + "  Risk/Reward: 1:", DoubleToString(MathAbs(signal.takeProfit - signal.entryPrice) / MathAbs(signal.entryPrice - signal.stopLoss), 2));
-        Print(logPrefix + "  Regime: ", GetRegimeString(currentRegime.regime));
-        Print(logPrefix + "  Pattern: ", g_triangleDetector.GetPatternTypeString());
-        Print(logPrefix + "→ EXECUTING TRIANGLE TRADE...");
-    }
-    
-    if(signal.orderType == ORDER_TYPE_BUY)
-    {
-        success = g_trade.Buy(lotSize, _Symbol, signal.entryPrice, signal.stopLoss, 
-                             signal.takeProfit, comment);
-    }
-    else if(signal.orderType == ORDER_TYPE_SELL)
-    {
-        success = g_trade.Sell(lotSize, _Symbol, signal.entryPrice, signal.stopLoss, 
-                              signal.takeProfit, comment);
-    }
-    
-    // Always-on concise summary for monitoring
-    Print(StringFormat("[TRIANGLE] %s %s @%s SL=%s TP=%s lot=%.2f rr=%.2f pattern=%s%s",
-                       (success ? "FILLED" : "FAILED"),
-                       g_triangleTrading.GetSignalTypeString(),
-                       DoubleToString(signal.entryPrice, _Digits),
-                       DoubleToString(signal.stopLoss, _Digits),
-                       DoubleToString(signal.takeProfit, _Digits),
-                       lotSize,
-                       (MathAbs(signal.takeProfit - signal.entryPrice) / MathMax(1e-10, MathAbs(signal.entryPrice - signal.stopLoss))),
-                       g_triangleDetector.GetPatternTypeString(),
-                       (triangleSenti?" senti=YES":"")));
-    
-    // Log scaling decision for successful trades
-    if(success)
-    {
-        LogScalingDecision(existingPositions + 1, signal.entryPrice, isBuyTriangle);
-    }
-    
-    if(success)
-    {
-        if(InpLogDetailedInfo)
-        {
-            Print("✅ TRIANGLE TRADE EXECUTED:");
-            Print("   Type: ", g_triangleTrading.GetSignalTypeString());
-            Print("   Entry: ", DoubleToString(signal.entryPrice, _Digits));
-            Print("   Stop Loss: ", DoubleToString(signal.stopLoss, _Digits));
-            Print("   Take Profit: ", DoubleToString(signal.takeProfit, _Digits));
-            Print("   Lot Size: ", DoubleToString(lotSize, 2));
-            Print("   Signal Strength: ", DoubleToString(signal.signalStrength * 100, 1), "%");
-            Print("   Pattern: ", g_triangleDetector.GetPatternTypeString());
-            Print("   Regime: ", GetRegimeString(currentRegime.regime));
-            Print("   Comment: ", comment);
-            Print("   Reason: ", signal.signalReason);
-        }
-        
-        // Register triangle trade for special management
-        RegisterTriangleTrade(signal);
-    }
-    else
-    {
-        Print(logPrefix + "Trade execution failed. Error: ", GetLastError());
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Check if Triangle Position is Already Open                      |
-//+------------------------------------------------------------------+
-bool HasTrianglePositionOpen()
-{
-    for(int i = 0; i < PositionsTotal(); i++)
-    {
-        if(PositionGetTicket(i) > 0)
-        {
-            string comment = PositionGetString(POSITION_COMMENT);
-            if(StringFind(comment, "[GRANDE-TRIANGLE]") >= 0)
-                return true;
-        }
-    }
-    return false;
-}
-
-//+------------------------------------------------------------------+
-//| Check if Triangle Trading is Compatible with Current Regime     |
-//+------------------------------------------------------------------+
-bool IsTriangleRegimeCompatible(MARKET_REGIME regime)
-{
-    // Triangle trading works best in breakout and ranging regimes
-    switch(regime)
-    {
-        case REGIME_BREAKOUT_SETUP:  return true;  // Perfect for triangle breakouts
-        case REGIME_RANGING:         return true;  // Good for triangle formations
-        case REGIME_TREND_BULL:      return true;  // Can work with trend continuation
-        case REGIME_TREND_BEAR:      return true;  // Can work with trend continuation
-        case REGIME_HIGH_VOLATILITY: return false; // Too risky for precise triangle patterns
-        default:                     return false;
-    }
-}
 
 //+------------------------------------------------------------------+
 //| Check for Conflicting Positions                                 |
@@ -6283,6 +6132,67 @@ double CalculateCurrentAccountRisk()
 }
 
 //+------------------------------------------------------------------+
+//| Validate Margin Before Trade                                     |
+//| Returns true if sufficient margin available, false otherwise     |
+//+------------------------------------------------------------------+
+bool ValidateMarginBeforeTrade(ENUM_ORDER_TYPE orderType, double lotSize, double entryPrice, string tradeContext = "")
+{
+    string logPrefix = StringFormat("[MARGIN CHECK%s] ", (tradeContext != "" ? " " + tradeContext : ""));
+    
+    // Get account information
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double accountFreeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+    double accountMargin = AccountInfoDouble(ACCOUNT_MARGIN);
+    
+    // Calculate required margin for the trade
+    double requiredMargin = 0.0;
+    if(!OrderCalcMargin(orderType, _Symbol, lotSize, entryPrice, requiredMargin))
+    {
+        Print(logPrefix + "CRITICAL: Failed to calculate required margin");
+        return false;
+    }
+    
+    // Check if we have sufficient free margin
+    if(requiredMargin > accountFreeMargin)
+    {
+        Print(logPrefix + "CRITICAL: Insufficient margin");
+        Print(logPrefix + "  Required: $", DoubleToString(requiredMargin, 2));
+        Print(logPrefix + "  Available: $", DoubleToString(accountFreeMargin, 2));
+        Print(logPrefix + "  Balance: $", DoubleToString(accountBalance, 2));
+        Print(logPrefix + "  Equity: $", DoubleToString(accountEquity, 2));
+        Print(logPrefix + "Trade BLOCKED to prevent 'No money' error");
+        return false;
+    }
+    
+    // Calculate margin levels
+    double currentMarginLevel = (accountMargin > 0) ? (accountEquity / accountMargin * 100.0) : 0.0;
+    double marginLevelAfterTrade = ((accountMargin + requiredMargin) > 0) ? 
+                                   (accountEquity / (accountMargin + requiredMargin) * 100.0) : 0.0;
+    
+    // Don't trade if margin level would drop below 200%
+    if(accountMargin > 0 && marginLevelAfterTrade < 200.0)
+    {
+        Print(logPrefix + "CRITICAL: Margin level too low");
+        Print(logPrefix + "  Current margin level: ", DoubleToString(currentMarginLevel, 1), "%");
+        Print(logPrefix + "  After trade would be: ", DoubleToString(marginLevelAfterTrade, 1), "%");
+        Print(logPrefix + "  Minimum required: 200.0%");
+        Print(logPrefix + "Trade BLOCKED for account safety");
+        return false;
+    }
+    
+    if(InpLogDetailedInfo)
+    {
+        Print(logPrefix + "Margin validation PASSED");
+        Print(logPrefix + "  Required margin: $", DoubleToString(requiredMargin, 2));
+        Print(logPrefix + "  Free margin: $", DoubleToString(accountFreeMargin, 2));
+        Print(logPrefix + "  Margin level after: ", DoubleToString(marginLevelAfterTrade, 1), "%");
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
 //| Get Regime String for Display                                   |
 //+------------------------------------------------------------------+
 string GetRegimeString(MARKET_REGIME regime)
@@ -6298,21 +6208,6 @@ string GetRegimeString(MARKET_REGIME regime)
     }
 }
 
-//+------------------------------------------------------------------+
-//| Register Triangle Trade for Special Management                  |
-//+------------------------------------------------------------------+
-void RegisterTriangleTrade(const STriangleSignal &signal)
-{
-    // This function can be expanded to track triangle trades for special management
-    // For now, it's a placeholder for future triangle-specific position management
-    if(InpLogDetailedInfo)
-    {
-        Print("[TRIANGLE] Trade registered for special management:");
-        Print("  Pattern: ", g_triangleDetector.GetPatternTypeString());
-        Print("  Signal Strength: ", DoubleToString(signal.signalStrength * 100, 1), "%");
-        Print("  Breakout Confirmed: ", signal.breakoutConfirmed ? "YES" : "NO");
-    }
-}
 
 //+------------------------------------------------------------------+
 //| New helpers: symbol/magic checks, normalization, stops, pending  |
@@ -7036,4 +6931,498 @@ void LogScalingDecision(int positionCount, double entryPrice, bool isBuySignal)
         g_currentRange.isValid ? "VALID_RANGE" : "NO_RANGE");
     
     Print(logMsg);
+}
+
+//+------------------------------------------------------------------+
+//| Cool-Off Period Helper Functions                                 |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Get cool-off key for global variable storage                     |
+//+------------------------------------------------------------------+
+string GetCooloffKey()
+{
+    return "COOLOFF_" + _Symbol + "_" + IntegerToString(InpMagicNumber);
+}
+
+//+------------------------------------------------------------------+
+//| Store cool-off state to global variable (persists across restart)|
+//+------------------------------------------------------------------+
+void SaveCooloffState(datetime exitTime, double exitPrice, int direction, int reason)
+{
+    string key = GetCooloffKey();
+    
+    GlobalVariableSet(key + "_TIME", (double)exitTime);
+    GlobalVariableSet(key + "_DIR", (double)direction);
+    GlobalVariableSet(key + "_REASON", (double)reason);
+    
+    if(InpLogCooloffDecisions)
+    {
+        Print(StringFormat("[COOL-OFF] State saved - Exit: %s, Dir: %s, Reason: %s",
+              TimeToString(exitTime),
+              direction == 0 ? "BUY" : "SELL",
+              reason == 0 ? "TP" : (reason == 1 ? "SL" : "OTHER")));
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Load cool-off state from global variable                         |
+//+------------------------------------------------------------------+
+bool LoadCooloffState()
+{
+    string key = GetCooloffKey();
+    
+    if(!GlobalVariableCheck(key + "_TIME"))
+        return false;
+    
+    g_coolOffState.lastExitTime = (datetime)GlobalVariableGet(key + "_TIME");
+    g_coolOffState.lastDirection = (int)GlobalVariableGet(key + "_DIR");
+    g_coolOffState.exitReason = (int)GlobalVariableGet(key + "_REASON");
+    g_coolOffState.isActive = true;
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Check if symbol is in cool-off period                            |
+//+------------------------------------------------------------------+
+bool IsInCooloffPeriod(bool isBuySignal)
+{
+    if(!InpEnableCooloffPeriod)
+        return false;
+    
+    // Load state from global variables
+    if(!LoadCooloffState())
+    {
+        g_coolOffState.isActive = false;
+        return false;
+    }
+    
+    datetime currentTime = TimeCurrent();
+    int secondsSinceExit = (int)(currentTime - g_coolOffState.lastExitTime);
+    
+    // Determine BASE cool-off duration based on exit reason
+    int baseCooloffMinutes = 0;
+    if(g_coolOffState.exitReason == 0) // TP
+        baseCooloffMinutes = InpTPCooloffMinutes;
+    else if(g_coolOffState.exitReason == 1) // SL
+        baseCooloffMinutes = InpSLCooloffMinutes;
+    else
+        return false; // No cool-off for manual or other exits
+    
+    // Apply dynamic adjustments
+    double cooloffMultiplier = 1.0;
+    
+    // 1. ATR-based volatility adjustment
+    if(InpEnableDynamicCooloff)
+    {
+        double volMultiplier = GetVolatilityAdjustment();
+        if(volMultiplier > 0)
+        {
+            cooloffMultiplier *= volMultiplier;
+            if(InpLogCooloffDecisions)
+            {
+                Print(StringFormat("[COOL-OFF] Dynamic adjustment: Volatility multiplier %.2f", volMultiplier));
+            }
+        }
+    }
+    
+    // 2. Regime-aware adjustment
+    if(InpEnableRegimeAwareCooloff && g_regimeDetector != NULL)
+    {
+        double regimeMultiplier = GetRegimeAdjustment();
+        if(regimeMultiplier > 0)
+        {
+            cooloffMultiplier *= regimeMultiplier;
+            if(InpLogCooloffDecisions)
+            {
+                Print(StringFormat("[COOL-OFF] Regime adjustment: multiplier %.2f", regimeMultiplier));
+            }
+        }
+    }
+    
+    // Calculate final cool-off duration
+    int adjustedCooloffMinutes = (int)(baseCooloffMinutes * cooloffMultiplier);
+    int cooloffSeconds = adjustedCooloffMinutes * 60;
+    
+    // Log adjustment if significant
+    if(InpLogCooloffDecisions && MathAbs(cooloffMultiplier - 1.0) > 0.1)
+    {
+        Print(StringFormat("[COOL-OFF] Adjusted duration: %d min (base: %d, multiplier: %.2f)",
+              adjustedCooloffMinutes, baseCooloffMinutes, cooloffMultiplier));
+    }
+    
+    // Check if cool-off period has expired
+    if(secondsSinceExit >= cooloffSeconds)
+    {
+        g_coolOffState.isActive = false;
+        return false;
+    }
+    
+    // Check for direction change override
+    if(InpAllowDirectionChangeOverride)
+    {
+        int currentDirection = isBuySignal ? 0 : 1;
+        if(currentDirection != g_coolOffState.lastDirection)
+        {
+        if(InpLogCooloffDecisions)
+        {
+            Print(StringFormat("[COOL-OFF] OVERRIDE - Direction changed from %s to %s",
+                  g_coolOffState.lastDirection == 0 ? "BUY" : "SELL",
+                  currentDirection == 0 ? "BUY" : "SELL"));
+        }
+        
+        // Track override statistics
+        if(InpEnableCooloffStatistics)
+        {
+            g_coolOffStats.overridesUsed++;
+        }
+        
+        return false; // Allow trade - direction changed
+        }
+    }
+    
+    // Still in cool-off period
+    if(InpLogCooloffDecisions)
+    {
+        int minutesRemaining = (cooloffSeconds - secondsSinceExit) / 60;
+        int secondsRemaining = (cooloffSeconds - secondsSinceExit) % 60;
+        
+        Print(StringFormat("[COOL-OFF] %s blocked - %dm %ds remaining (Exit: %s, Reason: %s)",
+              isBuySignal ? "BUY" : "SELL",
+              minutesRemaining,
+              secondsRemaining,
+              TimeToString(g_coolOffState.lastExitTime),
+              g_coolOffState.exitReason == 0 ? "TP" : "SL"));
+    }
+    
+    // Track blocked trade statistics
+    if(InpEnableCooloffStatistics)
+    {
+        g_coolOffStats.tradesBlocked++;
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Get volatility-based adjustment multiplier                       |
+//+------------------------------------------------------------------+
+double GetVolatilityAdjustment()
+{
+    int atrHandle = iATR(_Symbol, PERIOD_CURRENT, 14);
+    if(atrHandle == INVALID_HANDLE)
+        return 1.0;
+    
+    double atr[];
+    ArraySetAsSeries(atr, true);
+    
+    if(CopyBuffer(atrHandle, 0, 0, 20, atr) < 20)
+    {
+        IndicatorRelease(atrHandle);
+        return 1.0;
+    }
+    
+    double currentATR = atr[0];
+    double avgATR = 0;
+    for(int i = 0; i < 20; i++)
+        avgATR += atr[i];
+    avgATR /= 20;
+    
+    IndicatorRelease(atrHandle);
+    
+    if(avgATR == 0)
+        return 1.0;
+    
+    double atrRatio = currentATR / avgATR;
+    
+    // High volatility (>1.5x avg) - LONGER cool-off (more dangerous)
+    if(atrRatio > 1.5)
+        return InpATRHighVolMultiplier;
+    
+    // Low volatility (<0.7x avg) - SHORTER cool-off (less movement expected)
+    if(atrRatio < 0.7)
+        return InpATRLowVolMultiplier;
+    
+    // Normal volatility - standard cool-off
+    return 1.0;
+}
+
+//+------------------------------------------------------------------+
+//| Get regime-based adjustment multiplier                           |
+//+------------------------------------------------------------------+
+double GetRegimeAdjustment()
+{
+    if(g_regimeDetector == NULL)
+        return 1.0;
+    
+    // Get cached regime data from last analysis
+    MARKET_REGIME regime = g_lastAnalysisRegime;
+    double adx = 0;
+    
+    // Try to get ADX from regime detector
+    int atrHandle = iATR(_Symbol, PERIOD_H4, 14);
+    if(atrHandle != INVALID_HANDLE)
+    {
+        // Get ADX from H4 timeframe
+        int adxHandle = iADX(_Symbol, PERIOD_H4, 14);
+        if(adxHandle != INVALID_HANDLE)
+        {
+            double adxBuffer[];
+            ArraySetAsSeries(adxBuffer, true);
+            if(CopyBuffer(adxHandle, 0, 0, 1, adxBuffer) > 0)
+            {
+                adx = adxBuffer[0];
+            }
+            IndicatorRelease(adxHandle);
+        }
+        IndicatorRelease(atrHandle);
+    }
+    
+    // Strong trending market (ADX > 40) - SHORTER cool-off
+    // Rationale: Strong trends continue, re-entry opportunities are good
+    if((regime == REGIME_TREND_BULL || regime == REGIME_TREND_BEAR) && adx > 40)
+    {
+        return InpTrendingCooloffMultiplier; // 0.7 = 30 min becomes 21 min
+    }
+    
+    // Ranging/choppy market (ADX < 25) - LONGER cool-off
+    // Rationale: More likely to whipsaw, need more confirmation
+    if(regime == REGIME_RANGING || adx < 25)
+    {
+        return InpRangingCooloffMultiplier; // 1.3 = 30 min becomes 39 min
+    }
+    
+    // Moderate trending - standard cool-off
+    return 1.0;
+}
+
+//+------------------------------------------------------------------+
+//| Update cool-off statistics after trade closes                    |
+//+------------------------------------------------------------------+
+void UpdateCooloffStatistics(bool tradeWon)
+{
+    if(!InpEnableCooloffStatistics)
+        return;
+    
+    // Track allowed trades (those that executed after cool-off expired)
+    g_coolOffStats.tradesAllowed++;
+    
+    if(tradeWon)
+        g_coolOffStats.allowedWins++;
+    else
+        g_coolOffStats.allowedLosses++;
+}
+
+//+------------------------------------------------------------------+
+//| Report cool-off statistics                                       |
+//+------------------------------------------------------------------+
+void ReportCooloffStatistics()
+{
+    if(!InpEnableCooloffStatistics)
+        return;
+    
+    datetime currentTime = TimeCurrent();
+    
+    // Check if it's time for a report
+    if(g_coolOffStats.lastReportTime == 0)
+    {
+        g_coolOffStats.lastReportTime = currentTime;
+        return;
+    }
+    
+    int minutesSinceReport = (int)((currentTime - g_coolOffStats.lastReportTime) / 60);
+    if(minutesSinceReport < InpStatisticsReportMinutes)
+        return;
+    
+    // Generate report
+    Print("╔═══════════════════════════════════════════════════════════════╗");
+    Print("║           COOL-OFF PERIOD STATISTICS REPORT                  ║");
+    Print("╠═══════════════════════════════════════════════════════════════╣");
+    
+    int totalBlocked = g_coolOffStats.tradesBlocked;
+    int totalAllowed = g_coolOffStats.tradesAllowed;
+    int totalOverrides = g_coolOffStats.overridesUsed;
+    
+    Print(StringFormat("║ Trades Blocked by Cool-Off: %4d                             ║", totalBlocked));
+    Print(StringFormat("║ Trades Allowed After Cool-Off: %4d                          ║", totalAllowed));
+    Print(StringFormat("║ Direction Change Overrides: %4d                             ║", totalOverrides));
+    Print("╠═══════════════════════════════════════════════════════════════╣");
+    
+    if(totalAllowed > 0)
+    {
+        int wins = g_coolOffStats.allowedWins;
+        int losses = g_coolOffStats.allowedLosses;
+        double winRate = (double)wins / totalAllowed * 100;
+        
+        Print(StringFormat("║ Post-Cool-Off Wins: %4d (%.1f%%)                            ║", wins, winRate));
+        Print(StringFormat("║ Post-Cool-Off Losses: %4d (%.1f%%)                          ║", losses, 100 - winRate));
+        Print("╠═══════════════════════════════════════════════════════════════╣");
+    }
+    
+    // Calculate effectiveness metrics
+    if(totalBlocked > 0 && totalAllowed > 0)
+    {
+        double blockRate = (double)totalBlocked / (totalBlocked + totalAllowed) * 100;
+        Print(StringFormat("║ Block Rate: %.1f%% (trades prevented from executing)       ║", blockRate));
+    }
+    
+    Print("╚═══════════════════════════════════════════════════════════════╝");
+    
+    // Update last report time
+    g_coolOffStats.lastReportTime = currentTime;
+}
+
+//+------------------------------------------------------------------+
+//| Clear cool-off state                                             |
+//+------------------------------------------------------------------+
+void ClearCooloffState()
+{
+    string key = GetCooloffKey();
+    
+    GlobalVariableDel(key + "_TIME");
+    GlobalVariableDel(key + "_DIR");
+    GlobalVariableDel(key + "_REASON");
+    
+    g_coolOffState.isActive = false;
+    
+    if(InpLogCooloffDecisions)
+        Print("[COOL-OFF] State cleared for ", _Symbol);
+}
+
+//+------------------------------------------------------------------+
+//| Get last deal exit reason from history                           |
+//+------------------------------------------------------------------+
+int GetLastDealExitReason()
+{
+    // Request deal history
+    if(!HistorySelect(TimeCurrent() - 3600, TimeCurrent())) // Last hour
+        return -1;
+    
+    // Get the most recent deal for this symbol
+    for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = HistoryDealGetTicket(i);
+        if(ticket == 0) continue;
+        
+        if(HistoryDealGetString(ticket, DEAL_SYMBOL) != _Symbol)
+            continue;
+        
+        if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != InpMagicNumber)
+            continue;
+        
+        // Check entry type (only interested in exits)
+        ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY);
+        if(entry != DEAL_ENTRY_OUT)
+            continue;
+        
+        // Determine exit reason
+        ENUM_DEAL_REASON reason = (ENUM_DEAL_REASON)HistoryDealGetInteger(ticket, DEAL_REASON);
+        
+        if(reason == DEAL_REASON_TP)
+            return 0; // TP
+        else if(reason == DEAL_REASON_SL)
+            return 1; // SL
+        else
+            return 2; // OTHER
+    }
+    
+    return -1; // Not found
+}
+
+//+------------------------------------------------------------------+
+//| Get last deal direction                                          |
+//+------------------------------------------------------------------+
+int GetLastDealDirection()
+{
+    if(!HistorySelect(TimeCurrent() - 3600, TimeCurrent()))
+        return -1;
+    
+    for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = HistoryDealGetTicket(i);
+        if(ticket == 0) continue;
+        
+        if(HistoryDealGetString(ticket, DEAL_SYMBOL) != _Symbol)
+            continue;
+        
+        if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != InpMagicNumber)
+            continue;
+        
+        ENUM_DEAL_TYPE type = (ENUM_DEAL_TYPE)HistoryDealGetInteger(ticket, DEAL_TYPE);
+        
+        if(type == DEAL_TYPE_BUY)
+            return 0; // BUY
+        else if(type == DEAL_TYPE_SELL)
+            return 1; // SELL
+    }
+    
+    return -1;
+}
+
+//+------------------------------------------------------------------+
+//| Get last deal price                                              |
+//+------------------------------------------------------------------+
+double GetLastDealPrice()
+{
+    if(!HistorySelect(TimeCurrent() - 3600, TimeCurrent()))
+        return 0;
+    
+    for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = HistoryDealGetTicket(i);
+        if(ticket == 0) continue;
+        
+        if(HistoryDealGetString(ticket, DEAL_SYMBOL) != _Symbol)
+            continue;
+        
+        if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != InpMagicNumber)
+            continue;
+        
+        return HistoryDealGetDouble(ticket, DEAL_PRICE);
+    }
+    
+    return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Detect position closure and set cool-off if needed               |
+//+------------------------------------------------------------------+
+void CheckForPositionClosure()
+{
+    // Count current positions for this symbol and magic number
+    int currentPositions = 0;
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(PositionGetSymbol(i) == _Symbol && 
+           PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+        {
+            currentPositions++;
+        }
+    }
+    
+    // Position was closed
+    if(g_lastPositionCount > 0 && currentPositions == 0)
+    {
+        // Try to determine exit reason from last deal
+        int exitReason = GetLastDealExitReason();
+        int lastDirection = GetLastDealDirection();
+        double lastExitPrice = GetLastDealPrice();
+        
+        if(exitReason >= 0)
+        {
+            SaveCooloffState(TimeCurrent(), lastExitPrice, lastDirection, exitReason);
+            
+            if(InpLogCooloffDecisions)
+            {
+                string reasonStr = exitReason == 0 ? "TP" : (exitReason == 1 ? "SL" : "OTHER");
+                int cooloffMinutes = exitReason == 0 ? InpTPCooloffMinutes : InpSLCooloffMinutes;
+                
+                Print(StringFormat("[COOL-OFF] Position closed via %s - Cool-off active for %d minutes",
+                      reasonStr, cooloffMinutes));
+            }
+        }
+    }
+    
+    g_lastPositionCount = currentPositions;
 }
