@@ -20,17 +20,42 @@ Grande Trading System is an MQL5 Expert Advisor that combines technical analysis
 
 ### 2. AI-Powered Economic Calendar Analysis
 
-**FinBERT Integration**
-- Processes economic events from MT5 calendar
-- Generates sentiment-based trading signals (BUY/SELL/NEUTRAL)
-- Provides confidence scores for each prediction
+**FinBERT Integration Status** (Last Updated: 2025-10-09)
+- **Active Functions**: 1 of 3 data feeds operational
+- **Status**: PARTIALLY FUNCTIONAL
 - File-based analysis mode (no Docker required)
+- Python scripts: finbert_calendar_analyzer.py (ACTIVE), enhanced_finbert_analyzer.py (INACTIVE)
+
+**Function 1: Economic Calendar Feed** (ACTIVE)
+- Processes economic events from MT5 calendar every 15 minutes
+- Generates sentiment-based trading signals (STRONG_BUY/BUY/NEUTRAL/SELL/STRONG_SELL)
+- Provides confidence scores (0.0-1.0) for each prediction
+- Impact weighting: Critical=1.0, High=0.8, Medium=0.4, Low=0.2
+- Calculates normalized surprise: (actual - forecast) / baseline
+- Output: integrated_calendar_analysis.json
+
+**Function 2: Comprehensive Market Context Feed** (INACTIVE)
+- Code exists but NOT INTEGRATED into main EA loop
+- Would provide 6-factor multi-modal analysis:
+  - Technical Trend (25%)
+  - Market Regime (20%)
+  - Key Levels (20%)
+  - Economic Sentiment (15%)
+  - Risk Assessment (10%)
+  - FinBERT Sentiment (10%)
+- Missing: SaveMarketContextToFile() not called, market_context_*.json not generated
+- Enhanced analyzer ready but receives no data
+
+**Function 3: Inline Fallback Analysis** (ACTIVE)
+- Pure MQL5 keyword-based sentiment (no FinBERT model)
+- Activates when Python scripts fail
+- Basic signal/score/confidence generation
 
 **Calendar Processing**
-- 7-day event window for recent and upcoming events
-- Smart event selection prioritizing market-moving news
-- 3-day cutoff for considering events "recent"
-- Automatic refresh of calendar data
+- 24-hour lookahead window for upcoming events
+- Automatic refresh every 15 minutes (first run: 10 seconds after EA start)
+- Exports to Common\Files\economic_events.json
+- Smart currency filtering based on traded symbols
 
 ### 3. Triangle Pattern Detection
 
@@ -94,16 +119,35 @@ Grande Trading System is an MQL5 Expert Advisor that combines technical analysis
 ## Technical Architecture
 
 ### Analysis Pipeline
+
+**Current Active Pipeline:**
 ```
-MT5 Calendar → economic_events.json
-                    ↓
-         FinBERT Analyzer (Python)
-                    ↓
-         integrated_calendar_analysis.json
-                    ↓
-           MT5 Trading Engine
-                    ↓
-         Trading Decisions + CSV/DB Logs
+MT5 Calendar (every 15 min)
+         ↓
+  economic_events.json
+         ↓
+  finbert_calendar_analyzer.py (Python)
+         ↓
+  integrated_calendar_analysis.json
+         ↓
+  MT5 Trading Engine
+         ↓
+  Trading Decisions + CSV/DB Logs
+```
+
+**Inactive Pipeline (Code Exists, Not Integrated):**
+```
+MT5 Technical Data
+         ↓
+  CreateComprehensiveMarketContext()
+         ↓
+  market_context_[timestamp].json (NOT GENERATED)
+         ↓
+  enhanced_finbert_analyzer.py (Python) (NOT RECEIVING DATA)
+         ↓
+  enhanced_finbert_analysis.json (NOT CREATED)
+         ↓
+  Enhanced Multi-Modal Trading Decisions (UNAVAILABLE)
 ```
 
 ### Key Components
@@ -140,9 +184,11 @@ SQLite database operations
 ### Analysis Input/Output
 ```
 %APPDATA%\MetaQuotes\Terminal\Common\Files\
-├── economic_events.json                    # Calendar data from MT5
-├── integrated_calendar_analysis.json       # FinBERT analysis results
-└── integrated_news_analysis.json           # News sentiment data
+├── economic_events.json                    # Calendar data from MT5 (ACTIVE)
+├── integrated_calendar_analysis.json       # FinBERT analysis results (ACTIVE)
+├── market_context_[timestamp].json         # Market context data (NOT GENERATED)
+├── enhanced_finbert_analysis.json          # Enhanced analysis results (NOT CREATED)
+└── integrated_news_analysis.json           # News sentiment data (DISABLED)
 ```
 
 ### Trading Data
@@ -170,9 +216,25 @@ Grande/
 ### Python Analysis
 ```
 mcp/analyze_sentiment_server/
-├── finbert_calendar_analyzer.py           # FinBERT processor
-└── enhanced_finbert_analyzer.py           # Enhanced analysis module
+├── finbert_calendar_analyzer.py           # FinBERT calendar processor (ACTIVE)
+├── enhanced_finbert_analyzer.py           # Multi-modal analyzer (READY, NO DATA)
+└── GrandeNewsSentimentIntegration.mqh     # MQL5 integration layer
 ```
+
+**FinBERT Data Feeds:**
+1. **Economic Calendar Feed** (OPERATIONAL)
+   - Input: economic_events.json
+   - Output: integrated_calendar_analysis.json
+   - Status: Fully functional, updates every 15 minutes
+
+2. **Market Context Feed** (NOT INTEGRATED)
+   - Input: market_context_[timestamp].json (not created)
+   - Output: enhanced_finbert_analysis.json (not created)
+   - Status: Code exists in GrandeTradingSystem.mq5 (lines 6382-6575) but SaveMarketContextToFile() not called
+
+3. **Inline Fallback** (OPERATIONAL)
+   - Pure MQL5 keyword analysis when Python fails
+   - No FinBERT model, basic sentiment only
 
 ## Configuration
 
@@ -287,11 +349,24 @@ Tables for:
 ### Python Integration
 - File-based communication (JSON)
 - No runtime dependencies on Python processes
-- Async analysis updates
+- Async analysis updates via ShellExecuteW
 - Cached results used until refresh
+- Python execution: cmd /C python script.py
+- Result polling: 20-30 attempts with 500ms sleep intervals
+
+**Integration Status:**
+- Calendar Analysis: ACTIVE (finbert_calendar_analyzer.py receives data)
+- Enhanced Analysis: INACTIVE (enhanced_finbert_analyzer.py ready but no data feed)
+
+**Missing Integration:**
+- CollectEnhancedMarketDataForFinBERT() exists but may not be triggered
+- SaveMarketContextToFile() defined but never called in main loop
+- market_context_*.json files not generated
+- 6-factor multi-modal analysis unavailable
 
 ### External Data
 - Economic calendar from MT5 servers
 - Price data from broker feed
 - No external API dependencies
+- FinBERT model: ProsusAI/finbert (local execution)
 

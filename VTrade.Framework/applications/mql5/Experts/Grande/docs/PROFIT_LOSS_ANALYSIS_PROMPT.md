@@ -3,26 +3,63 @@
 ## **System Overview**
 You are analyzing the Grande Trading System's profit/loss performance against decision conditions and market data to identify optimization opportunities. This prompt focuses on **incremental analysis** - only examining trades and data **since the last optimization** to track improvement effectiveness and avoid re-analyzing old data.
 
-## **Last Analysis Tracking**
+## **MANDATORY FIRST STEP: Check Last Analysis Timestamp**
 **CRITICAL**: Always check and update the last analysis timestamp to ensure incremental analysis.
 
-### **Last Analysis Timestamp File**
+**BEFORE ANY ANALYSIS:**
 ```powershell
-# Check when analysis was last run
+# 1. Read last P/L analysis timestamp
 $timestampFile = ".\docs\LAST_PL_ANALYSIS_TIMESTAMP.txt"
-$lastAnalysisTime = if (Test-Path $timestampFile) { Get-Content $timestampFile } else { "Never" }
-Write-Host "Last P/L Analysis: $lastAnalysisTime" -ForegroundColor Cyan
+$lastAnalysisTime = if (Test-Path $timestampFile) { 
+    Get-Content $timestampFile 
+} else { 
+    "Never" 
+}
 
-# Update timestamp after analysis
-$currentTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-$currentTime | Out-File $timestampFile -Encoding UTF8
+# 2. Calculate time since last analysis
+if ($lastAnalysisTime -ne "Never") {
+    $lastCheck = [DateTime]::ParseExact($lastAnalysisTime, "yyyy-MM-dd HH:mm:ss", $null)
+    $timeSinceCheck = (Get-Date) - $lastCheck
+    $daysSince = [math]::Round($timeSinceCheck.TotalDays, 1)
+    $hoursSince = [math]::Round($timeSinceCheck.TotalHours, 1)
+} else {
+    $daysSince = 999
+    $hoursSince = 999
+}
+
+# 3. Display analysis window
+Write-Host "=== P/L ANALYSIS WINDOW ===" -ForegroundColor Cyan
+Write-Host "Last P/L Analysis: $lastAnalysisTime" -ForegroundColor Yellow
+if ($daysSince -lt 999) {
+    if ($daysSince -lt 1) {
+        Write-Host "Time Since: $hoursSince hours ago" -ForegroundColor Yellow
+    } else {
+        Write-Host "Time Since: $daysSince days ago" -ForegroundColor Yellow
+    }
+}
+Write-Host "Current Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Yellow
+
+# 4. Determine analysis scope
+if ($daysSince -lt 7) {
+    $analysisMode = "INCREMENTAL"
+    $filterTime = $lastCheck
+    Write-Host "Analysis Mode: INCREMENTAL (since $lastAnalysisTime)" -ForegroundColor Green
+} else {
+    $analysisMode = "FULL"
+    $filterTime = (Get-Date).AddDays(-30)  # Full analysis: last 30 days
+    Write-Host "Analysis Mode: FULL (gap too large or first run - last 30 days)" -ForegroundColor Yellow
+}
+Write-Host "Analyzing trades since: $filterTime" -ForegroundColor Cyan
+Write-Host "============================" -ForegroundColor Cyan
 ```
 
-### **Data Filtering for Incremental Analysis**
+**AFTER SUCCESSFUL ANALYSIS:**
 ```powershell
-# Filter data since last analysis
-$filterTime = if ($lastAnalysisTime -ne "Never") { [datetime]$lastAnalysisTime } else { (Get-Date).AddDays(-7) }
-Write-Host "Analyzing data since: $filterTime" -ForegroundColor Yellow
+# Update timestamp file with current analysis time
+$currentTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+Set-Content -Path ".\docs\LAST_PL_ANALYSIS_TIMESTAMP.txt" -Value $currentTime
+Write-Host "`n✓ P/L Analysis timestamp updated: $currentTime" -ForegroundColor Green
+Write-Host "✓ Next analysis will be incremental from this point" -ForegroundColor Green
 ```
 
 ## **Analysis Objectives**

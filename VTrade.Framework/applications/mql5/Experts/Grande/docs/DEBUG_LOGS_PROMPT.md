@@ -3,12 +3,64 @@
 ## **System Overview**
 You are analyzing the Grande Trading System, an MQL5 Expert Advisor with FinBERT integration. This prompt is designed for **incremental analysis** - only examining logs and data **since the last check** to identify new issues, track improvements, and monitor system health efficiently.
 
+## **MANDATORY FIRST STEP: Check Last Analysis Timestamp**
+
+**BEFORE ANY ANALYSIS:**
+```powershell
+# 1. Read last analysis timestamp
+$timestampFile = ".\docs\LAST_DEBUG_ANALYSIS_TIMESTAMP.txt"
+$lastAnalysisTime = if (Test-Path $timestampFile) { 
+    Get-Content $timestampFile 
+} else { 
+    "Never" 
+}
+
+# 2. Calculate time since last analysis
+if ($lastAnalysisTime -ne "Never") {
+    $lastCheck = [DateTime]::ParseExact($lastAnalysisTime, "yyyy-MM-dd HH:mm:ss", $null)
+    $timeSinceCheck = (Get-Date) - $lastCheck
+    $hoursSince = [math]::Round($timeSinceCheck.TotalHours, 1)
+} else {
+    $hoursSince = 999
+}
+
+# 3. Display analysis window
+Write-Host "=== INCREMENTAL ANALYSIS WINDOW ===" -ForegroundColor Cyan
+Write-Host "Last Analysis: $lastAnalysisTime" -ForegroundColor Yellow
+if ($hoursSince -lt 999) {
+    Write-Host "Time Since: $hoursSince hours ago" -ForegroundColor Yellow
+}
+Write-Host "Current Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Yellow
+
+# 4. Determine analysis scope
+if ($hoursSince -lt 4) {
+    $analysisMode = "INCREMENTAL"
+    $logLines = [math]::Max(500, [int]($hoursSince * 300))  # ~300 lines per hour
+    Write-Host "Analysis Mode: INCREMENTAL (last $hoursSince hours)" -ForegroundColor Green
+} else {
+    $analysisMode = "FULL"
+    $logLines = 2000
+    Write-Host "Analysis Mode: FULL (gap too large or first run)" -ForegroundColor Yellow
+}
+Write-Host "Log Lines to Analyze: $logLines" -ForegroundColor Cyan
+Write-Host "=====================================" -ForegroundColor Cyan
+```
+
+**AFTER SUCCESSFUL ANALYSIS:**
+```powershell
+# Update timestamp file with current analysis time
+$currentTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+Set-Content -Path ".\docs\LAST_DEBUG_ANALYSIS_TIMESTAMP.txt" -Value $currentTime
+Write-Host "`n✓ Timestamp updated: $currentTime" -ForegroundColor Green
+```
+
 ## **Analysis Objectives**
 1. **Incremental Error Detection**: Find new errors since last check
 2. **Performance Tracking**: Monitor signal success rates and trading activity
 3. **Data Quality Monitoring**: Check for data integrity issues
 4. **System Health Assessment**: Verify all components are operational
 5. **Improvement Validation**: Confirm fixes are working as expected
+6. **Timestamp Management**: Always read before and update after analysis
 
 ## **Critical Data Sources & File Paths**
 
