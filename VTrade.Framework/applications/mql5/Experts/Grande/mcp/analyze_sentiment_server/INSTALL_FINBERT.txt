@@ -1,0 +1,121 @@
+================================================================================
+             INSTALLING FINBERT FOR GRANDE TRADING SYSTEM
+================================================================================
+
+QUICK INSTALL:
+--------------
+1. Right-click "install_finbert.ps1" 
+2. Select "Run with PowerShell"
+3. Wait 5-10 minutes for installation
+4. Restart MT5 terminal and EA
+
+OR
+
+1. Double-click "install_finbert.bat"
+2. Wait 5-10 minutes for installation
+3. Restart MT5 terminal and EA
+
+WHAT GETS INSTALLED:
+--------------------
+- PyTorch (Deep Learning Framework)
+- Transformers (HuggingFace Library for FinBERT)
+- NumPy (Numerical Computing)
+- FinBERT Model (~440MB download)
+
+TOTAL SIZE: ~1GB
+
+CHECKING IF IT WORKS:
+---------------------
+After installation, look in your MT5 Experts log for:
+
+SUCCESS - Real FinBERT Active:
+  [OK] FinBERT dependencies loaded successfully
+  [OK] Enhanced FinBERT pipeline initialized successfully
+  [OK] FinBERT AI: Real financial sentiment analysis active
+
+FAILURE - Using Fallback:
+  [ERROR][ERROR][ERROR] FINBERT NOT AVAILABLE [ERROR][ERROR][ERROR]
+  [WARNING] FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)
+  [WARNING] Calendar analysis is using KEYWORD MATCHING
+
+MANUAL INSTALLATION:
+--------------------
+Open Command Prompt and run:
+
+  python -m pip install --upgrade pip
+  python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+  python -m pip install transformers
+  python -m pip install numpy
+
+TROUBLESHOOTING:
+----------------
+
+Problem: Python not found
+Solution: Install Python from https://www.python.org/downloads/
+          Check "Add Python to PATH" during installation
+          Restart computer after installing
+
+Problem: Installation takes too long
+Solution: This is normal. First install downloads ~500MB of files.
+          FinBERT model is downloaded on first use (~440MB more).
+
+Problem: Firewall blocking
+Solution: Temporarily disable firewall during installation
+          Re-enable after installation completes
+
+Problem: Still shows fallback mode after install
+Solution: 1. Restart MT5 terminal completely
+          2. Restart the EA
+          3. Check Python packages: python -m pip list
+          4. Look for torch, transformers, numpy in the list
+
+TEST MANUALLY:
+--------------
+To test if FinBERT works, run this in Command Prompt:
+
+  cd C:\git\AutoTrade\VTrade.Framework\applications\mql5\Experts\Grande\mcp\analyze_sentiment_server
+  python enhanced_finbert_analyzer.py
+
+Look for:
+  [OK] Enhanced FinBERT dependencies loaded successfully
+  [OK] Loading Enhanced FinBERT model: yiyanghkust/finbert-tone
+  [OK] Enhanced FinBERT pipeline initialized successfully
+
+If you see:
+  [ERROR][ERROR][ERROR] FINBERT NOT AVAILABLE
+
+Then the Python packages are not installed correctly.
+
+SYSTEM REQUIREMENTS:
+--------------------
+- Windows 10 or later
+- Python 3.8 or later
+- 1GB free disk space
+- Internet connection (for initial download)
+- 4GB RAM minimum (8GB recommended)
+
+WHAT'S THE DIFFERENCE:
+----------------------
+FALLBACK MODE (keyword matching):
+  - Counts words like "bullish" and "bearish"
+  - No AI or deep learning
+  - Fast but unreliable
+  - Cannot understand context
+
+REAL FINBERT AI:
+  - Deep learning transformer model
+  - Trained on financial texts
+  - Understands context and nuance
+  - Much more accurate
+  - Research-backed confidence scoring
+
+NEED HELP?
+----------
+1. Check MT5 Experts log for emoji indicators
+2. Run Python scripts manually to see errors
+3. Verify Python is installed: python --version
+4. Check pip works: python -m pip --version
+5. List installed packages: python -m pip list
+
+================================================================================
+

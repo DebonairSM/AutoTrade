@@ -482,6 +482,48 @@ bool CNewsSentimentIntegration::ParseSentimentData(string json_data)
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::ParseCalendarSentimentData(string json_data)
 {
+    // Check FinBERT status and warn if using fallback
+    string patt_status = "\"finbert_status\": \"";
+    int p_status = StringFind(json_data, patt_status);
+    if(p_status >= 0)
+    {
+        p_status += StringLen(patt_status);
+        int q_status = StringFind(json_data, "\"", p_status);
+        if(q_status > p_status)
+        {
+            string status = StringSubstr(json_data, p_status, q_status - p_status);
+            if(status == "FALLBACK_MODE")
+            {
+                Print("========================================================================");
+                Print("🚨🚨🚨 WARNING: FINBERT NOT AVAILABLE - USING FALLBACK MODE 🚨🚨🚨");
+                Print("⚠️  Calendar analysis is using KEYWORD MATCHING instead of REAL AI");
+                Print("📦 To enable FinBERT: Install Python packages (see install script)");
+                Print("========================================================================");
+            }
+            else if(status == "REAL_AI")
+            {
+                Print("✅ FinBERT AI: Real financial sentiment analysis active");
+            }
+        }
+    }
+    
+    // Also check reasoning for fallback indicators
+    string patt_reas = "\"reasoning\": \"";
+    int p_reas = StringFind(json_data, patt_reas);
+    if(p_reas >= 0)
+    {
+        p_reas += StringLen(patt_reas);
+        int q_reas = StringFind(json_data, "\"", p_reas);
+        if(q_reas > p_reas)
+        {
+            string reasoning = StringSubstr(json_data, p_reas, q_reas - p_reas);
+            if(StringFind(reasoning, "FALLBACK") >= 0 || StringFind(reasoning, "⚠️") >= 0)
+            {
+                Print("⚠️  WARNING: Analysis reasoning indicates FALLBACK MODE in use");
+            }
+        }
+    }
+    
     // signal
     string patt_sig = "\"signal\": \"";
     int p = StringFind(json_data, patt_sig);
@@ -528,7 +570,7 @@ bool CNewsSentimentIntegration::ParseCalendarSentimentData(string json_data)
         m_calendar_sentiment.event_count = (int)StringToInteger(s);
     }
     // reasoning
-    string patt_reas = "\"reasoning\": \"";
+    patt_reas = "\"reasoning\": \"";
     p = StringFind(json_data, patt_reas);
     if(p >= 0)
     {
@@ -831,6 +873,31 @@ bool CNewsSentimentIntegration::LoadLatestEnhancedAnalysis()
 //+------------------------------------------------------------------+
 bool CNewsSentimentIntegration::ParseEnhancedAnalysisData(string json_data)
 {
+    // Check FinBERT status and warn if using fallback
+    string patt_status = "\"finbert_status\": \"";
+    int p_status = StringFind(json_data, patt_status);
+    if(p_status >= 0)
+    {
+        p_status += StringLen(patt_status);
+        int q_status = StringFind(json_data, "\"", p_status);
+        if(q_status > p_status)
+        {
+            string status = StringSubstr(json_data, p_status, q_status - p_status);
+            if(status == "FALLBACK_MODE")
+            {
+                Print("========================================================================");
+                Print("🚨🚨🚨 WARNING: FINBERT NOT AVAILABLE - USING FALLBACK MODE 🚨🚨🚨");
+                Print("⚠️  Calendar analysis is using KEYWORD MATCHING instead of REAL AI");
+                Print("📦 To enable FinBERT: Install Python packages (see install script)");
+                Print("========================================================================");
+            }
+            else if(status == "REAL_AI")
+            {
+                Print("✅ FinBERT AI: Real financial sentiment analysis active");
+            }
+        }
+    }
+    
     // Parse enhanced FinBERT analysis results with comprehensive fields
     // signal
     string patt_sig = "\"signal\": \"";

@@ -56,15 +56,19 @@ def get_finbert_pipeline():
             AutoModelForSequenceClassification,
             TextClassificationPipeline,
         )
-        print("Enhanced FinBERT dependencies loaded successfully")
+        print("✅ Enhanced FinBERT dependencies loaded successfully")
     except Exception as e:
-        print(f"Warning: Transformers not available: {e}")
-        print("Using fallback sentiment analysis")
+        print("=" * 80)
+        print("🚨🚨🚨 FINBERT NOT AVAILABLE 🚨🚨🚨")
+        print(f"❌ ERROR: Transformers library not found: {e}")
+        print("⚠️  FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
+        print("📦 To install FinBERT, run: python -m pip install torch transformers")
+        print("=" * 80)
         return None
 
     try:
         model_name = os.environ.get("FINBERT_MODEL", "yiyanghkust/finbert-tone")
-        print(f"Loading Enhanced FinBERT model: {model_name}")
+        print(f"🤖 Loading Enhanced FinBERT model: {model_name}")
         
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
@@ -76,11 +80,15 @@ def get_finbert_pipeline():
             return_all_scores=True,
             device=device,
         )
-        print(f"Enhanced FinBERT pipeline initialized successfully on device: {device}")
+        print(f"✅ Enhanced FinBERT pipeline initialized successfully on device: {device}")
         return _PIPELINE
     except Exception as e:
-        print(f"Error loading Enhanced FinBERT model: {e}")
-        print("Using fallback sentiment analysis")
+        print("=" * 80)
+        print("🚨🚨🚨 FINBERT FAILED TO LOAD 🚨🚨🚨")
+        print(f"❌ ERROR: {e}")
+        print("⚠️  FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
+        print("📦 To install FinBERT, run: python -m pip install torch transformers")
+        print("=" * 80)
         return None
 
 
@@ -400,6 +408,7 @@ class EnhancedFinBERTAnalyzer:
     def _process_finbert_analysis(self, prompt: str) -> Dict[str, Any]:
         """Process prompt through FinBERT pipeline"""
         if self.finbert_pipeline is None:
+            print("⚠️  Using FALLBACK analysis (FinBERT not loaded)")
             return self._fallback_sentiment_analysis(prompt)
         
         try:
@@ -425,10 +434,11 @@ class EnhancedFinBERTAnalyzer:
                 'sentiment_score': float(score),
                 'confidence': float(confidence),
                 'probabilities': probs,
-                'reasoning': f"FinBERT analysis: {score:.3f} sentiment with {confidence:.3f} confidence"
+                'reasoning': f"✅ Real FinBERT AI analysis: {score:.3f} sentiment with {confidence:.3f} confidence"
             }
         except Exception as e:
-            print(f"FinBERT analysis error: {e}")
+            print(f"❌ FinBERT analysis error: {e}")
+            print("⚠️  Falling back to keyword analysis")
             return self._fallback_sentiment_analysis(prompt)
     
     def _calculate_enhanced_confidence(self, p_pos: float, p_neg: float, p_neu: float, text: str) -> float:
@@ -466,7 +476,7 @@ class EnhancedFinBERTAnalyzer:
                 'sentiment_score': 0.0,
                 'confidence': 0.3,
                 'probabilities': {'positive': 0.33, 'negative': 0.33, 'neutral': 0.34},
-                'reasoning': 'Fallback analysis: neutral sentiment with low confidence'
+                'reasoning': '⚠️  FALLBACK KEYWORD ANALYSIS (NOT REAL AI) - neutral sentiment with low confidence'
             }
         
         score = (pos_count - neg_count) / total
@@ -476,7 +486,7 @@ class EnhancedFinBERTAnalyzer:
             'sentiment_score': float(score),
             'confidence': float(confidence),
             'probabilities': {'positive': 0.5 + score/2, 'negative': 0.5 - score/2, 'neutral': 0.2},
-            'reasoning': f'Fallback analysis: {score:.3f} sentiment with {confidence:.3f} confidence'
+            'reasoning': f'⚠️  FALLBACK KEYWORD ANALYSIS (NOT REAL AI) - {score:.3f} sentiment with {confidence:.3f} confidence'
         }
     
     def _assess_risk(self, context: MarketContext, finbert_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -787,6 +797,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Run enhanced analysis
     result = analyze_enhanced_market_data(market_context_data)
     result["analysis_timestamp"] = datetime.now().isoformat()
+    
+    # Check if using real FinBERT or fallback
+    if "FALLBACK" in result['reasoning']:
+        result["finbert_status"] = "FALLBACK_MODE"
+        print("🚨 WARNING: Using FALLBACK analysis (FinBERT not available)")
+    else:
+        result["finbert_status"] = "REAL_AI"
+        print("✅ Using REAL FinBERT AI analysis")
 
     # Write result
     output_path = args.output_path or default_output_path()

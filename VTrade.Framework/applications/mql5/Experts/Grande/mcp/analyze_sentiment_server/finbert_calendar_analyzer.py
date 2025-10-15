@@ -102,15 +102,19 @@ def get_finbert_pipeline():
             AutoModelForSequenceClassification,  # type: ignore
             TextClassificationPipeline,  # type: ignore
         )
-        print("FinBERT dependencies loaded successfully")
+        print("✅ FinBERT dependencies loaded successfully")
     except Exception as e:
-        print(f"Warning: Transformers not available: {e}")
-        print("Using fallback sentiment analysis")
+        print("=" * 80)
+        print("🚨🚨🚨 FINBERT NOT AVAILABLE 🚨🚨🚨")
+        print(f"❌ ERROR: Transformers library not found: {e}")
+        print("⚠️  FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
+        print("📦 To install FinBERT, run: python -m pip install torch transformers")
+        print("=" * 80)
         return None
 
     try:
         model_name = os.environ.get("FINBERT_MODEL", "yiyanghkust/finbert-tone")
-        print(f"Loading FinBERT model: {model_name}")
+        print(f"🤖 Loading FinBERT model: {model_name}")
         
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
@@ -122,11 +126,15 @@ def get_finbert_pipeline():
             return_all_scores=True,
             device=device,
         )
-        print(f"FinBERT pipeline initialized successfully on device: {device}")
+        print(f"✅ FinBERT pipeline initialized successfully on device: {device}")
         return _PIPELINE
     except Exception as e:
-        print(f"Error loading FinBERT model: {e}")
-        print("Using fallback sentiment analysis")
+        print("=" * 80)
+        print("🚨🚨🚨 FINBERT FAILED TO LOAD 🚨🚨🚨")
+        print(f"❌ ERROR: {e}")
+        print("⚠️  FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
+        print("📦 To install FinBERT, run: python -m pip install torch transformers")
+        print("=" * 80)
         return None
 
 
@@ -139,7 +147,7 @@ def classify_finbert(text: str) -> Tuple[float, float]:
     
     if pipe is None:
         # Fallback sentiment analysis using keyword matching
-        print("Using fallback sentiment analysis")
+        print("⚠️  Using FALLBACK sentiment analysis (FinBERT not available)")
         return fallback_sentiment_analysis(text)
     
     try:
@@ -217,6 +225,7 @@ except ImportError:
 
 def fallback_sentiment_analysis(text: str) -> Tuple[float, float]:
     """Simple fallback sentiment analysis using keyword matching."""
+    print("⚠️  USING KEYWORD FALLBACK (NOT REAL AI)")
     positive_words = ["better", "higher", "increase", "growth", "strong", "bullish", "up", "rise", "gain", "positive", "hawkish", "above", "beat", "exceed"]
     negative_words = ["worse", "lower", "decrease", "decline", "weak", "bearish", "down", "fall", "drop", "negative", "dovish", "below", "miss", "disappoint"]
     
@@ -552,8 +561,11 @@ def analyze_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         processing_time_ms=processing_time
     )
 
+    # Check if using real FinBERT or fallback
+    finbert_status = "✅ Real FinBERT AI" if _PIPELINE is not None else "⚠️  FALLBACK KEYWORD ANALYSIS"
+    
     reasoning = (
-        f"Research-enhanced FinBERT analysis of {len(events)} events. "
+        f"{finbert_status} | Analysis of {len(events)} events. "
         f"Weighted score={avg:.3f}, confidence={confidence:.2f}. "
         f"High-confidence predictions: {high_confidence_count}/{len(events)}. "
         f"Processing time: {processing_time:.1f}ms."
@@ -567,6 +579,7 @@ def analyze_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "event_count": len(events),
         "per_event": [e.to_dict() for e in per],
         "analyzer": "FinBERT",
+        "finbert_status": "REAL_AI" if _PIPELINE is not None else "FALLBACK_MODE",
         "metrics": metrics.to_dict(),
         "research_validation": {
             "methodology": "Enhanced FinBERT with uncertainty quantification",
