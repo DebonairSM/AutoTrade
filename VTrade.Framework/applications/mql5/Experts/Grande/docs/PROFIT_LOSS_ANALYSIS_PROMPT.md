@@ -1,442 +1,726 @@
-# 📊 **GRANDE TRADING SYSTEM PROFIT/LOSS ANALYSIS PROMPT**
+# GRANDE TRADING SYSTEM - DAILY PERFORMANCE ANALYSIS & OPTIMIZATION
 
-## **System Overview**
-You are analyzing the Grande Trading System's profit/loss performance against decision conditions and market data to identify optimization opportunities. This prompt focuses on **incremental analysis** - only examining trades and data **since the last optimization** to track improvement effectiveness and avoid re-analyzing old data.
+## Purpose
+This document provides **daily-runnable instructions** for analyzing Grande Trading System performance using structured database queries. The analysis identifies data-driven optimization opportunities to improve returns, reduce stop loss hits, and maximize take profit success rates.
 
-## **MANDATORY FIRST STEP: Check Last Analysis Timestamp**
-**CRITICAL**: Always check and update the last analysis timestamp to ensure incremental analysis.
+## Prerequisites
 
-**BEFORE ANY ANALYSIS:**
+1. **Database Setup**: Ensure GrandeTradingData.db exists and is populated
+2. **PowerShell**: Windows PowerShell 5.1 or later
+3. **SQLite**: Native support via System.Data.SQLite (auto-loaded in script)
+4. **Historical Data**: At least 10 completed trades for meaningful analysis
+
+## Daily Workflow
+
+### STEP 1: Run Daily Analysis Script
+
+Execute this PowerShell command from the workspace root:
+
 ```powershell
-# 1. Read last P/L analysis timestamp
-$timestampFile = ".\docs\LAST_PL_ANALYSIS_TIMESTAMP.txt"
-$lastAnalysisTime = if (Test-Path $timestampFile) { 
-    Get-Content $timestampFile 
-} else { 
-    "Never" 
-}
+.\scripts\RunDailyAnalysis.ps1
+```
 
-# 2. Calculate time since last analysis
-if ($lastAnalysisTime -ne "Never") {
-    $lastCheck = [DateTime]::ParseExact($lastAnalysisTime, "yyyy-MM-dd HH:mm:ss", $null)
-    $timeSinceCheck = (Get-Date) - $lastCheck
-    $daysSince = [math]::Round($timeSinceCheck.TotalDays, 1)
-    $hoursSince = [math]::Round($timeSinceCheck.TotalHours, 1)
-} else {
-    $daysSince = 999
-    $hoursSince = 999
-}
+This script will:
+1. Check database connectivity
+2. Calculate performance metrics since last analysis
+3. Identify optimization opportunities
+4. Generate EA parameter recommendations
+5. Update analysis timestamp
 
-# 3. Display analysis window
-Write-Host "=== P/L ANALYSIS WINDOW ===" -ForegroundColor Cyan
-Write-Host "Last P/L Analysis: $lastAnalysisTime" -ForegroundColor Yellow
-if ($daysSince -lt 999) {
-    if ($daysSince -lt 1) {
-        Write-Host "Time Since: $hoursSince hours ago" -ForegroundColor Yellow
-    } else {
-        Write-Host "Time Since: $daysSince days ago" -ForegroundColor Yellow
+### STEP 2: Review Analysis Report
+
+The script generates: `docs\DAILY_ANALYSIS_REPORT_YYYYMMDD.md`
+
+Report sections:
+- **Executive Summary**: Win rates, profit factor, total P/L
+- **Signal Type Performance**: TREND vs BREAKOUT vs RANGE vs TRIANGLE
+- **Regime Analysis**: Performance by market regime
+- **Rejection Analysis**: Why trades are being blocked
+- **Parameter Optimization Recommendations**: Specific changes to EA settings
+
+### STEP 3: Apply Recommendations
+
+Based on statistical confidence (minimum 20 trades or 7 days):
+1. **Review** each recommendation's supporting data
+2. **Test** in MT5 Strategy Tester if major changes
+3. **Apply** to EA input parameters
+4. **Recompile** GrandeTradingSystem.mq5
+5. **Monitor** results in next analysis cycle
+
+---
+
+## Manual Analysis Queries
+
+If you prefer hands-on analysis, use these SQL queries directly.
+
+### Setup Database Connection
+
+```powershell
+# Load SQLite
+Add-Type -Path "$env:ProgramFiles\System.Data.SQLite\netstandard2.0\System.Data.SQLite.dll"
+
+# Connect to database
+$dbPath = "$env:APPDATA\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Files\GrandeTradingData.db"
+$connection = New-Object System.Data.SQLite.SQLiteConnection
+$connection.ConnectionString = "Data Source=$dbPath;Version=3;"
+$connection.Open()
+
+# Helper function to run queries
+function Invoke-SQLiteQuery {
+    param([string]$Query)
+    $command = $connection.CreateCommand()
+    $command.CommandText = $Query
+    $adapter = New-Object System.Data.SQLite.SQLiteDataAdapter $command
+    $dataset = New-Object System.Data.DataSet
+    $adapter.Fill($dataset) | Out-Null
+    return $dataset.Tables[0]
+}
+```
+
+---
+
+## ANALYSIS QUERIES
+
+### 1. Overall Performance Summary
+
+```powershell
+$query = @"
+SELECT 
+    COUNT(*) as total_trades,
+    SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) as tp_hits,
+    SUM(CASE WHEN outcome = 'SL_HIT' THEN 1 ELSE 0 END) as sl_hits,
+    ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / COUNT(*), 2) as win_rate,
+    ROUND(SUM(profit_loss), 2) as total_pl,
+    ROUND(AVG(profit_loss), 2) as avg_pl_per_trade,
+    ROUND(MAX(profit_loss), 2) as best_trade,
+    ROUND(MIN(profit_loss), 2) as worst_trade
+FROM trades
+WHERE outcome IN ('TP_HIT', 'SL_HIT')
+  AND timestamp >= datetime('now', '-30 days');
+"@
+
+$results = Invoke-SQLiteQuery -Query $query
+$results | Format-Table -AutoSize
+
+Write-Host "`n=== PERFORMANCE SUMMARY ===" -ForegroundColor Cyan
+Write-Host "Win Rate: $($results.win_rate)%" -ForegroundColor $(if ($results.win_rate -ge 60) { 'Green' } else { 'Yellow' })
+Write-Host "Total P/L: $$($results.total_pl)" -ForegroundColor $(if ($results.total_pl -gt 0) { 'Green' } else { 'Red' })
+```
+
+### 2. Signal Type Performance (CRITICAL)
+
+**Purpose**: Identify which signal types are profitable and should be prioritized.
+
+```powershell
+$query = @"
+SELECT 
+    signal_type,
+    COUNT(*) as total_trades,
+    SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) as wins,
+    SUM(CASE WHEN outcome = 'SL_HIT' THEN 1 ELSE 0 END) as losses,
+    ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / COUNT(*), 2) as win_rate,
+    ROUND(SUM(profit_loss), 2) as net_pl,
+    ROUND(AVG(CASE WHEN outcome = 'TP_HIT' THEN pips_gained END), 2) as avg_win_pips,
+    ROUND(AVG(CASE WHEN outcome = 'SL_HIT' THEN ABS(pips_gained) END), 2) as avg_loss_pips,
+    ROUND(AVG(risk_reward_ratio), 2) as avg_expected_rr
+FROM trades
+WHERE outcome IN ('TP_HIT', 'SL_HIT')
+  AND timestamp >= datetime('now', '-30 days')
+GROUP BY signal_type
+ORDER BY win_rate DESC;
+"@
+
+$signalPerf = Invoke-SQLiteQuery -Query $query
+$signalPerf | Format-Table -AutoSize
+
+Write-Host "`n=== SIGNAL TYPE RECOMMENDATIONS ===" -ForegroundColor Yellow
+foreach ($row in $signalPerf) {
+    if ($row.win_rate -lt 40) {
+        Write-Host "⚠️  DISABLE $($row.signal_type) - Win rate too low ($($row.win_rate)%)" -ForegroundColor Red
+    } elseif ($row.win_rate -gt 70) {
+        Write-Host "✅ PRIORITIZE $($row.signal_type) - High win rate ($($row.win_rate)%)" -ForegroundColor Green
     }
 }
-Write-Host "Current Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Yellow
-
-# 4. Determine analysis scope
-if ($daysSince -lt 7) {
-    $analysisMode = "INCREMENTAL"
-    $filterTime = $lastCheck
-    Write-Host "Analysis Mode: INCREMENTAL (since $lastAnalysisTime)" -ForegroundColor Green
-} else {
-    $analysisMode = "FULL"
-    $filterTime = (Get-Date).AddDays(-30)  # Full analysis: last 30 days
-    Write-Host "Analysis Mode: FULL (gap too large or first run - last 30 days)" -ForegroundColor Yellow
-}
-Write-Host "Analyzing trades since: $filterTime" -ForegroundColor Cyan
-Write-Host "============================" -ForegroundColor Cyan
 ```
 
-**AFTER SUCCESSFUL ANALYSIS:**
+### 3. Regime-Specific Win Rates
+
+**Purpose**: Optimize signal selection based on market regime.
+
 ```powershell
-# Update timestamp file with current analysis time
-$currentTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-Set-Content -Path ".\docs\LAST_PL_ANALYSIS_TIMESTAMP.txt" -Value $currentTime
-Write-Host "`n✓ P/L Analysis timestamp updated: $currentTime" -ForegroundColor Green
-Write-Host "✓ Next analysis will be incremental from this point" -ForegroundColor Green
-```
+$query = @"
+SELECT 
+    mc.regime,
+    t.signal_type,
+    COUNT(*) as trades,
+    ROUND(100.0 * SUM(CASE WHEN t.outcome = 'TP_HIT' THEN 1 ELSE 0 END) / COUNT(*), 2) as win_rate,
+    ROUND(AVG(i.adx_h4), 2) as avg_adx,
+    ROUND(AVG(i.rsi_h4), 2) as avg_rsi,
+    ROUND(AVG(mc.atr), 5) as avg_atr
+FROM trades t
+JOIN market_conditions mc ON t.trade_id = mc.trade_id
+JOIN indicators i ON t.trade_id = i.trade_id
+WHERE t.outcome IN ('TP_HIT', 'SL_HIT')
+  AND t.timestamp >= datetime('now', '-30 days')
+GROUP BY mc.regime, t.signal_type
+HAVING COUNT(*) >= 3
+ORDER BY win_rate DESC;
+"@
 
-## **Analysis Objectives**
-1. **Trade Outcome Correlation**: Match executed trades with their profit/loss results
-2. **Decision Parameter Analysis**: Identify which conditions lead to profitable vs losing trades
-3. **Signal Type Performance**: Compare performance across TREND, BREAKOUT, TRIANGLE signals
-4. **Market Regime Effectiveness**: Analyze performance by market regime (trending, ranging, breakout)
-5. **Parameter Optimization**: Find optimal thresholds for RSI, ADX, ATR, and other indicators
-6. **Risk/Reward Analysis**: Evaluate actual vs expected risk/reward ratios
+$regimePerf = Invoke-SQLiteQuery -Query $query
+$regimePerf | Format-Table -AutoSize
 
-## **Critical Data Sources & File Paths**
-
-### **1. Trade History Data (Primary)**
-```powershell
-# Get MT5 trade history
-$mt5Path = Get-ChildItem "$env:APPDATA\MetaQuotes\Terminal\*" -Directory | Where-Object {Test-Path "$($_.FullName)\MQL5"} | Select-Object -First 1
-$historyFile = "$($mt5Path.FullName)\MQL5\Files\history.csv"
-
-# Alternative: Get from account history
-$accountHistory = "$($mt5Path.FullName)\MQL5\Files\account_history.csv"
-```
-
-### **2. Decision Log Data (CSV)**
-```powershell
-# Get today's decision data
-$todayCSV = "$($mt5Path.FullName)\MQL5\Files\FinBERT_Data_EURUSD!_$(Get-Date -Format 'yyyy.MM.dd').csv"
-
-# Get historical CSV files
-$csvFiles = Get-ChildItem "$($mt5Path.FullName)\MQL5\Files\FinBERT_Data_*.csv" | Sort-Object LastWriteTime -Descending
-```
-
-### **3. Trade Execution Logs**
-```powershell
-# Get latest log file for execution details
-$logPath = Get-ChildItem "$env:APPDATA\MetaQuotes\Terminal\*\MQL5\Logs" -Directory | Select-Object -First 1
-$latestLog = Get-ChildItem "$($logPath.FullName)\*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-```
-
-### **4. Database Records**
-```powershell
-# Check database for additional trade data
-$dbFile = "$($mt5Path.FullName)\MQL5\Files\GrandeTradingData.db"
-```
-
-## **Proven PowerShell Analysis Commands**
-
-### **1. Extract Executed Trades from Logs (Since Last Analysis)**
-```powershell
-# Find all executed trades with details since last analysis
-$executedTrades = Get-Content $latestLog.FullName | Where-Object {$_ -match "FILLED.*@.*SL=.*TP=.*lot=.*rr="} | ForEach-Object {
-    # Extract timestamp from log line
-    $logTimestamp = if ($_ -match "^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})") { [datetime]$matches[1] } else { [datetime]::MinValue }
+Write-Host "`n=== REGIME-SPECIFIC RECOMMENDATIONS ===" -ForegroundColor Yellow
+# Identify best signal type per regime
+$regimePerf | Group-Object regime | ForEach-Object {
+    $regime = $_.Name
+    $best = $_.Group | Sort-Object win_rate -Descending | Select-Object -First 1
+    $worst = $_.Group | Sort-Object win_rate | Select-Object -First 1
     
-    # Only process trades since last analysis
-    if ($logTimestamp -gt $filterTime) {
-        if($_ -match "\[(TREND|BREAKOUT|TRIANGLE)\] (FILLED|FAILED) (BUY|SELL) @([0-9.]+) SL=([0-9.]+) TP=([0-9.]+) lot=([0-9.]+) rr=([0-9.]+)")
-        {
-            [PSCustomObject]@{
-                SignalType = $matches[1]
-                Status = $matches[2]
-                Direction = $matches[3]
-                EntryPrice = [double]$matches[4]
-                StopLoss = [double]$matches[5]
-                TakeProfit = [double]$matches[6]
-                LotSize = [double]$matches[7]
-                RiskReward = [double]$matches[8]
-                Timestamp = $logTimestamp
-                LogLine = $_
-            }
-        }
-    }
-} | Where-Object { $_ -ne $null }
-
-Write-Host "New Executed Trades Since Last Analysis: $($executedTrades.Count)" -ForegroundColor Cyan
-if ($executedTrades.Count -gt 0) {
-    $executedTrades | Format-Table SignalType, Status, Direction, EntryPrice, LotSize, RiskReward, Timestamp -AutoSize
-} else {
-    Write-Host "No new executed trades found since last analysis" -ForegroundColor Yellow
-}
-```
-
-### **2. Analyze Trade Performance by Signal Type**
-```powershell
-# Group trades by signal type and calculate performance
-$signalPerformance = $executedTrades | Where-Object {$_.Status -eq "FILLED"} | Group-Object SignalType | ForEach-Object {
-    $signalType = $_.Name
-    $trades = $_.Group
-    
-    [PSCustomObject]@{
-        SignalType = $signalType
-        TotalTrades = $trades.Count
-        AvgLotSize = ($trades | Measure-Object -Property LotSize -Average).Average
-        AvgRiskReward = ($trades | Measure-Object -Property RiskReward -Average).Average
-        AvgEntryPrice = ($trades | Measure-Object -Property EntryPrice -Average).Average
-        BuyTrades = ($trades | Where-Object {$_.Direction -eq "BUY"}).Count
-        SellTrades = ($trades | Where-Object {$_.Direction -eq "SELL"}).Count
+    Write-Host "`nRegime: $regime" -ForegroundColor Cyan
+    Write-Host "  Best: $($best.signal_type) ($($best.win_rate)% win rate)" -ForegroundColor Green
+    if ($worst.win_rate -lt 40) {
+        Write-Host "  Avoid: $($worst.signal_type) ($($worst.win_rate)% win rate)" -ForegroundColor Red
     }
 }
-
-Write-Host "Signal Type Performance Summary:" -ForegroundColor Yellow
-$signalPerformance | Format-Table -AutoSize
 ```
 
-### **3. Extract Decision Parameters from CSV (Since Last Analysis)**
+### 4. Optimal RSI Thresholds
+
+**Purpose**: Find RSI levels that maximize win rate for each signal type.
+
 ```powershell
-# Analyze decision data from CSV files since last analysis
-if (Test-Path $todayCSV) {
-    $decisionData = Import-Csv $todayCSV
+$query = @"
+WITH rsi_buckets AS (
+    SELECT 
+        t.outcome,
+        t.signal_type,
+        t.direction,
+        i.rsi_h4,
+        CASE 
+            WHEN i.rsi_h4 < 30 THEN 'OVERSOLD (<30)'
+            WHEN i.rsi_h4 < 40 THEN 'BEARISH (30-40)'
+            WHEN i.rsi_h4 < 60 THEN 'NEUTRAL (40-60)'
+            WHEN i.rsi_h4 < 70 THEN 'BULLISH (60-70)'
+            ELSE 'OVERBOUGHT (>70)'
+        END as rsi_zone
+    FROM trades t
+    JOIN indicators i ON t.trade_id = i.trade_id
+    WHERE t.outcome IN ('TP_HIT', 'SL_HIT')
+      AND t.timestamp >= datetime('now', '-30 days')
+)
+SELECT 
+    signal_type,
+    direction,
+    rsi_zone,
+    COUNT(*) as trades,
+    ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / COUNT(*), 2) as win_rate
+FROM rsi_buckets
+GROUP BY signal_type, direction, rsi_zone
+HAVING COUNT(*) >= 3
+ORDER BY signal_type, direction, win_rate DESC;
+"@
+
+$rsiAnalysis = Invoke-SQLiteQuery -Query $query
+$rsiAnalysis | Format-Table -AutoSize
+
+Write-Host "`n=== RSI THRESHOLD RECOMMENDATIONS ===" -ForegroundColor Yellow
+$rsiAnalysis | Group-Object signal_type, direction | ForEach-Object {
+    $key = $_.Name
+    $best = $_.Group | Sort-Object win_rate -Descending | Select-Object -First 1
     
-    # Filter executed trades only and since last analysis
-    $executedDecisions = $decisionData | Where-Object {
-        $_.decision -eq "EXECUTED" -and 
-        $_.timestamp -ne "" -and 
-        [datetime]$_.timestamp -gt $filterTime
+    if ($best.win_rate -ge 60) {
+        Write-Host "✅ $key: Best RSI zone is $($best.rsi_zone) ($($best.win_rate)% win rate)" -ForegroundColor Green
     }
-    
-    Write-Host "New Executed Decisions Since Last Analysis: $($executedDecisions.Count)" -ForegroundColor Green
-    
-    # Analyze by regime
-    $regimeAnalysis = $executedDecisions | Group-Object regime | ForEach-Object {
-        [PSCustomObject]@{
-            Regime = $_.Name
-            Count = $_.Count
-            AvgRSI_H4 = [math]::Round(($_.Group | Where-Object {$_.rsi_h4 -ne ""} | ForEach-Object {[double]$_.rsi_h4} | Measure-Object -Average).Average, 2)
-            AvgADX_H4 = [math]::Round(($_.Group | Where-Object {$_.adx_h4 -ne ""} | ForEach-Object {[double]$_.adx_h4} | Measure-Object -Average).Average, 2)
-            AvgATR = [math]::Round(($_.Group | Where-Object {$_.atr -ne ""} | ForEach-Object {[double]$_.atr} | Measure-Object -Average).Average, 5)
-            AvgRiskPercent = [math]::Round(($_.Group | Where-Object {$_.risk_percent -ne ""} | ForEach-Object {[double]$_.risk_percent} | Measure-Object -Average).Average, 2)
-        }
-    }
-    
-    Write-Host "Regime Analysis for Executed Trades:" -ForegroundColor Yellow
-    $regimeAnalysis | Format-Table -AutoSize
-} else {
-    Write-Host "❌ No CSV decision data found for today" -ForegroundColor Red
-}
-```
-
-### **4. Correlate Trades with Market Conditions (Since Last Analysis)**
-```powershell
-# Find trades that hit TP vs SL from logs since last analysis
-$tpHits = Get-Content $latestLog.FullName | Where-Object {
-    $_ -match "TAKE PROFIT|TP HIT|TAKE PROFIT HIT" -and
-    ($_ -match "^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})") -and
-    [datetime]$matches[1] -gt $filterTime
-}
-$slHits = Get-Content $latestLog.FullName | Where-Object {
-    $_ -match "STOP LOSS|SL HIT|STOP LOSS HIT" -and
-    ($_ -match "^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})") -and
-    [datetime]$matches[1] -gt $filterTime
-}
-
-$tpCount = $tpHits.Count
-$slCount = $slHits.Count
-$totalOutcomes = $tpCount + $slCount
-
-if ($totalOutcomes -gt 0) {
-    $tpRate = [math]::Round(($tpCount / $totalOutcomes) * 100, 1)
-    $slRate = [math]::Round(($slCount / $totalOutcomes) * 100, 1)
-    
-    Write-Host "Trade Outcome Analysis (Since Last Analysis):" -ForegroundColor Cyan
-    Write-Host "Take Profit Hits: $tpCount ($tpRate%)" -ForegroundColor Green
-    Write-Host "Stop Loss Hits: $slCount ($slRate%)" -ForegroundColor Red
-    Write-Host "Total Closed Trades: $totalOutcomes" -ForegroundColor Yellow
-} else {
-    Write-Host "No trade outcomes found since last analysis" -ForegroundColor Yellow
 }
 ```
 
-### **5. Analyze Rejection Reasons for Missed Opportunities (Since Last Analysis)**
+### 5. Stop Loss Hit Pattern Analysis
+
+**Purpose**: Understand why SL hits occur and adjust placement.
+
 ```powershell
-# Analyze why trades were rejected since last analysis
-$rejectedTrades = Get-Content $latestLog.FullName | Where-Object {
-    $_ -match "REJECTED|BLOCKED" -and
-    ($_ -match "^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})") -and
-    [datetime]$matches[1] -gt $filterTime
-} | ForEach-Object {
-    if($_ -match "REJECTED.*reason.*: (.+)")
-    {
-        $_.Trim()
-    }
-} | Where-Object {$_ -ne ""}
+$query = @"
+SELECT 
+    t.signal_type,
+    mc.regime,
+    COUNT(*) as sl_hits,
+    ROUND(AVG(t.duration_minutes), 0) as avg_duration_mins,
+    ROUND(AVG(i.adx_h4), 2) as avg_adx,
+    ROUND(AVG(mc.atr), 5) as avg_atr,
+    ROUND(AVG(ABS(t.pips_gained)), 2) as avg_pips_lost,
+    ROUND(AVG(t.stop_loss - t.entry_price) / AVG(mc.atr), 2) as avg_sl_atr_multiple
+FROM trades t
+JOIN market_conditions mc ON t.trade_id = mc.trade_id
+JOIN indicators i ON t.trade_id = i.trade_id
+WHERE t.outcome = 'SL_HIT'
+  AND t.timestamp >= datetime('now', '-30 days')
+GROUP BY t.signal_type, mc.regime
+HAVING COUNT(*) >= 3
+ORDER BY sl_hits DESC;
+"@
 
-$rejectionAnalysis = $rejectedTrades | Group-Object | Sort-Object Count -Descending | Select-Object -First 10
+$slAnalysis = Invoke-SQLiteQuery -Query $query
+$slAnalysis | Format-Table -AutoSize
 
-Write-Host "Top Rejection Reasons:" -ForegroundColor Red
-$rejectionAnalysis | Format-Table Count, Name -AutoSize
-```
-
-### **6. RSI Performance Analysis (Since Last Analysis)**
-```powershell
-# Analyze RSI conditions for successful vs failed trades since last analysis
-$rsiAnalysis = Get-Content $latestLog.FullName | Where-Object {
-    $_ -match "RSI.*CONFIRMED|RSI.*REJECTED" -and
-    ($_ -match "^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})") -and
-    [datetime]$matches[1] -gt $filterTime
-} | ForEach-Object {
-    if($_ -match "RSI.*(\d+\.?\d*).*(CONFIRMED|REJECTED)")
-    {
-        [PSCustomObject]@{
-            RSIValue = [double]$matches[1]
-            Decision = $matches[2]
-            Timestamp = ($_ -split '\s+')[0,1] -join ' '
-        }
+Write-Host "`n=== STOP LOSS OPTIMIZATION ===" -ForegroundColor Yellow
+foreach ($row in $slAnalysis) {
+    if ($row.avg_sl_atr_multiple -lt 1.5) {
+        Write-Host "⚠️  $($row.signal_type) in $($row.regime): SL too tight ($($row.avg_sl_atr_multiple)x ATR)" -ForegroundColor Red
+        Write-Host "   Recommendation: Increase to 1.5-2.0x ATR" -ForegroundColor Yellow
     }
 }
+```
 
-if ($rsiAnalysis.Count -gt 0) {
-    $rsiStats = $rsiAnalysis | Group-Object Decision | ForEach-Object {
-        $decision = $_.Name
-        $values = $_.Group | ForEach-Object {[double]$_.RSIValue}
-        $stats = $values | Measure-Object -Average -Minimum -Maximum
+### 6. Take Profit Analysis
+
+**Purpose**: Optimize TP placement for maximum profit capture.
+
+```powershell
+$query = @"
+SELECT 
+    t.signal_type,
+    COUNT(*) as tp_hits,
+    ROUND(AVG(t.duration_minutes), 0) as avg_duration_mins,
+    ROUND(AVG(t.pips_gained), 2) as avg_pips_gained,
+    ROUND(AVG((t.take_profit - t.entry_price) / (t.stop_loss - t.entry_price)), 2) as avg_actual_rr,
+    ROUND(AVG(t.risk_reward_ratio), 2) as avg_planned_rr,
+    ROUND(AVG(i.adx_h4), 2) as avg_adx
+FROM trades t
+JOIN indicators i ON t.trade_id = i.trade_id
+WHERE t.outcome = 'TP_HIT'
+  AND t.timestamp >= datetime('now', '-30 days')
+GROUP BY t.signal_type
+ORDER BY avg_pips_gained DESC;
+"@
+
+$tpAnalysis = Invoke-SQLiteQuery -Query $query
+$tpAnalysis | Format-Table -AutoSize
+
+Write-Host "`n=== TAKE PROFIT RECOMMENDATIONS ===" -ForegroundColor Yellow
+foreach ($row in $tpAnalysis) {
+    if ($row.avg_actual_rr -gt 2.5) {
+        Write-Host "✅ $($row.signal_type): R:R ratio is good ($($row.avg_actual_rr):1)" -ForegroundColor Green
+    } elseif ($row.avg_actual_rr -lt 1.5) {
+        Write-Host "⚠️  $($row.signal_type): R:R ratio too low ($($row.avg_actual_rr):1)" -ForegroundColor Red
+        Write-Host "   Recommendation: Increase TP target or tighten SL" -ForegroundColor Yellow
+    }
+}
+```
+
+### 7. Rejection Reason Analysis
+
+**Purpose**: Identify if rejection criteria are too strict or need adjustment.
+
+```powershell
+$query = @"
+SELECT 
+    rejection_category,
+    COUNT(*) as occurrences,
+    ROUND(100.0 * COUNT(*) / (
+        SELECT COUNT(*) FROM decisions 
+        WHERE decision = 'REJECTED' 
+        AND timestamp >= datetime('now', '-7 days')
+    ), 2) as percentage,
+    symbol
+FROM decisions
+WHERE decision = 'REJECTED'
+  AND timestamp >= datetime('now', '-7 days')
+GROUP BY rejection_category, symbol
+ORDER BY occurrences DESC
+LIMIT 10;
+"@
+
+$rejectionAnalysis = Invoke-SQLiteQuery -Query $query
+$rejectionAnalysis | Format-Table -AutoSize
+
+Write-Host "`n=== REJECTION ANALYSIS ===" -ForegroundColor Yellow
+foreach ($row in $rejectionAnalysis) {
+    if ($row.percentage -gt 30) {
+        Write-Host "⚠️  HIGH REJECTION RATE: $($row.rejection_category) ($($row.percentage)%)" -ForegroundColor Red
         
-        [PSCustomObject]@{
-            Decision = $decision
-            Count = $_.Count
-            AvgRSI = [math]::Round($stats.Average, 2)
-            MinRSI = [math]::Round($stats.Minimum, 2)
-            MaxRSI = [math]::Round($stats.Maximum, 2)
+        switch ($row.rejection_category) {
+            'MARGIN_LOW' { Write-Host "   → Consider reducing lot sizes or increasing account balance" -ForegroundColor Yellow }
+            'PULLBACK_TOO_FAR' { Write-Host "   → Consider increasing pullback tolerance (InpPullbackToleranceATR)" -ForegroundColor Yellow }
+            'RSI_EXTREME' { Write-Host "   → Adjust RSI thresholds for trending markets" -ForegroundColor Yellow }
+            'EMA_MISALIGNED' { Write-Host "   → Consider disabling EMA alignment (InpRequireEmaAlignment=false)" -ForegroundColor Yellow }
         }
     }
-    
-    Write-Host "RSI Performance Analysis:" -ForegroundColor Yellow
-    $rsiStats | Format-Table -AutoSize
 }
 ```
 
-### **7. Pullback Tolerance Effectiveness (Since Last Analysis)**
+### 8. Time-of-Day Performance
+
+**Purpose**: Identify best trading hours for each pair.
+
 ```powershell
-# Analyze pullback validation effectiveness since last analysis
-$pullbackLogs = Get-Content $latestLog.FullName | Where-Object {
-    $_ -match "Pullback.*VALID|Pullback.*TOO FAR|WITHIN LIMIT" -and
-    ($_ -match "^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})") -and
-    [datetime]$matches[1] -gt $filterTime
-}
-$pullbackAnalysis = $pullbackLogs | Group-Object {($_ -split '\s+')[-1]} | Sort-Object Count -Descending
+$query = @"
+SELECT 
+    symbol,
+    strftime('%H', timestamp) as hour_utc,
+    COUNT(*) as trades,
+    ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / COUNT(*), 2) as win_rate,
+    ROUND(AVG(profit_loss), 2) as avg_pl
+FROM trades
+WHERE outcome IN ('TP_HIT', 'SL_HIT')
+  AND timestamp >= datetime('now', '-30 days')
+GROUP BY symbol, hour_utc
+HAVING COUNT(*) >= 2
+ORDER BY symbol, win_rate DESC;
+"@
 
-Write-Host "Pullback Validation Results:" -ForegroundColor Cyan
-$pullbackAnalysis | Format-Table Count, Name -AutoSize
+$timeAnalysis = Invoke-SQLiteQuery -Query $query
+$timeAnalysis | Format-Table -AutoSize
 
-# Calculate pullback success rate
-$validPullbacks = ($pullbackAnalysis | Where-Object {$_.Name -match "WITHIN LIMIT|VALID"}).Count
-$totalPullbacks = ($pullbackAnalysis | Measure-Object Count -Sum).Sum
-
-if ($totalPullbacks -gt 0) {
-    $pullbackSuccessRate = [math]::Round(($validPullbacks / $totalPullbacks) * 100, 1)
-    Write-Host "Pullback Success Rate: $pullbackSuccessRate% ($validPullbacks/$totalPullbacks)" -ForegroundColor Green
-}
-```
-
-### **8. Risk/Reward Analysis**
-```powershell
-# Analyze actual vs expected risk/reward
-$riskRewardData = $executedTrades | Where-Object {$_.Status -eq "FILLED"} | ForEach-Object {
-    $expectedRR = $_.RiskReward
-    $entryPrice = $_.EntryPrice
-    $sl = $_.StopLoss
-    $tp = $_.TakeProfit
+Write-Host "`n=== TIME-OF-DAY RECOMMENDATIONS ===" -ForegroundColor Yellow
+$timeAnalysis | Group-Object symbol | ForEach-Object {
+    $pair = $_.Name
+    $bestHours = $_.Group | Where-Object { $_.win_rate -ge 60 } | Select-Object -ExpandProperty hour_utc
+    $worstHours = $_.Group | Where-Object { $_.win_rate -le 40 } | Select-Object -ExpandProperty hour_utc
     
-    # Calculate actual risk in pips
-    $riskPips = [math]::Abs($entryPrice - $sl) / 0.0001
-    $rewardPips = [math]::Abs($tp - $entryPrice) / 0.0001
-    $actualRR = if ($riskPips -gt 0) { $rewardPips / $riskPips } else { 0 }
-    
-    [PSCustomObject]@{
-        SignalType = $_.SignalType
-        Direction = $_.Direction
-        ExpectedRR = $expectedRR
-        ActualRR = [math]::Round($actualRR, 2)
-        RiskPips = [math]::Round($riskPips, 1)
-        RewardPips = [math]::Round($rewardPips, 1)
-        EntryPrice = $entryPrice
+    Write-Host "`n$pair:" -ForegroundColor Cyan
+    if ($bestHours) {
+        Write-Host "  Best Hours (UTC): $($bestHours -join ', ')" -ForegroundColor Green
+    }
+    if ($worstHours) {
+        Write-Host "  Avoid Hours (UTC): $($worstHours -join ', ')" -ForegroundColor Red
     }
 }
-
-Write-Host "Risk/Reward Analysis:" -ForegroundColor Yellow
-$riskRewardData | Sort-Object ActualRR -Descending | Format-Table -AutoSize
 ```
 
-## **Key Analysis Areas (Priority Order)**
+### 9. Pullback Tolerance Analysis
 
-### **🔴 CRITICAL (Analyze First)**
-1. **Trade Execution vs Outcomes** - Match executed trades with their final results
-2. **Signal Type Performance** - Compare TREND vs BREAKOUT vs TRIANGLE success rates
-3. **Risk/Reward Effectiveness** - Analyze actual vs expected risk/reward ratios
-4. **RSI Threshold Optimization** - Find optimal RSI levels for different regimes
-
-### **🟡 HIGH PRIORITY**
-5. **Market Regime Performance** - Analyze success rates by regime type
-6. **Pullback Tolerance Tuning** - Optimize pullback validation parameters
-7. **ADX Threshold Analysis** - Find optimal ADX levels for signal confirmation
-8. **ATR-Based Stop Loss Effectiveness** - Analyze ATR multiplier performance
-
-### **🟢 MEDIUM PRIORITY**
-9. **Time-of-Day Performance** - Analyze performance by trading session
-10. **Volume Ratio Impact** - Correlate volume conditions with trade success
-11. **Calendar Event Influence** - Analyze FinBERT sentiment impact on trades
-12. **Position Sizing Optimization** - Analyze lot size vs performance correlation
-
-## **Expected Findings & Optimization Opportunities**
-
-### **✅ Good Performance Indicators**
-- TP Hit Rate >60%
-- Risk/Reward ratio consistently >1.5
-- RSI Success Rate >25%
-- Pullback Success Rate >85%
-- Signal type balance (not over-reliant on one type)
-
-### **❌ Performance Issues to Address**
-- TP Hit Rate <40%
-- High SL Hit Rate (>60%)
-- RSI Success Rate <15%
-- Pullback Success Rate <70%
-- Risk/Reward consistently <1.0
-
-### **🔧 Optimization Opportunities**
-- Adjust RSI thresholds by regime (currently 70/30 for trending, 65/35 for ranging)
-- Optimize pullback tolerance (currently 30% of ATR)
-- Fine-tune ADX thresholds (currently 25 for confirmation)
-- Adjust ATR multipliers for SL/TP (currently 1.5/2.0)
-- Optimize risk percentage per trade (currently 2%)
-
-## **Quick Analysis Template**
+**Purpose**: Optimize pullback tolerance parameters.
 
 ```powershell
-# Run complete profit/loss analysis
-Write-Host "=== GRANDE PROFIT/LOSS ANALYSIS (INCREMENTAL) ===" -ForegroundColor Cyan
+$query = @"
+SELECT 
+    CASE 
+        WHEN i.ema20_distance_pips <= i.base_atr_limit THEN '0-1x ATR'
+        WHEN i.ema20_distance_pips <= i.base_atr_limit * 1.5 THEN '1-1.5x ATR'
+        WHEN i.ema20_distance_pips <= i.base_atr_limit * 2 THEN '1.5-2x ATR'
+        WHEN i.ema20_distance_pips <= i.adjusted_atr_limit THEN '2x+ ATR (FinBERT Adjusted)'
+        ELSE 'Beyond Adjusted Limit'
+    END as pullback_range,
+    COUNT(*) as trades,
+    ROUND(100.0 * SUM(CASE WHEN t.outcome = 'TP_HIT' THEN 1 ELSE 0 END) / COUNT(*), 2) as win_rate,
+    ROUND(AVG(i.finbert_multiplier), 2) as avg_finbert_mult,
+    ROUND(AVG(t.profit_loss), 2) as avg_pl
+FROM trades t
+JOIN indicators i ON t.trade_id = i.trade_id
+WHERE t.outcome IN ('TP_HIT', 'SL_HIT')
+  AND t.signal_type = 'TREND'
+  AND t.timestamp >= datetime('now', '-30 days')
+GROUP BY pullback_range
+ORDER BY 
+    CASE pullback_range
+        WHEN '0-1x ATR' THEN 1
+        WHEN '1-1.5x ATR' THEN 2
+        WHEN '1.5-2x ATR' THEN 3
+        WHEN '2x+ ATR (FinBERT Adjusted)' THEN 4
+        ELSE 5
+    END;
+"@
 
-# 1. Initialize timestamp tracking
-$timestampFile = ".\docs\LAST_PL_ANALYSIS_TIMESTAMP.txt"
-$lastAnalysisTime = if (Test-Path $timestampFile) { Get-Content $timestampFile } else { "Never" }
-Write-Host "Last P/L Analysis: $lastAnalysisTime" -ForegroundColor Cyan
+$pullbackAnalysis = Invoke-SQLiteQuery -Query $query
+$pullbackAnalysis | Format-Table -AutoSize
 
-# 2. Set up incremental filtering
-$filterTime = if ($lastAnalysisTime -ne "Never") { [datetime]$lastAnalysisTime } else { (Get-Date).AddDays(-7) }
-Write-Host "Analyzing data since: $filterTime" -ForegroundColor Yellow
+Write-Host "`n=== PULLBACK TOLERANCE RECOMMENDATIONS ===" -ForegroundColor Yellow
+$optimal = $pullbackAnalysis | Sort-Object win_rate -Descending | Select-Object -First 1
+Write-Host "✅ Optimal Range: $($optimal.pullback_range) ($($optimal.win_rate)% win rate)" -ForegroundColor Green
 
-# 3. Get file paths
-$logPath = Get-ChildItem "$env:APPDATA\MetaQuotes\Terminal\*\MQL5\Logs" -Directory | Select-Object -First 1
-$latestLog = Get-ChildItem "$($logPath.FullName)\*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$mt5Path = Get-ChildItem "$env:APPDATA\MetaQuotes\Terminal\*" -Directory | Where-Object {Test-Path "$($_.FullName)\MQL5"} | Select-Object -First 1
-$todayCSV = "$($mt5Path.FullName)\MQL5\Files\FinBERT_Data_EURUSD!_$(Get-Date -Format 'yyyy.MM.dd').csv"
-
-# 4. Run all incremental analysis commands above
-# [Insert all the analysis commands with timestamp filtering]
-
-# 5. Update analysis timestamp
-$currentTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-$currentTime | Out-File $timestampFile -Encoding UTF8
-Write-Host "Analysis timestamp updated: $currentTime" -ForegroundColor Green
-
-# 6. Generate optimization recommendations based on new data only
-Write-Host "`n=== OPTIMIZATION RECOMMENDATIONS (Based on New Data) ===" -ForegroundColor Green
+if ($optimal.pullback_range -like "*0-1x ATR*") {
+    Write-Host "   → Current setting may be good. Monitor for missed opportunities." -ForegroundColor Yellow
+} elseif ($optimal.pullback_range -like "*2x+ ATR*") {
+    Write-Host "   → Consider increasing InpPullbackToleranceATR to 2.5 or 3.0" -ForegroundColor Yellow
+}
 ```
 
-## **Output Format**
-Provide analysis in this structure:
-1. **Performance Summary**: Overall trade success metrics
-2. **Signal Type Analysis**: Performance breakdown by signal type
-3. **Parameter Optimization**: Specific threshold adjustments needed
-4. **Risk Management**: Risk/reward analysis and recommendations
-5. **Market Regime Insights**: Performance by market conditions
-6. **Action Items**: Specific code changes to implement
+### 10. Parameter Optimization History
 
-## **Usage Notes**
-- **Frequency**: Run daily after trading session
-- **Focus**: **INCREMENTAL ANALYSIS ONLY** - Only analyze data since last optimization
-- **Priority**: Always check trade outcomes first, then update timestamp
-- **Action**: Implement parameter adjustments based on findings, then update timestamp
-- **Monitoring**: Track improvements after each optimization by comparing new vs old data
-- **Timestamp Management**: Always update timestamp after analysis to avoid re-analyzing same data
-- **Optimization Tracking**: Compare performance metrics before/after each optimization
+**Purpose**: Track what optimizations have been applied and their effectiveness.
 
-## **Incremental Analysis Benefits**
-- **Avoids Duplicate Work**: Never re-analyzes data already processed
-- **Tracks Optimization Effectiveness**: Shows if recent changes improved performance
-- **Efficient Resource Usage**: Focuses only on new trading data
-- **Clear Progress Tracking**: Timestamp shows when last analysis was performed
-- **Optimization Validation**: Can determine if parameter changes are working
+```powershell
+$query = @"
+SELECT 
+    timestamp,
+    parameter_name,
+    old_value,
+    new_value,
+    ROUND(new_value - old_value, 2) as change,
+    win_rate_before,
+    win_rate_after,
+    ROUND(win_rate_after - win_rate_before, 2) as improvement,
+    trades_analyzed,
+    change_reason
+FROM optimization_history
+ORDER BY timestamp DESC
+LIMIT 20;
+"@
 
-This analysis prompt enables systematic performance tuning by correlating trade outcomes with the decision parameters that generated them, providing data-driven insights for EA optimization while maintaining efficient incremental analysis.
+$optHistory = Invoke-SQLiteQuery -Query $query
+$optHistory | Format-Table -AutoSize
+
+Write-Host "`n=== OPTIMIZATION EFFECTIVENESS ===" -ForegroundColor Cyan
+$recentOpts = $optHistory | Select-Object -First 5
+foreach ($opt in $recentOpts) {
+    $color = if ($opt.improvement -gt 0) { 'Green' } else { 'Red' }
+    Write-Host "$($opt.parameter_name): $($opt.old_value) → $($opt.new_value) | Impact: $($opt.improvement)%" -ForegroundColor $color
+}
+```
+
+---
+
+## GENERATING EA PARAMETER RECOMMENDATIONS
+
+After running the analysis queries above, consolidate findings into actionable EA parameter changes.
+
+### EA Input Parameters Reference
+
+Current Grande EA parameters (GrandeTradingSystem.mq5):
+
+```cpp
+// Risk Management
+input double InpRiskPercentTrend = 2.0;          // Risk % for Trend signals
+input double InpRiskPercentBreakout = 1.5;       // Risk % for Breakout signals
+input double InpRiskPercentRange = 0.8;          // Risk % for Range signals
+
+// Indicator Thresholds
+input double InpRSI_Overbought_Trending = 80.0;  // RSI overbought (trending)
+input double InpRSI_Oversold_Trending = 20.0;    // RSI oversold (trending)
+input double InpRSI_Overbought_Ranging = 70.0;   // RSI overbought (ranging)
+input double InpRSI_Oversold_Ranging = 30.0;     // RSI oversold (ranging)
+input double InpADX_Strong_Threshold = 25.0;     // ADX strong trend
+input double InpADX_Range_Threshold = 20.0;      // ADX range max
+
+// Pullback Tolerance
+input double InpPullbackToleranceATR = 2.0;      // Max pullback (ATR multiple)
+
+// Stop Loss / Take Profit
+input double InpATR_SL_Multiplier = 1.5;         // SL distance (ATR multiple)
+input double InpATR_TP_Multiplier_Trend = 3.0;   // TP for trend (ATR multiple)
+input double InpATR_TP_Multiplier_Breakout = 2.5;// TP for breakout (ATR multiple)
+input double InpATR_TP_Multiplier_Range = 2.0;   // TP for range (ATR multiple)
+
+// Signal Enablers
+input bool InpRequireEmaAlignment = true;        // Require EMA alignment
+input bool InpEnableTrendSignals = true;
+input bool InpEnableBreakoutSignals = true;
+input bool InpEnableRangeSignals = true;
+input bool InpEnableTriangleSignals = false;
+
+// Margin Safety
+input double InpMinMarginLevel = 200.0;          // Minimum margin %
+```
+
+### Example Recommendation Output
+
+```markdown
+## EA PARAMETER RECOMMENDATIONS (YYYY-MM-DD)
+
+### SIGNAL ENABLEMENT
+- ❌ DISABLE Triangle Signals (5% win rate, -$45 net P/L)
+- ✅ KEEP Trend Signals (68% win rate, +$230 net P/L)
+- ⚠️  REVIEW Breakout Signals (45% win rate, needs RSI optimization)
+
+### RSI THRESHOLDS
+- TREND SELLS: Best performance in RSI 60-70 zone
+  → Change InpRSI_Overbought_Trending = 80.0 to 70.0
+  
+- TREND BUYS: Best performance in RSI 30-40 zone
+  → Change InpRSI_Oversold_Trending = 20.0 to 30.0
+
+### STOP LOSS ADJUSTMENTS
+- TREND signals: Average SL hit at 1.2x ATR (too tight)
+  → Change InpATR_SL_Multiplier from 1.5 to 2.0
+  
+### PULLBACK TOLERANCE
+- TREND signals: 85% win rate at 2x+ ATR pullback distance
+  → Change InpPullbackToleranceATR from 2.0 to 2.5
+
+### REJECTION CRITERIA
+- 45% of signals rejected for PULLBACK_TOO_FAR
+  → Increase pullback tolerance as noted above
+  
+### TIME FILTERS (Consider adding)
+- EURUSD: Avoid 00:00-04:00 UTC (20% win rate)
+- GBPUSD: Best 08:00-12:00 UTC (75% win rate)
+```
+
+---
+
+## IMPLEMENTATION WORKFLOW
+
+### Apply Optimizations to EA
+
+1. **Open** `GrandeTradingSystem.mq5` in MetaEditor
+2. **Locate** input parameters at top of file
+3. **Modify** based on recommendations
+4. **Document** changes in `optimization_history` table:
+
+```powershell
+$query = @"
+INSERT INTO optimization_history (
+    timestamp, parameter_name, old_value, new_value, 
+    change_reason, trades_analyzed, win_rate_before, win_rate_after, applied_by
+) VALUES (
+    datetime('now'),
+    'InpATR_SL_Multiplier',
+    1.5,
+    2.0,
+    'Analysis showed SL too tight - avg hit at 1.2x ATR',
+    45,
+    52.3,
+    NULL,
+    'Manual'
+);
+"@
+Invoke-SQLiteQuery -Query $query
+```
+
+5. **Recompile** EA (F7 in MetaEditor)
+6. **Restart** MT5 or reload chart
+7. **Monitor** next 10-20 trades for effectiveness
+
+### Track Optimization Results
+
+After 7 days, run comparison query:
+
+```powershell
+$query = @"
+WITH before_opt AS (
+    SELECT AVG(CASE WHEN outcome = 'TP_HIT' THEN 1.0 ELSE 0.0 END) * 100 as win_rate
+    FROM trades
+    WHERE timestamp < (SELECT timestamp FROM optimization_history ORDER BY timestamp DESC LIMIT 1)
+),
+after_opt AS (
+    SELECT AVG(CASE WHEN outcome = 'TP_HIT' THEN 1.0 ELSE 0.0 END) * 100 as win_rate
+    FROM trades
+    WHERE timestamp >= (SELECT timestamp FROM optimization_history ORDER BY timestamp DESC LIMIT 1)
+      AND outcome IN ('TP_HIT', 'SL_HIT')
+)
+SELECT 
+    b.win_rate as before_optimization,
+    a.win_rate as after_optimization,
+    ROUND(a.win_rate - b.win_rate, 2) as improvement
+FROM before_opt b, after_opt a;
+"@
+
+$comparison = Invoke-SQLiteQuery -Query $query
+$comparison | Format-Table -AutoSize
+```
+
+Update optimization_history:
+
+```powershell
+$query = @"
+UPDATE optimization_history
+SET win_rate_after = $($comparison.after_optimization),
+    trades_analyzed = (
+        SELECT COUNT(*) FROM trades 
+        WHERE timestamp >= (SELECT MAX(timestamp) FROM optimization_history)
+    )
+WHERE timestamp = (SELECT MAX(timestamp) FROM optimization_history);
+"@
+Invoke-SQLiteQuery -Query $query
+```
+
+---
+
+## STATISTICAL CONFIDENCE REQUIREMENTS
+
+Before applying optimizations, ensure statistical significance:
+
+| Metric | Minimum Sample Size | Notes |
+|--------|---------------------|-------|
+| Signal Type Win Rate | 20 trades | Less prone to variance |
+| Regime Performance | 10 trades per regime | More specific context |
+| RSI/ADX Thresholds | 30 trades total | Requires distribution |
+| Time-of-Day | 5 trades per hour | Session patterns emerge |
+| Pullback Tolerance | 15 trades | Enough variance coverage |
+
+**Rule of Thumb**: If sample size is below minimum, note as "PRELIMINARY - Needs More Data"
+
+---
+
+## AUTOMATION SCRIPT
+
+Create `scripts\RunDailyAnalysis.ps1` that:
+
+1. Connects to database
+2. Runs all 10 analysis queries
+3. Generates markdown report
+4. Identifies recommendations with statistical confidence
+5. Outputs EA parameter changes
+6. Updates analysis timestamp
+
+(Full script provided in next section)
+
+---
+
+## TROUBLESHOOTING
+
+### Database Locked
+```powershell
+# Close MT5 or wait for EA to release database
+# Or copy database to temp location for analysis
+Copy-Item $dbPath "$env:TEMP\GrandeTradingData_analysis.db"
+# Then connect to temp copy
+```
+
+### No Data Since Last Analysis
+```powershell
+# Check last trade timestamp
+$query = "SELECT MAX(timestamp) as last_trade FROM trades;"
+Invoke-SQLiteQuery -Query $query
+```
+
+### Query Performance Issues
+```sql
+-- Ensure indexes exist
+CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp);
+CREATE INDEX IF NOT EXISTS idx_trades_outcome ON trades(outcome);
+-- Vacuum database periodically
+VACUUM;
+```
+
+---
+
+## DAILY CHECKLIST
+
+- [ ] Run daily analysis script
+- [ ] Review win rates by signal type
+- [ ] Check rejection reasons
+- [ ] Identify any parameter recommendations
+- [ ] Apply changes if confidence threshold met
+- [ ] Document changes in optimization_history
+- [ ] Recompile and reload EA
+- [ ] Monitor next 10 trades for impact
+
+---
+
+## SUCCESS METRICS
+
+Target performance indicators:
+
+- **Win Rate**: >60% overall
+- **Profit Factor**: >1.5 (total wins / total losses)
+- **Signal Type Balance**: No single type >70% of trades
+- **Rejection Rate**: <30% of decisions
+- **SL Hit Rate**: <40%
+- **TP Hit Rate**: >60%
+- **Average R:R Achieved**: >2.0
+
+Monitor these weekly and adjust strategies accordingly.
+
+---
+
+## NEXT STEPS
+
+1. **Immediate**: Run first analysis using queries above
+2. **Day 1-7**: Collect baseline data without changes
+3. **Day 8+**: Apply first optimization based on data
+4. **Day 15+**: Measure optimization effectiveness
+5. **Ongoing**: Weekly optimization cycles with A/B tracking
+
+This data-driven approach ensures every EA modification is backed by real performance data from your trading account.
