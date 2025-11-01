@@ -1,13 +1,11 @@
-# Grande Trading System - Daily Performance Analysis Script
+﻿# Grande Trading System - Daily Performance Analysis Script
 # Purpose: Generate daily analysis report with EA optimization recommendations
 
 param(
     [Parameter(Mandatory=$false)]
     [string]$DatabasePath = "$env:APPDATA\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Files\GrandeTradingData.db",
-    
     [Parameter(Mandatory=$false)]
     [int]$MinimumTrades = 20,
-    
     [Parameter(Mandatory=$false)]
     [int]$DaysToAnalyze = 30
 )
@@ -20,62 +18,39 @@ Write-Host "=== GRANDE DAILY PERFORMANCE ANALYSIS ===" -ForegroundColor Cyan
 Write-Host "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Yellow
 Write-Host "Report: $reportPath" -ForegroundColor Yellow
 
-# Connect to database
-try {
-    Add-Type -AssemblyName System.Data
-    $connection = New-Object System.Data.SQLite.SQLiteConnection
-    $connection.ConnectionString = "Data Source=$DatabasePath;Version=3;"
-    $connection.Open()
-    Write-Host "✅ Database connected" -ForegroundColor Green
-} catch {
-    Write-Host "❌ ERROR: Could not connect to database" -ForegroundColor Red
-    Write-Host "   Path: $DatabasePath" -ForegroundColor Yellow
-    Write-Host "   Error: $($_.Exception.Message)" -ForegroundColor Red
+# Import PSSQLite module
+Import-Module PSSQLite -ErrorAction Stop
+Write-Host "[OK] Database module loaded" -ForegroundColor Green
+
+# Check if database exists
+if (-not (Test-Path $DatabasePath)) {
+    Write-Host "ERROR: Database not found at $DatabasePath" -ForegroundColor Red
+    Write-Host "Run: .\scripts\SeedTradingDatabase.ps1 first" -ForegroundColor Yellow
     exit 1
 }
 
-# Helper function
-function Invoke-SQLiteQuery {
-    param([string]$Query)
-    $command = $connection.CreateCommand()
-    $command.CommandText = $Query
-    $adapter = New-Object System.Data.SQLite.SQLiteDataAdapter $command
-    $dataset = New-Object System.Data.DataSet
-    $adapter.Fill($dataset) | Out-Null
-    return $dataset.Tables[0]
-}
+Write-Host "`nAnalyzing trades..." -ForegroundColor Cyan
 
 # Initialize report
 $report = @"
 # Grande Trading System - Daily Analysis Report
+
 **Generated**: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  
 **Analysis Period**: Last $DaysToAnalyze days  
-**Minimum Sample Size**: $MinimumTrades trades
+**Database**: GrandeTradingData.db
 
 ---
 
 "@
 
-Write-Host "`n📊 Running performance analysis..." -ForegroundColor Cyan
-
 # 1. Overall Performance Summary
-$overallQuery = @"
-SELECT 
-    COUNT(*) as total_trades,
-    SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) as tp_hits,
-    SUM(CASE WHEN outcome = 'SL_HIT' THEN 1 ELSE 0 END) as sl_hits,
-    ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / 
-        NULLIF(COUNT(*), 0), 2) as win_rate,
-    ROUND(SUM(CASE WHEN outcome = 'TP_HIT' THEN pips_gained ELSE 0 END), 2) as total_win_pips,
-    ROUND(SUM(CASE WHEN outcome = 'SL_HIT' THEN ABS(pips_gained) ELSE 0 END), 2) as total_loss_pips,
-    ROUND(AVG(CASE WHEN outcome = 'TP_HIT' THEN pips_gained END), 2) as avg_win_pips,
-    ROUND(AVG(CASE WHEN outcome = 'SL_HIT' THEN ABS(pips_gained) END), 2) as avg_loss_pips
-FROM trades
-WHERE outcome IN ('TP_HIT', 'SL_HIT')
-  AND timestamp >= datetime('now', '-$DaysToAnalyze days');
-"@
+Write-Host "  Overall performance..." -ForegroundColor Gray
 
-$overall = Invoke-SQLiteQuery -Query $overallQuery
+$overallQuery = "SELECT COUNT(*) as total_trades, SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) as tp_hits, SUM(CASE WHEN outcome = 'SL_HIT' THEN 1 ELSE 0 END) as sl_hits, ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN outcome IN ('TP_HIT', 'SL_HIT') THEN 1 ELSE 0 END), 0), 2) as win_rate, ROUND(SUM(CASE WHEN outcome = 'TP_HIT' THEN pips_gained ELSE 0 END), 2) as total_win_pips, ROUND(SUM(CASE WHEN outcome = 'SL_HIT' THEN ABS(pips_gained) ELSE 0 END), 2) as total_loss_pips, ROUND(AVG(CASE WHEN outcome = 'TP_HIT' THEN pips_gained END), 2) as avg_win_pips, ROUND(AVG(CASE WHEN outcome = 'SL_HIT' THEN ABS(pips_gained) END), 2) as avg_loss_pips FROM trades WHERE timestamp >= datetime('now', '-$DaysToAnalyze days');"
+
+$overall = Invoke-SqliteQuery -DataSource $DatabasePath -Query $overallQuery
+
+$closedTrades = $overall.tp_hits + $overall.sl_hits
 
 $report += @"
 ## Executive Summary
@@ -83,359 +58,156 @@ $report += @"
 | Metric | Value |
 |--------|-------|
 | Total Trades | $($overall.total_trades) |
+| Closed Trades | $closedTrades |
 | TP Hits | $($overall.tp_hits) |
 | SL Hits | $($overall.sl_hits) |
-| Win Rate | $($overall.win_rate)% |
-| Avg Win | $($overall.avg_win_pips) pips |
-| Avg Loss | $($overall.avg_loss_pips) pips |
+| Win Rate | $(if($closedTrades -gt 0) { $overall.win_rate } else { 'N/A' })% |
+| Avg Win | $(if($overall.avg_win_pips) { $overall.avg_win_pips } else { '0' }) pips |
+| Avg Loss | $(if($overall.avg_loss_pips) { $overall.avg_loss_pips } else { '0' }) pips |
 | Profit Factor | $(if($overall.total_loss_pips -gt 0) { [math]::Round($overall.total_win_pips / $overall.total_loss_pips, 2) } else { 'N/A' }) |
 
 "@
 
-$statusColor = if ($overall.win_rate -ge 60) { 'Green' } elseif ($overall.win_rate -ge 50) { 'Yellow' } else { 'Red' }
-Write-Host "  Win Rate: $($overall.win_rate)%" -ForegroundColor $statusColor
+if ($closedTrades -gt 0) {
+    $statusColor = if ($overall.win_rate -ge 60) { 'Green' } elseif ($overall.win_rate -ge 50) { 'Yellow' } else { 'Red' }
+    Write-Host "  Win Rate: $($overall.win_rate)%" -ForegroundColor $statusColor
+} else {
+    Write-Host "  No closed trades yet" -ForegroundColor Yellow
+}
 
 # 2. Signal Type Performance
 Write-Host "  Analyzing signal types..." -ForegroundColor Gray
 
-$signalQuery = @"
-SELECT 
-    signal_type,
-    COUNT(*) as total_trades,
-    SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) as wins,
-    SUM(CASE WHEN outcome = 'SL_HIT' THEN 1 ELSE 0 END) as losses,
-    ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / COUNT(*), 2) as win_rate,
-    ROUND(AVG(CASE WHEN outcome = 'TP_HIT' THEN pips_gained END), 2) as avg_win_pips,
-    ROUND(AVG(CASE WHEN outcome = 'SL_HIT' THEN ABS(pips_gained) END), 2) as avg_loss_pips,
-    ROUND(AVG(risk_reward_ratio), 2) as avg_rr
-FROM trades
-WHERE outcome IN ('TP_HIT', 'SL_HIT')
-  AND timestamp >= datetime('now', '-$DaysToAnalyze days')
-GROUP BY signal_type
-ORDER BY win_rate DESC;
-"@
+$signalQuery = "SELECT signal_type, COUNT(*) as trades, SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) as tp_hits, SUM(CASE WHEN outcome = 'SL_HIT' THEN 1 ELSE 0 END) as sl_hits, ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN outcome IN ('TP_HIT', 'SL_HIT') THEN 1 ELSE 0 END), 0), 2) as win_rate, ROUND(AVG(pips_gained), 2) as avg_pips FROM trades WHERE timestamp >= datetime('now', '-$DaysToAnalyze days') GROUP BY signal_type ORDER BY trades DESC;"
 
-$signalPerf = Invoke-SQLiteQuery -Query $signalQuery
+$signalPerf = Invoke-SqliteQuery -DataSource $DatabasePath -Query $signalQuery
 
-$report += @"
+if ($signalPerf.Count -gt 0) {
+    $report += @"
 ## Signal Type Performance
 
-| Signal Type | Trades | Wins | Losses | Win Rate | Avg Win | Avg Loss | Avg R:R |
-|-------------|--------|------|--------|----------|---------|----------|---------|
+| Signal Type | Trades | TP | SL | Win Rate | Avg Pips |
+|-------------|--------|----|----|----------|----------|
 "@
 
-$recommendations = @()
-
-foreach ($row in $signalPerf) {
-    $report += "| $($row.signal_type) | $($row.total_trades) | $($row.wins) | $($row.losses) | $($row.win_rate)% | $($row.avg_win_pips) | $($row.avg_loss_pips) | $($row.avg_rr) |`n"
+    foreach ($sig in $signalPerf) {
+        $closedForSignal = $sig.tp_hits + $sig.sl_hits
+        $winRateDisplay = if ($closedForSignal -gt 0) { "$($sig.win_rate)%" } else { "N/A" }
+        $avgPipsDisplay = if ($sig.avg_pips) { $sig.avg_pips } else { "0" }
+        $report += "| $($sig.signal_type) | $($sig.trades) | $($sig.tp_hits) | $($sig.sl_hits) | $winRateDisplay | $avgPipsDisplay |`n"
+    }
     
-    if ($row.total_trades -ge $MinimumTrades) {
-        if ($row.win_rate -lt 40) {
-            $recommendations += @{
-                Priority = 'HIGH'
-                Type = 'DISABLE_SIGNAL'
-                Parameter = "InpEnable$($row.signal_type)Signals"
-                OldValue = 'true'
-                NewValue = 'false'
-                Reason = "$($row.signal_type) signals have low win rate ($($row.win_rate)%) over $($row.total_trades) trades"
-                Confidence = 'HIGH'
+    $report += "`n"
+}
+
+# 3. Symbol Performance
+Write-Host "  Analyzing symbols..." -ForegroundColor Gray
+
+$symbolQuery = "SELECT symbol, COUNT(*) as trades, SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) as tp_hits, SUM(CASE WHEN outcome = 'SL_HIT' THEN 1 ELSE 0 END) as sl_hits, ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN outcome IN ('TP_HIT', 'SL_HIT') THEN 1 ELSE 0 END), 0), 2) as win_rate FROM trades WHERE timestamp >= datetime('now', '-$DaysToAnalyze days') GROUP BY symbol ORDER BY trades DESC;"
+
+$symbolPerf = Invoke-SqliteQuery -DataSource $DatabasePath -Query $symbolQuery
+
+if ($symbolPerf.Count -gt 0) {
+    $report += @"
+## Symbol Performance
+
+| Symbol | Trades | TP | SL | Win Rate |
+|--------|--------|----|----|----------|
+"@
+
+    foreach ($sym in $symbolPerf) {
+        $closedForSymbol = $sym.tp_hits + $sym.sl_hits
+        $winRateDisplay = if ($closedForSymbol -gt 0) { "$($sym.win_rate)%" } else { "N/A" }
+        $report += "| $($sym.symbol) | $($sym.trades) | $($sym.tp_hits) | $($sym.sl_hits) | $winRateDisplay |`n"
+    }
+    
+    $report += "`n"
+}
+
+# 4. Generate Recommendations
+Write-Host "  Generating recommendations..." -ForegroundColor Gray
+
+$report += @"
+## Recommendations
+
+"@
+
+$recommendations = 0
+
+# Check each signal type for poor performance
+foreach ($sig in $signalPerf) {
+    $closedForSignal = $sig.tp_hits + $sig.sl_hits
+    if ($closedForSignal -ge $MinimumTrades -and $sig.win_rate -lt 40) {
+        $recommendations++
+        $report += @"
+### [$recommendations] DISABLE SIGNAL: $($sig.signal_type)
+- **Confidence**: HIGH (based on $closedForSignal closed trades)
+- **Win Rate**: $($sig.win_rate)% (below 40% threshold)
+- **Recommendation**: Consider disabling $($sig.signal_type) signals
+- **Action**: Set input parameter for $($sig.signal_type) to false in EA
+
+"@
+    }
+}
+
+# Check for low overall performance
+if ($closedTrades -ge $MinimumTrades -and $overall.win_rate -lt 50) {
+    $recommendations++
+    $report += @"
+### [$recommendations] OVERALL PERFORMANCE ALERT
+- **Confidence**: HIGH
+- **Win Rate**: $($overall.win_rate)% (below 50%)
+- **Recommendation**: Review risk management settings and entry criteria
+- **Action**: Consider reducing lot sizes or tightening entry filters
+
+"@
+}
+
+if ($recommendations -eq 0) {
+    if ($closedTrades -lt $MinimumTrades) {
+        $report += "**Status**: Insufficient data for recommendations (need $MinimumTrades closed trades, have $closedTrades)`n`n"
+        $report += "**Action**: Continue trading to collect more data. Current trades are:`n"
+        
+        # Show pending trades
+        $pendingQuery = "SELECT timestamp, symbol, signal_type, direction, entry_price FROM trades WHERE outcome = 'PENDING' ORDER BY timestamp DESC LIMIT 10;"
+        $pending = Invoke-SqliteQuery -DataSource $DatabasePath -Query $pendingQuery
+        
+        if ($pending.Count -gt 0) {
+            $report += "`n| Timestamp | Symbol | Signal | Direction | Entry |`n"
+            $report += "|-----------|--------|--------|-----------|-------|`n"
+            foreach ($p in $pending) {
+                $report += "| $($p.timestamp) | $($p.symbol) | $($p.signal_type) | $($p.direction) | $($p.entry_price) |`n"
             }
-        } elseif ($row.win_rate -gt 70) {
-            $recommendations += @{
-                Priority = 'INFO'
-                Type = 'PRIORITIZE_SIGNAL'
-                Parameter = "InpRiskPercent$($row.signal_type)"
-                OldValue = 'current'
-                NewValue = 'increase'
-                Reason = "$($row.signal_type) signals have excellent win rate ($($row.win_rate)%) - consider increasing risk allocation"
-                Confidence = 'MEDIUM'
-            }
         }
+    } else {
+        $report += "**Status**: No issues detected. System performing within acceptable parameters.`n`n"
     }
 }
 
-$report += "`n"
-
-# 3. Regime Analysis
-Write-Host "  Analyzing market regimes..." -ForegroundColor Gray
-
-$regimeQuery = @"
-SELECT 
-    mc.regime,
-    t.signal_type,
-    COUNT(*) as trades,
-    ROUND(100.0 * SUM(CASE WHEN t.outcome = 'TP_HIT' THEN 1 ELSE 0 END) / COUNT(*), 2) as win_rate,
-    ROUND(AVG(i.adx_h4), 2) as avg_adx,
-    ROUND(AVG(i.rsi_h4), 2) as avg_rsi
-FROM trades t
-JOIN market_conditions mc ON t.trade_id = mc.trade_id
-JOIN indicators i ON t.trade_id = i.trade_id
-WHERE t.outcome IN ('TP_HIT', 'SL_HIT')
-  AND t.timestamp >= datetime('now', '-$DaysToAnalyze days')
-GROUP BY mc.regime, t.signal_type
-HAVING COUNT(*) >= 5
-ORDER BY mc.regime, win_rate DESC;
-"@
-
-$regimePerf = Invoke-SQLiteQuery -Query $regimeQuery
-
 $report += @"
-## Regime-Specific Performance
-
-| Regime | Signal Type | Trades | Win Rate | Avg ADX | Avg RSI |
-|--------|-------------|--------|----------|---------|---------|
-"@
-
-foreach ($row in $regimePerf) {
-    $report += "| $($row.regime) | $($row.signal_type) | $($row.trades) | $($row.win_rate)% | $($row.avg_adx) | $($row.avg_rsi) |`n"
-}
-
-$report += "`n"
-
-# 4. RSI Threshold Analysis
-Write-Host "  Analyzing RSI thresholds..." -ForegroundColor Gray
-
-$rsiQuery = @"
-WITH rsi_buckets AS (
-    SELECT 
-        t.outcome,
-        t.signal_type,
-        t.direction,
-        CASE 
-            WHEN i.rsi_h4 < 30 THEN 'OVERSOLD'
-            WHEN i.rsi_h4 < 40 THEN 'BEARISH'
-            WHEN i.rsi_h4 < 60 THEN 'NEUTRAL'
-            WHEN i.rsi_h4 < 70 THEN 'BULLISH'
-            ELSE 'OVERBOUGHT'
-        END as rsi_zone
-    FROM trades t
-    JOIN indicators i ON t.trade_id = i.trade_id
-    WHERE t.outcome IN ('TP_HIT', 'SL_HIT')
-      AND t.timestamp >= datetime('now', '-$DaysToAnalyze days')
-)
-SELECT 
-    signal_type,
-    direction,
-    rsi_zone,
-    COUNT(*) as trades,
-    ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / COUNT(*), 2) as win_rate
-FROM rsi_buckets
-GROUP BY signal_type, direction, rsi_zone
-HAVING COUNT(*) >= 3
-ORDER BY signal_type, direction, win_rate DESC;
-"@
-
-$rsiAnalysis = Invoke-SQLiteQuery -Query $rsiQuery
-
-$report += @"
-## RSI Threshold Analysis
-
-| Signal Type | Direction | RSI Zone | Trades | Win Rate |
-|-------------|-----------|----------|--------|----------|
-"@
-
-foreach ($row in $rsiAnalysis) {
-    $report += "| $($row.signal_type) | $($row.direction) | $($row.rsi_zone) | $($row.trades) | $($row.win_rate)% |`n"
-    
-    if ($row.trades -ge 5 -and $row.win_rate -ge 65) {
-        $recommendations += @{
-            Priority = 'MEDIUM'
-            Type = 'RSI_THRESHOLD'
-            Parameter = 'RSI_Zone_Optimization'
-            OldValue = 'current'
-            NewValue = "$($row.rsi_zone)"
-            Reason = "$($row.signal_type) $($row.direction) performs best in RSI $($row.rsi_zone) zone ($($row.win_rate)% over $($row.trades) trades)"
-            Confidence = 'MEDIUM'
-        }
-    }
-}
-
-$report += "`n"
-
-# 5. Stop Loss Analysis
-Write-Host "  Analyzing stop loss patterns..." -ForegroundColor Gray
-
-$slQuery = @"
-SELECT 
-    t.signal_type,
-    mc.regime,
-    COUNT(*) as sl_hits,
-    ROUND(AVG(t.duration_minutes), 0) as avg_duration_mins,
-    ROUND(AVG(i.adx_h4), 2) as avg_adx,
-    ROUND(AVG(mc.atr), 5) as avg_atr
-FROM trades t
-JOIN market_conditions mc ON t.trade_id = mc.trade_id
-JOIN indicators i ON t.trade_id = i.trade_id
-WHERE t.outcome = 'SL_HIT'
-  AND t.timestamp >= datetime('now', '-$DaysToAnalyze days')
-GROUP BY t.signal_type, mc.regime
-HAVING COUNT(*) >= 3
-ORDER BY sl_hits DESC;
-"@
-
-$slAnalysis = Invoke-SQLiteQuery -Query $slQuery
-
-$report += @"
-## Stop Loss Hit Pattern Analysis
-
-| Signal Type | Regime | SL Hits | Avg Duration (mins) | Avg ADX | Avg ATR |
-|-------------|--------|---------|---------------------|---------|---------|
-"@
-
-foreach ($row in $slAnalysis) {
-    $report += "| $($row.signal_type) | $($row.regime) | $($row.sl_hits) | $($row.avg_duration_mins) | $($row.avg_adx) | $($row.avg_atr) |`n"
-}
-
-$report += "`n"
-
-# 6. Rejection Analysis
-Write-Host "  Analyzing rejection reasons..." -ForegroundColor Gray
-
-$rejectionQuery = @"
-SELECT 
-    rejection_category,
-    COUNT(*) as occurrences,
-    ROUND(100.0 * COUNT(*) / (
-        SELECT COUNT(*) FROM decisions 
-        WHERE decision = 'REJECTED' 
-        AND timestamp >= datetime('now', '-7 days')
-    ), 2) as percentage
-FROM decisions
-WHERE decision = 'REJECTED'
-  AND timestamp >= datetime('now', '-7 days')
-GROUP BY rejection_category
-ORDER BY occurrences DESC;
-"@
-
-$rejectionAnalysis = Invoke-SQLiteQuery -Query $rejectionQuery
-
-$report += @"
-## Rejection Analysis (Last 7 Days)
-
-| Rejection Reason | Count | Percentage |
-|------------------|-------|------------|
-"@
-
-foreach ($row in $rejectionAnalysis) {
-    $report += "| $($row.rejection_category) | $($row.occurrences) | $($row.percentage)% |`n"
-    
-    if ($row.percentage -gt 30) {
-        $recommendations += @{
-            Priority = 'HIGH'
-            Type = 'REJECTION_CRITERIA'
-            Parameter = $row.rejection_category
-            OldValue = 'current'
-            NewValue = 'relax'
-            Reason = "High rejection rate for $($row.rejection_category) ($($row.percentage)%) - may be too strict"
-            Confidence = 'MEDIUM'
-        }
-    }
-}
-
-$report += "`n"
-
-# Generate Recommendations Section
-$report += @"
----
-
-## EA Parameter Recommendations
-
-"@
-
-if ($recommendations.Count -eq 0) {
-    $report += "No parameter changes recommended at this time. System is performing within acceptable ranges.`n`n"
-    $report += "**Note**: Continue collecting data. More comprehensive recommendations require at least $MinimumTrades trades per signal type.`n"
-} else {
-    $highPriority = $recommendations | Where-Object { $_.Priority -eq 'HIGH' }
-    $mediumPriority = $recommendations | Where-Object { $_.Priority -eq 'MEDIUM' }
-    $infoPriority = $recommendations | Where-Object { $_.Priority -eq 'INFO' }
-    
-    if ($highPriority) {
-        $report += "### HIGH PRIORITY CHANGES`n`n"
-        foreach ($rec in $highPriority) {
-            $report += "#### $($rec.Type)`n"
-            $report += "- **Parameter**: ``$($rec.Parameter)```n"
-            $report += "- **Current**: $($rec.OldValue)`n"
-            $report += "- **Recommended**: $($rec.NewValue)`n"
-            $report += "- **Reason**: $($rec.Reason)`n"
-            $report += "- **Confidence**: $($rec.Confidence)`n`n"
-        }
-    }
-    
-    if ($mediumPriority) {
-        $report += "### MEDIUM PRIORITY OPTIMIZATIONS`n`n"
-        foreach ($rec in $mediumPriority) {
-            $report += "#### $($rec.Type)`n"
-            $report += "- **Parameter**: ``$($rec.Parameter)```n"
-            $report += "- **Current**: $($rec.OldValue)`n"
-            $report += "- **Recommended**: $($rec.NewValue)`n"
-            $report += "- **Reason**: $($rec.Reason)`n"
-            $report += "- **Confidence**: $($rec.Confidence)`n`n"
-        }
-    }
-    
-    if ($infoPriority) {
-        $report += "### INFORMATIONAL`n`n"
-        foreach ($rec in $infoPriority) {
-            $report += "- $($rec.Reason)`n"
-        }
-    }
-}
-
-# Add implementation guide
-$report += @"
----
-
-## Implementation Steps
-
-1. **Backup Current EA Settings**: Document current input parameters
-2. **Apply Recommended Changes**: Update parameters in MT5 EA settings
-3. **Recompile EA**: Press F7 in MetaEditor after making changes
-4. **Document Changes**: Log changes in optimization_history table
-5. **Monitor Results**: Run this analysis again after 10-20 new trades
-6. **Measure Effectiveness**: Compare win rate before/after optimization
-
-### SQL to Log This Optimization
-
-``````sql
-INSERT INTO optimization_history (
-    timestamp, parameter_name, old_value, new_value, 
-    change_reason, trades_analyzed, win_rate_before, applied_by
-) VALUES (
-    datetime('now'), 'PARAMETER_NAME', OLD_VALUE, NEW_VALUE,
-    'REASON', $($overall.total_trades), $($overall.win_rate), 'Manual'
-);
-``````
 
 ---
 
-**Generated by Grande Daily Analysis Script**  
-**Next Analysis**: Run this script daily to track performance trends
+## Next Steps
+
+1. **Monitor**: Wait for pending trades to close
+2. **Re-analyze**: Run this script again after more trades close
+3. **Apply**: Implement recommendations with confidence level HIGH
+4. **Track**: Log any parameter changes in optimization_history table
+
+**Last Updated**: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 "@
 
-# Write report to file
+# Save report
 $report | Out-File -FilePath $reportPath -Encoding UTF8
 
-Write-Host "✅ Analysis complete" -ForegroundColor Green
-Write-Host "   Report saved: $reportPath" -ForegroundColor Cyan
+Write-Host "`n=== ANALYSIS COMPLETE ===" -ForegroundColor Cyan
+Write-Host "Report saved: $reportPath" -ForegroundColor Green
+Write-Host "`nSummary:" -ForegroundColor Yellow
+Write-Host "  Total Trades: $($overall.total_trades)" -ForegroundColor White
+Write-Host "  Closed Trades: $closedTrades" -ForegroundColor White
+Write-Host "  Recommendations: $recommendations" -ForegroundColor White
 
-# Display summary in console
-Write-Host "`n=== SUMMARY ===" -ForegroundColor Cyan
-Write-Host "Total Trades: $($overall.total_trades)" -ForegroundColor Yellow
-Write-Host "Win Rate: $($overall.win_rate)%" -ForegroundColor $statusColor
-Write-Host "Recommendations: $($recommendations.Count)" -ForegroundColor Yellow
-
-if ($recommendations.Count -gt 0) {
-    Write-Host "`nTop Recommendations:" -ForegroundColor Cyan
-    $recommendations | Select-Object -First 3 | ForEach-Object {
-        Write-Host "  [$($_.Priority)] $($_.Type): $($_.Reason)" -ForegroundColor Yellow
-    }
+if ($closedTrades -eq 0) {
+    Write-Host "`nNote: All trades are still pending. Re-run this script after trades close." -ForegroundColor Yellow
 }
-
-Write-Host "`nOpen report: $reportPath" -ForegroundColor Green
-
-# Close database
-$connection.Close()
-
-Write-Host "`n✅ Analysis session complete" -ForegroundColor Green
-
