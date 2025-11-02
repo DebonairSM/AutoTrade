@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$LogPath = "$env:APPDATA\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5",
     [Parameter(Mandatory=$false)]
-    [string]$DatabasePath = "$env:APPDATA\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Files\GrandeTradingData.db",
+    [string]$DatabasePath = "$env:APPDATA\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Files\Data\GrandeTradingData.db",
     [Parameter(Mandatory=$false)]
     [switch]$Force
 )

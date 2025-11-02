@@ -28,12 +28,12 @@
 #property description "Advanced trading system combining market regime detection with key level analysis"
 #property description "Universal multi-currency pair support for all major FX pairs"
 
-#include "GrandeMarketRegimeDetector.mqh"
-#include "GrandeKeyLevelDetector.mqh"
+#include "Include/GrandeMarketRegimeDetector.mqh"
+#include "Include/GrandeKeyLevelDetector.mqh"
 #include "mcp/analyze_sentiment_server/GrandeNewsSentimentIntegration.mqh"
-#include "GrandeMT5CalendarReader.mqh"
-#include "GrandeIntelligentReporter.mqh"
-#include "GrandeDatabaseManager.mqh"
+#include "Include/GrandeMT5CalendarReader.mqh"
+#include "Include/GrandeIntelligentReporter.mqh"
+#include "Include/GrandeDatabaseManager.mqh"
 #include "..\VSol\AdvancedTrendFollower.mqh"
 #include "..\VSol\GrandeRiskManager.mqh"
 #include <Trade\Trade.mqh>

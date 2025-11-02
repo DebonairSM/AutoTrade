@@ -49,12 +49,12 @@
 #property indicator_width6 1
 
 // Include Grande EA components
-#include "GrandeMarketRegimeDetector.mqh"
-#include "GrandeKeyLevelDetector.mqh"
-#include "GrandeMultiTimeframeAnalyzer.mqh"
-#include "GrandeMT5CalendarReader.mqh"
+#include "Include/GrandeMarketRegimeDetector.mqh"
+#include "Include/GrandeKeyLevelDetector.mqh"
+#include "Include/GrandeMultiTimeframeAnalyzer.mqh"
+#include "Include/GrandeMT5CalendarReader.mqh"
 #include "mcp/analyze_sentiment_server/GrandeNewsSentimentIntegration.mqh"
-#include "GrandeDatabaseManager.mqh"
+#include "Include/GrandeDatabaseManager.mqh"
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
@@ -103,7 +103,7 @@ input double InpCalendarMinConfidence = 0.60;    // Minimum confidence threshold
 
 input group "=== Database Settings ==="
 input bool   InpEnableDatabase = true;          // Enable Database Logging
-input string InpDatabasePath = "GrandeTradingData.db"; // Database File Path
+input string InpDatabasePath = "Data/GrandeTradingData.db"; // Database File Path
 input bool   InpDatabaseDebug = false;           // Enable Database Debug Prints
 input bool   InpShowDatabaseStatus = true;      // Show Database Status
 

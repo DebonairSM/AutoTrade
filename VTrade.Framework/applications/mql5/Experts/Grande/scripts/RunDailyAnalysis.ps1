@@ -3,7 +3,7 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$DatabasePath = "$env:APPDATA\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Files\GrandeTradingData.db",
+    [string]$DatabasePath = "$env:APPDATA\MetaQuotes\Terminal\5C659F0E64BA794E712EE4C936BCFED5\MQL5\Files\Data\GrandeTradingData.db",
     [Parameter(Mandatory=$false)]
     [int]$MinimumTrades = 20,
     [Parameter(Mandatory=$false)]
@@ -12,7 +12,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $reportDate = Get-Date -Format "yyyyMMdd"
-$reportPath = ".\docs\DAILY_ANALYSIS_REPORT_$reportDate.md"
+$reportPath = "..\docs\DAILY_ANALYSIS_REPORT_$reportDate.md"
 
 Write-Host "=== GRANDE DAILY PERFORMANCE ANALYSIS ===" -ForegroundColor Cyan
 Write-Host "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Yellow
@@ -37,7 +37,7 @@ $report = @"
 
 **Generated**: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  
 **Analysis Period**: Last $DaysToAnalyze days  
-**Database**: GrandeTradingData.db
+**Database**: Data/GrandeTradingData.db
 
 ---
 
