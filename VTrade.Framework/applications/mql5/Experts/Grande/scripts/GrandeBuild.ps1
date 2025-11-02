@@ -53,10 +53,10 @@ function Build-GrandeComponent {
     if ($RunTests) { Write-Host "Mode: Build + Test" -ForegroundColor Yellow }
     elseif ($TestOnly) { Write-Host "Mode: Test Only" -ForegroundColor Yellow }
     elseif ($IndicatorOnly) { Write-Host "Mode: Indicator Only" -ForegroundColor Yellow }
-    else { Write-Host "Mode: Build Only" -ForegroundColor White }
+    else {     Write-Host "Mode: Build Only" -ForegroundColor White }
     
-    # Get current script directory as source directory
-    $sourceDir = $PSScriptRoot
+    # Get Grande root directory (parent of scripts directory)
+    $sourceDir = Split-Path $PSScriptRoot -Parent
     $buildDir = Join-Path $sourceDir "Build"
     
     # Get MT5 paths dynamically
@@ -88,19 +88,19 @@ function Build-GrandeComponent {
     $components = @{
         "GrandeTradingSystem" = @{
             MainFile = "GrandeTradingSystem.mq5"
-            Dependencies = @("GrandeMarketRegimeDetector.mqh", "GrandeKeyLevelDetector.mqh")
+            Dependencies = @("Include\GrandeMarketRegimeDetector.mqh", "Include\GrandeKeyLevelDetector.mqh", "Include\GrandeMT5CalendarReader.mqh", "Include\GrandeIntelligentReporter.mqh", "Include\GrandeDatabaseManager.mqh")
         }
         "GrandeMarketRegimeDetector" = @{
-            MainFile = "GrandeMarketRegimeDetector.mqh"
+            MainFile = "Include\GrandeMarketRegimeDetector.mqh"
             Dependencies = @()
         }
         "GrandeKeyLevelDetector" = @{
-            MainFile = "GrandeKeyLevelDetector.mqh"
+            MainFile = "Include\GrandeKeyLevelDetector.mqh"
             Dependencies = @()
         }
         "GrandeMonitorIndicator" = @{
             MainFile = "GrandeMonitorIndicator.mq5"
-            Dependencies = @("GrandeMarketRegimeDetector.mqh", "GrandeKeyLevelDetector.mqh", "GrandeMultiTimeframeAnalyzer.mqh")
+            Dependencies = @("Include\GrandeMarketRegimeDetector.mqh", "Include\GrandeKeyLevelDetector.mqh", "Include\GrandeMultiTimeframeAnalyzer.mqh", "Include\GrandeMT5CalendarReader.mqh", "Include\GrandeDatabaseManager.mqh")
         }
     }
     
@@ -158,8 +158,9 @@ function Build-SingleComponent {
     }
     
     $mainFile = $component.MainFile
-    if (-not (Test-Path $mainFile)) {
-        Write-Host "Error: Main file $mainFile not found!" -ForegroundColor Red
+    $mainFileFullPath = Join-Path $sourceDir $mainFile
+    if (-not (Test-Path $mainFileFullPath)) {
+        Write-Host "Error: Main file $mainFileFullPath not found!" -ForegroundColor Red
         return
     }
     
@@ -169,18 +170,19 @@ function Build-SingleComponent {
     }
     
     # Copy main file
-    $destMainFile = Join-Path $componentBuildDir $mainFile
-    Copy-Item -Path $mainFile -Destination $destMainFile -Force
+    $destMainFile = Join-Path $componentBuildDir (Split-Path $mainFile -Leaf)
+    Copy-Item -Path $mainFileFullPath -Destination $destMainFile -Force
     Write-Host "Copied: $mainFile" -ForegroundColor Green
     
     # Copy dependencies
     foreach ($dependency in $component.Dependencies) {
-        if (Test-Path $dependency) {
-            $destDepFile = Join-Path $componentBuildDir $dependency
-            Copy-Item -Path $dependency -Destination $destDepFile -Force
+        $depSourcePath = Join-Path $sourceDir $dependency
+        if (Test-Path $depSourcePath) {
+            $destDepFile = Join-Path $componentBuildDir (Split-Path $dependency -Leaf)
+            Copy-Item -Path $depSourcePath -Destination $destDepFile -Force
             Write-Host "Copied dependency: $dependency" -ForegroundColor Green
         } else {
-            Write-Host "Warning: Dependency $dependency not found" -ForegroundColor Yellow
+            Write-Host "Warning: Dependency $depSourcePath not found" -ForegroundColor Yellow
         }
     }
     
@@ -196,7 +198,7 @@ function Build-SingleComponent {
         try {
             # Run MetaEditor with log file
             $process = Start-Process "C:\Program Files\FOREX.com US\MetaEditor64.exe" `
-                -ArgumentList "/compile:`"$mainFile`"", "/log:`"$logFile`"" `
+                -ArgumentList "/compile:`"$mainFileFullPath`"", "/log:`"$logFile`"" `
                 -NoNewWindow -PassThru -Wait
             
             # Read and display the log content
@@ -217,18 +219,19 @@ function Build-SingleComponent {
                         Write-Host "Compilation successful!" -ForegroundColor Green
                         
                         # Deploy .ex5 file to MT5
-                        $ex5File = $mainFile -replace "\.mq5$", ".ex5"
+                        $ex5FileName = (Split-Path $mainFile -Leaf) -replace "\.mq5$", ".ex5"
+                        $ex5File = Join-Path $sourceDir $ex5FileName
                         if (Test-Path $ex5File) {
                             # Determine target directory for .ex5 file
                             $isIndicator = $mainFile -like "*.mq5" -and $Name -eq "GrandeMonitorIndicator"
                             $targetDir = if ($isIndicator) { $Mt5IndicatorsDir } else { $Mt5ExpertsDir }
                             $dirType = if ($isIndicator) { "Indicators" } else { "Experts" }
                             
-                            $mt5Ex5File = Join-Path $targetDir $ex5File
+                            $mt5Ex5File = Join-Path $targetDir $ex5FileName
                             Copy-Item -Path $ex5File -Destination $mt5Ex5File -Force
-                            Write-Host "Deployed: $ex5File to MT5 $dirType" -ForegroundColor Green
+                            Write-Host "Deployed: $ex5FileName to MT5 $dirType" -ForegroundColor Green
                         } else {
-                            Write-Host "Warning: Compiled .ex5 file not found" -ForegroundColor Yellow
+                            Write-Host "Warning: Compiled .ex5 file not found at $ex5File" -ForegroundColor Yellow
                         }
                     } else {
                         Write-Host "Compilation failed - Unable to determine status" -ForegroundColor Red
@@ -262,19 +265,34 @@ function Build-SingleComponent {
     }
     
     # Copy main file to appropriate MT5 directory
-    $mt5MainFile = Join-Path $targetDir $mainFile
-    Copy-Item -Path $mainFile -Destination $mt5MainFile -Force
+    $mainFileName = Split-Path $mainFile -Leaf
+    $mt5MainFile = Join-Path $targetDir $mainFileName
+    Copy-Item -Path $mainFileFullPath -Destination $mt5MainFile -Force
     Write-Host "Deployed: $mainFile to MT5 $dirType at $mt5MainFile" -ForegroundColor Green
     
     # Copy dependencies to the same directory as the main file
     Write-Host "Deploying dependencies to $targetDir..." -ForegroundColor Yellow
     foreach ($dependency in $component.Dependencies) {
-        if (Test-Path $dependency) {
-            $mt5DepFile = Join-Path $targetDir $dependency
-            Copy-Item -Path $dependency -Destination $mt5DepFile -Force
+        $depSourcePath = Join-Path $sourceDir $dependency
+        if (Test-Path $depSourcePath) {
+            # Create subdirectory if needed (e.g., Include/)
+            $depFileName = Split-Path $dependency -Leaf
+            $depSubDir = Split-Path $dependency -Parent
+            
+            if ($depSubDir) {
+                $mt5DepDir = Join-Path $targetDir $depSubDir
+                if (-not (Test-Path $mt5DepDir)) {
+                    New-Item -ItemType Directory -Path $mt5DepDir -Force | Out-Null
+                }
+                $mt5DepFile = Join-Path $mt5DepDir $depFileName
+            } else {
+                $mt5DepFile = Join-Path $targetDir $depFileName
+            }
+            
+            Copy-Item -Path $depSourcePath -Destination $mt5DepFile -Force
             Write-Host "Deployed dependency: $dependency to MT5 $dirType at $mt5DepFile" -ForegroundColor Green
         } else {
-            Write-Host "Warning: Dependency not found: $dependency" -ForegroundColor Yellow
+            Write-Host "Warning: Dependency not found: $depSourcePath" -ForegroundColor Yellow
         }
     }
     
@@ -328,11 +346,19 @@ function Build-SingleComponent {
     # Check dependencies
     $allDepsDeployed = $true
     foreach ($dependency in $component.Dependencies) {
-        $mt5DepFile = Join-Path $targetDir $dependency
+        $depFileName = Split-Path $dependency -Leaf
+        $depSubDir = Split-Path $dependency -Parent
+        
+        if ($depSubDir) {
+            $mt5DepFile = Join-Path $targetDir $dependency
+        } else {
+            $mt5DepFile = Join-Path $targetDir $depFileName
+        }
+        
         if (Test-Path $mt5DepFile) {
             Write-Host "Dependency verified: $dependency" -ForegroundColor Green
         } else {
-            Write-Host "Dependency NOT found: $dependency" -ForegroundColor Red
+            Write-Host "Dependency NOT found: $mt5DepFile" -ForegroundColor Red
             $allDepsDeployed = $false
         }
     }

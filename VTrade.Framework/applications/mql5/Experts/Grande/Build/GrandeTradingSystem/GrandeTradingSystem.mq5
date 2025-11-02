@@ -126,7 +126,7 @@ input int    InpStochD = 3;                      // Stochastic %D
 
 input group "=== Database Settings ==="
 input bool   InpEnableDatabase = true;          // Enable Database Logging
-input string InpDatabasePath = "GrandeTradingData.db"; // Database File Path
+input string InpDatabasePath = "Data/GrandeTradingData.db"; // Database File Path
 input bool   InpDatabaseDebug = false;           // Enable Database Debug Prints
 input int    InpDataCollectionInterval = 60;     // Data Collection Interval (seconds)
 input int    InpFinBERTAnalysisInterval = 300;   // FinBERT Analysis Interval (seconds)
