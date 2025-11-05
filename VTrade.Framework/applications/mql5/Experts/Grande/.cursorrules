@@ -1,0 +1,166 @@
+# AI-Driven Software Development Principles
+
+## Core Principles for AI Maintainability
+
+### 1. Explicit Context Over Implicit Knowledge
+
+- Every file should be self-contained with clear purpose statements
+- Include header comments explaining: what the file does, why it exists, and how it fits into the system
+- Document assumptions and preconditions at the function/class level
+- Avoid relying on "obvious" context that may not be obvious to AI analysis
+
+### 2. Consistent Naming Conventions
+
+- Use descriptive, unambiguous names that convey intent
+- Prefix related components consistently (e.g., Grande* for this system)
+- Avoid abbreviations unless they are domain-standard (e.g., MTF for MultiTimeframe)
+- Name files to match their primary class/function name
+
+### 3. Single Responsibility Principle
+
+- Each file should have one clear purpose
+- Each function should perform one logical operation
+- Break complex operations into smaller, named steps
+- Avoid "god classes" that handle multiple unrelated concerns
+
+### 4. Layered Architecture with Clear Boundaries
+
+- Separate concerns: data access, business logic, presentation
+- Define clear interfaces between layers
+- Document data flow direction explicitly
+- Keep dependencies unidirectional where possible
+
+### 5. Comprehensive Documentation
+
+- Every public function requires a doc comment explaining:
+  - Purpose and behavior
+  - Parameter meanings and constraints
+  - Return value description
+  - Side effects and state changes
+  - Error conditions and handling
+- Include usage examples for complex functions
+- Document "why" decisions, not just "what" the code does
+
+### 6. Explicit Error Handling
+
+- Never silently fail or ignore errors
+- Use descriptive error messages that include context
+- Document error conditions in function headers
+- Return error codes or status values consistently
+- Log errors with sufficient context for diagnosis
+
+### 7. Configuration Over Hard-Coding
+
+- Extract magic numbers to named constants
+- Group related configuration in dedicated sections
+- Document the impact of configuration changes
+- Use clear naming for configuration parameters
+
+### 8. Dependency Clarity
+
+- List all includes/imports at file top
+- Document external dependencies (libraries, services, files)
+- Make inter-module dependencies explicit
+- Avoid circular dependencies
+
+### 9. Consistent Code Patterns
+
+- Use the same pattern for similar operations
+- Maintain consistent indentation and formatting
+- Follow established conventions within the codebase
+- Document pattern deviations with explanations
+
+### 10. State Management Transparency
+
+- Clearly mark stateful vs stateless components
+- Document state initialization and lifecycle
+- Make state mutations explicit and traceable
+- Avoid hidden global state
+
+### 11. Test-Friendly Design
+
+- Write functions that can be tested in isolation
+- Minimize side effects in business logic
+- Separate I/O operations from computation
+- Provide test data examples in documentation
+
+### 12. Change History and Rationale
+
+- Document significant architectural decisions
+- Maintain a change log for major modifications
+- Include issue/ticket references where applicable
+- Explain trade-offs in design comments
+
+## MQL5-Specific Guidelines
+
+### File Organization
+
+- Main EA files (.mq5) in root directory
+- Reusable components (.mqh) in Include/ directory
+- Build outputs in Build/ directory
+- Documentation in docs/ directory
+- Scripts in scripts/ directory
+- Data files in Data/ directory
+
+### Class Structure
+
+- One primary class per .mqh file
+- Use #property directives for EA metadata
+- Initialize all member variables explicitly
+- Implement OnInit(), OnDeinit(), OnTick() with clear purposes
+
+### Trading Logic
+
+- Separate signal generation from order execution
+- Document trading rules and conditions explicitly
+- Include risk management parameters with explanations
+- Log all trading decisions with reasoning
+
+### Database Operations
+
+- Centralize database access in manager classes
+- Document schema dependencies
+- Include SQL queries in comments for clarity
+- Handle connection failures gracefully
+
+### Indicator Integration
+
+- Document indicator parameters and meanings
+- Validate indicator handles before use
+- Clean up indicator resources in OnDeinit()
+- Cache indicator values appropriately
+
+## Context7 Integration
+
+- Always consult Context7 before implementing new MQL5/MT5 features
+- Reference Context7 documentation for uncertain or risky decisions
+- Document any Context7-derived patterns or practices
+
+## AI-Assisted Development Workflow
+
+1. Before modifying code, read related files to understand context
+2. Document changes in commit messages with clear rationale
+3. Update related documentation when code changes
+4. Verify that changes maintain consistency with existing patterns
+5. Add TODO comments for incomplete or temporary solutions
+6. Reference related files in comments for cross-cutting concerns
+
+## Project-Specific Notes
+
+- This is the Grande Trading System, an MQL5 Expert Advisor
+- Core components: Key Level Detection, Market Regime Analysis, Triangle Patterns
+- Database: SQLite for trade history and analysis
+- External integrations: MT5 Calendar, FinBERT sentiment analysis
+- Build system: PowerShell scripts in scripts/ directory
+
+## Code Review Checklist for AI
+
+- [ ] Does this code have a clear, single purpose?
+- [ ] Are all functions documented with their contracts?
+- [ ] Are magic numbers extracted to named constants?
+- [ ] Are error conditions handled and logged?
+- [ ] Does this follow existing patterns in the codebase?
+- [ ] Are dependencies explicit and documented?
+- [ ] Will another AI be able to understand this in 6 months?
+- [ ] Are there sufficient comments explaining "why" not just "what"?
+
