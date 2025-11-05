@@ -108,11 +108,7 @@ foreach ($logFile in $logFiles) {
     foreach ($line in $content) {
         if ($line -match $tradePattern) {
             $totalTrades++
-            $timestamp = if ($line -match '^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})') {
-                [datetime]::ParseExact($matches[1], 'yyyy.MM.dd HH:mm:ss', $null).ToString('yyyy-MM-dd HH:mm:ss')
-            } else { Get-Date -Format 'yyyy-MM-dd HH:mm:ss' }
-            
-            $symbol = if ($line -match '\(([A-Z]+!),') { $matches[1] } else { 'UNKNOWN' }
+            # Save trade pattern matches BEFORE running other regex operations
             $signalType = $matches[1]
             $direction = $matches[2]
             $entryPrice = [double]$matches[3]
@@ -120,6 +116,19 @@ foreach ($logFile in $logFiles) {
             $takeProfit = [double]$matches[5]
             $lotSize = [double]$matches[6]
             $riskReward = [double]$matches[7]
+            
+            # Now extract timestamp and symbol (these will overwrite $matches)
+            $timestamp = if ($line -match '^.+(\d{2}:\d{2}:\d{2}\.\d+)') {
+                $timeStr = $matches[1]
+                if ($line -match '^(\d{4}\.\d{2}\.\d{2})') {
+                    $dateStr = $matches[1]
+                    [datetime]::ParseExact("$dateStr $timeStr", 'yyyy.MM.dd HH:mm:ss.fff', $null).ToString('yyyy-MM-dd HH:mm:ss')
+                } else {
+                    Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                }
+            } else { Get-Date -Format 'yyyy-MM-dd HH:mm:ss' }
+            
+            $symbol = if ($line -match '\(([A-Z]+!),') { $matches[1] } else { 'UNKNOWN' }
             
             $checkQuery = "SELECT COUNT(*) as count FROM trades WHERE timestamp = '$timestamp' AND symbol = '$symbol' AND entry_price = $entryPrice;"
             $existing = Invoke-SqliteQuery -DataSource $DatabasePath -Query $checkQuery
@@ -143,6 +152,7 @@ Write-Host "[OK] Found $totalTrades trades, inserted $tradesInserted" -Foregroun
 Write-Host "`nMatching outcomes..." -ForegroundColor Cyan
 $outcomeUpdates = 0
 
+# Method 1: Look for EA log messages (preferred)
 foreach ($logFile in $logFiles) {
     $content = Get-Content $logFile.FullName -ErrorAction SilentlyContinue
     foreach ($line in $content) {
@@ -164,6 +174,57 @@ foreach ($logFile in $logFiles) {
                 Invoke-SqliteQuery -DataSource $DatabasePath -Query $updateSQL | Out-Null
                 $outcomeUpdates++
             } catch {}
+        }
+    }
+}
+
+# Method 2: Parse Terminal deal logs for closed positions
+Write-Host "  Parsing Terminal deal logs..." -ForegroundColor Gray
+foreach ($logFile in $logFiles) {
+    $content = Get-Content $logFile.FullName -ErrorAction SilentlyContinue
+    foreach ($line in $content) {
+        # Match Terminal deal messages: deal #13620831 buy 0.02 GBPUSD! at 1.30394 done
+        if ($line -match "deal #\d+\s+(buy|sell)\s+([\d.]+)\s+([A-Z]+!)\s+at\s+([\d.]+)\s+done") {
+            $closeDirection = $matches[1]
+            $closeAmount = [double]$matches[2]
+            $symbol = $matches[3]
+            $closePrice = [double]$matches[4]
+            
+            $timestamp = if ($line -match '^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})') {
+                [datetime]::ParseExact($matches[1], 'yyyy.MM.dd HH:mm:ss', $null).ToString('yyyy-MM-dd HH:mm:ss')
+            } else { continue }
+            
+            # Find matching pending trade
+            $tradeQuery = "SELECT trade_id, direction, entry_price, stop_loss, take_profit, lot_size FROM trades WHERE symbol = '$symbol' AND outcome = 'PENDING' AND timestamp < '$timestamp' ORDER BY ABS(lot_size - $closeAmount) ASC, timestamp DESC LIMIT 1;"
+            $pendingTrade = Invoke-SqliteQuery -DataSource $DatabasePath -Query $tradeQuery
+            
+            if ($pendingTrade -and $pendingTrade.trade_id) {
+                # Determine if it was TP or SL by comparing close price
+                $outcome = "MANUAL_CLOSE"
+                $tolerance = 0.0005 # 5 pip tolerance
+                
+                if ([Math]::Abs($closePrice - $pendingTrade.take_profit) -lt $tolerance) {
+                    $outcome = "TP_HIT"
+                } elseif ([Math]::Abs($closePrice - $pendingTrade.stop_loss) -lt $tolerance) {
+                    $outcome = "SL_HIT"
+                } else {
+                    # Determine by profit/loss direction
+                    if ($pendingTrade.direction -eq "BUY") {
+                        $outcome = if ($closePrice -gt $pendingTrade.entry_price) { "TP_HIT" } else { "SL_HIT" }
+                    } else {
+                        $outcome = if ($closePrice -lt $pendingTrade.entry_price) { "TP_HIT" } else { "SL_HIT" }
+                    }
+                }
+                
+                try {
+                    $updateSQL = "UPDATE trades SET outcome = '$outcome', close_price = $closePrice, close_timestamp = '$timestamp' WHERE trade_id = $($pendingTrade.trade_id);"
+                    Invoke-SqliteQuery -DataSource $DatabasePath -Query $updateSQL | Out-Null
+                    $outcomeUpdates++
+                    Write-Host "    Matched $symbol trade closed at $closePrice -> $outcome" -ForegroundColor DarkGray
+                } catch {
+                    Write-Host "    Error updating trade: $($_.Exception.Message)" -ForegroundColor Red
+                }
+            }
         }
     }
 }

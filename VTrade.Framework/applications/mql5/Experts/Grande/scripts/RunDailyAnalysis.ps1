@@ -12,7 +12,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $reportDate = Get-Date -Format "yyyyMMdd"
-$reportPath = "..\docs\DAILY_ANALYSIS_REPORT_$reportDate.md"
+$scriptRoot = Split-Path -Parent $PSCommandPath
+$workspaceRoot = Split-Path -Parent $scriptRoot
+$reportPath = Join-Path $workspaceRoot "docs\DAILY_ANALYSIS_REPORT_$reportDate.md"
 
 Write-Host "=== GRANDE DAILY PERFORMANCE ANALYSIS ===" -ForegroundColor Cyan
 Write-Host "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Yellow
@@ -46,7 +48,7 @@ $report = @"
 # 1. Overall Performance Summary
 Write-Host "  Overall performance..." -ForegroundColor Gray
 
-$overallQuery = "SELECT COUNT(*) as total_trades, SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) as tp_hits, SUM(CASE WHEN outcome = 'SL_HIT' THEN 1 ELSE 0 END) as sl_hits, ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN outcome IN ('TP_HIT', 'SL_HIT') THEN 1 ELSE 0 END), 0), 2) as win_rate, ROUND(SUM(CASE WHEN outcome = 'TP_HIT' THEN pips_gained ELSE 0 END), 2) as total_win_pips, ROUND(SUM(CASE WHEN outcome = 'SL_HIT' THEN ABS(pips_gained) ELSE 0 END), 2) as total_loss_pips, ROUND(AVG(CASE WHEN outcome = 'TP_HIT' THEN pips_gained END), 2) as avg_win_pips, ROUND(AVG(CASE WHEN outcome = 'SL_HIT' THEN ABS(pips_gained) END), 2) as avg_loss_pips FROM trades WHERE timestamp >= datetime('now', '-$DaysToAnalyze days');"
+$overallQuery = "SELECT COUNT(*) as total_trades, SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) as tp_hits, SUM(CASE WHEN outcome = 'SL_HIT' THEN 1 ELSE 0 END) as sl_hits, SUM(CASE WHEN pips_gained > 0 THEN 1 ELSE 0 END) as winning_trades, SUM(CASE WHEN pips_gained < 0 THEN 1 ELSE 0 END) as losing_trades, ROUND(100.0 * SUM(CASE WHEN pips_gained > 0 THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN outcome IN ('TP_HIT', 'SL_HIT') THEN 1 ELSE 0 END), 0), 2) as win_rate, ROUND(SUM(CASE WHEN pips_gained > 0 THEN pips_gained ELSE 0 END), 2) as total_win_pips, ROUND(SUM(CASE WHEN pips_gained < 0 THEN ABS(pips_gained) ELSE 0 END), 2) as total_loss_pips, ROUND(AVG(CASE WHEN pips_gained > 0 THEN pips_gained END), 2) as avg_win_pips, ROUND(AVG(CASE WHEN pips_gained < 0 THEN ABS(pips_gained) END), 2) as avg_loss_pips FROM trades WHERE timestamp >= datetime('now', '-$DaysToAnalyze days');"
 
 $overall = Invoke-SqliteQuery -DataSource $DatabasePath -Query $overallQuery
 
@@ -59,9 +61,12 @@ $report += @"
 |--------|-------|
 | Total Trades | $($overall.total_trades) |
 | Closed Trades | $closedTrades |
+| Winning Trades | $(if($overall.winning_trades) { $overall.winning_trades } else { '0' }) |
+| Losing Trades | $(if($overall.losing_trades) { $losing_trades } else { '0' }) |
 | TP Hits | $($overall.tp_hits) |
-| SL Hits | $($overall.sl_hits) |
+| SL Hits | $($overall.sl_hits) (includes profitable trailing stops) |
 | Win Rate | $(if($closedTrades -gt 0) { $overall.win_rate } else { 'N/A' })% |
+| Total Pips | $(if($overall.total_win_pips) { [math]::Round($overall.total_win_pips - $overall.total_loss_pips, 2) } else { '0' }) |
 | Avg Win | $(if($overall.avg_win_pips) { $overall.avg_win_pips } else { '0' }) pips |
 | Avg Loss | $(if($overall.avg_loss_pips) { $overall.avg_loss_pips } else { '0' }) pips |
 | Profit Factor | $(if($overall.total_loss_pips -gt 0) { [math]::Round($overall.total_win_pips / $overall.total_loss_pips, 2) } else { 'N/A' }) |
@@ -78,7 +83,7 @@ if ($closedTrades -gt 0) {
 # 2. Signal Type Performance
 Write-Host "  Analyzing signal types..." -ForegroundColor Gray
 
-$signalQuery = "SELECT signal_type, COUNT(*) as trades, SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) as tp_hits, SUM(CASE WHEN outcome = 'SL_HIT' THEN 1 ELSE 0 END) as sl_hits, ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN outcome IN ('TP_HIT', 'SL_HIT') THEN 1 ELSE 0 END), 0), 2) as win_rate, ROUND(AVG(pips_gained), 2) as avg_pips FROM trades WHERE timestamp >= datetime('now', '-$DaysToAnalyze days') GROUP BY signal_type ORDER BY trades DESC;"
+$signalQuery = "SELECT signal_type, COUNT(*) as trades, SUM(CASE WHEN pips_gained > 0 THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN pips_gained < 0 THEN 1 ELSE 0 END) as losses, ROUND(100.0 * SUM(CASE WHEN pips_gained > 0 THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN outcome IN ('TP_HIT', 'SL_HIT') THEN 1 ELSE 0 END), 0), 2) as win_rate, ROUND(SUM(pips_gained), 2) as total_pips FROM trades WHERE timestamp >= datetime('now', '-$DaysToAnalyze days') GROUP BY signal_type ORDER BY trades DESC;"
 
 $signalPerf = Invoke-SqliteQuery -DataSource $DatabasePath -Query $signalQuery
 
@@ -86,15 +91,17 @@ if ($signalPerf.Count -gt 0) {
     $report += @"
 ## Signal Type Performance
 
-| Signal Type | Trades | TP | SL | Win Rate | Avg Pips |
-|-------------|--------|----|----|----------|----------|
+| Signal Type | Trades | Wins | Losses | Win Rate | Total Pips |
+|-------------|--------|------|--------|----------|------------|
 "@
 
     foreach ($sig in $signalPerf) {
-        $closedForSignal = $sig.tp_hits + $sig.sl_hits
+        $closedForSignal = $sig.wins + $sig.losses
         $winRateDisplay = if ($closedForSignal -gt 0) { "$($sig.win_rate)%" } else { "N/A" }
-        $avgPipsDisplay = if ($sig.avg_pips) { $sig.avg_pips } else { "0" }
-        $report += "| $($sig.signal_type) | $($sig.trades) | $($sig.tp_hits) | $($sig.sl_hits) | $winRateDisplay | $avgPipsDisplay |`n"
+        $totalPipsDisplay = if ($sig.total_pips) { $sig.total_pips } else { "0" }
+        $winsDisplay = if ($sig.wins) { $sig.wins } else { "0" }
+        $lossesDisplay = if ($sig.losses) { $sig.losses } else { "0" }
+        $report += "| $($sig.signal_type) | $($sig.trades) | $winsDisplay | $lossesDisplay | $winRateDisplay | $totalPipsDisplay |`n"
     }
     
     $report += "`n"
@@ -103,7 +110,7 @@ if ($signalPerf.Count -gt 0) {
 # 3. Symbol Performance
 Write-Host "  Analyzing symbols..." -ForegroundColor Gray
 
-$symbolQuery = "SELECT symbol, COUNT(*) as trades, SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) as tp_hits, SUM(CASE WHEN outcome = 'SL_HIT' THEN 1 ELSE 0 END) as sl_hits, ROUND(100.0 * SUM(CASE WHEN outcome = 'TP_HIT' THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN outcome IN ('TP_HIT', 'SL_HIT') THEN 1 ELSE 0 END), 0), 2) as win_rate FROM trades WHERE timestamp >= datetime('now', '-$DaysToAnalyze days') GROUP BY symbol ORDER BY trades DESC;"
+$symbolQuery = "SELECT symbol, COUNT(*) as trades, SUM(CASE WHEN pips_gained > 0 THEN 1 ELSE 0 END) as wins, SUM(CASE WHEN pips_gained < 0 THEN 1 ELSE 0 END) as losses, ROUND(100.0 * SUM(CASE WHEN pips_gained > 0 THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN outcome IN ('TP_HIT', 'SL_HIT') THEN 1 ELSE 0 END), 0), 2) as win_rate, ROUND(SUM(pips_gained), 2) as total_pips FROM trades WHERE timestamp >= datetime('now', '-$DaysToAnalyze days') GROUP BY symbol ORDER BY trades DESC;"
 
 $symbolPerf = Invoke-SqliteQuery -DataSource $DatabasePath -Query $symbolQuery
 
@@ -111,14 +118,17 @@ if ($symbolPerf.Count -gt 0) {
     $report += @"
 ## Symbol Performance
 
-| Symbol | Trades | TP | SL | Win Rate |
-|--------|--------|----|----|----------|
+| Symbol | Trades | Wins | Losses | Win Rate | Total Pips |
+|--------|--------|------|--------|----------|------------|
 "@
 
     foreach ($sym in $symbolPerf) {
-        $closedForSymbol = $sym.tp_hits + $sym.sl_hits
+        $closedForSymbol = $sym.wins + $sym.losses
         $winRateDisplay = if ($closedForSymbol -gt 0) { "$($sym.win_rate)%" } else { "N/A" }
-        $report += "| $($sym.symbol) | $($sym.trades) | $($sym.tp_hits) | $($sym.sl_hits) | $winRateDisplay |`n"
+        $totalPipsDisplay = if ($sym.total_pips) { $sym.total_pips } else { "0" }
+        $winsDisplay = if ($sym.wins) { $sym.wins } else { "0" }
+        $lossesDisplay = if ($sym.losses) { $sym.losses } else { "0" }
+        $report += "| $($sym.symbol) | $($sym.trades) | $winsDisplay | $lossesDisplay | $winRateDisplay | $totalPipsDisplay |`n"
     }
     
     $report += "`n"
