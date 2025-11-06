@@ -30,6 +30,9 @@
 
 #include "Include/GrandeMarketRegimeDetector.mqh"
 #include "Include/GrandeKeyLevelDetector.mqh"
+#include "Include/GrandeCandleAnalyzer.mqh"
+#include "Include/GrandeFibonacciCalculator.mqh"
+#include "Include/GrandeConfluenceDetector.mqh"
 #include "mcp/analyze_sentiment_server/GrandeNewsSentimentIntegration.mqh"
 #include "Include/GrandeMT5CalendarReader.mqh"
 #include "Include/GrandeIntelligentReporter.mqh"
@@ -114,6 +117,33 @@ input double InpTrendingCooloffMultiplier = 0.7; // Multiplier for strong trends
 input double InpRangingCooloffMultiplier = 1.3;  // Multiplier for ranging markets (longer wait)
 input bool   InpEnableCooloffStatistics = true;  // Track cool-off effectiveness statistics
 input int    InpStatisticsReportMinutes = 60;    // Minutes between statistics reports
+
+input group "=== Limit Order Settings ==="
+input bool   InpUseLimitOrders = true;           // Use limit orders instead of market orders
+input int    InpMaxLimitDistancePips = 30;       // Max distance for limit order placement (pips)
+input int    InpLimitOrderExpirationHours = 4;   // Limit order expiration time (hours)
+input bool   InpCancelStaleOrders = true;        // Cancel orders if price moves too far away
+input double InpStaleOrderDistancePips = 50.0;   // Distance to consider order "stale" (pips)
+
+input group "=== Technical Validation Settings ==="
+input bool   InpEnableTechnicalValidation = true;  // Require technical confirmation before entry
+input double InpMaxWickToBodyRatio = 2.0;          // Max acceptable wick-to-body ratio
+input int    InpMinConfluenceScore = 2;            // Minimum confluence factors required
+input bool   InpRequireFibConfluence = true;       // Require Fibonacci level nearby
+input bool   InpRequireKeyLevelConfluence = true;  // Require key level nearby
+input bool   InpRejectExcessiveWicks = true;       // Reject entries with excessive wicks
+input bool   InpRejectDojiCandles = true;          // Reject doji candles (indecision)
+
+input group "=== Fibonacci Settings ==="
+input int    InpFibLookbackBars = 100;            // Bars to search for swing high/low
+input double InpFibProximityPips = 10.0;          // Pips to consider "at" Fibonacci level
+input int    InpFibMinSwingBars = 5;              // Minimum bars between swing points
+input bool   InpPreferGoldenRatio = true;         // Prefer 61.8% level for entries
+
+input group "=== Confluence Settings ==="
+input double InpConfluenceProximityPips = 10.0;   // Pips to group factors into zones
+input int    InpMaxConfluenceZones = 3;           // Max confluence zones to analyze
+input bool   InpLogConfluenceAnalysis = true;     // Log confluence zone analysis
 
 input group "=== Signal Settings ==="
 input int    InpEMA50Period = 76;                // 76 EMA Period (optimal for H4)
@@ -206,6 +236,9 @@ input ENUM_TIMEFRAMES InpCalendarRunTimeframe = PERIOD_H1; // Timeframe to run c
 //+------------------------------------------------------------------+
 CGrandeMarketRegimeDetector*  g_regimeDetector;
 CGrandeKeyLevelDetector*      g_keyLevelDetector;
+CGrandeCandleAnalyzer*        g_candleAnalyzer;
+CGrandeFibonacciCalculator*   g_fibCalculator;
+CGrandeConfluenceDetector*    g_confluenceDetector;
 CAdvancedTrendFollower*       g_trendFollower;
 CGrandeRiskManager*           g_riskManager;
 CGrandeIntelligentReporter*   g_reporter;
@@ -456,6 +489,61 @@ int OnInit()
         g_keyLevelDetector = NULL;
         return INIT_FAILED;
     }
+    
+    // Create candle analyzer
+    g_candleAnalyzer = new CGrandeCandleAnalyzer(_Symbol, PERIOD_CURRENT);
+    if(g_candleAnalyzer == NULL)
+    {
+        Print("ERROR: Failed to create Candle Analyzer");
+        delete g_regimeDetector;
+        delete g_keyLevelDetector;
+        g_regimeDetector = NULL;
+        g_keyLevelDetector = NULL;
+        return INIT_FAILED;
+    }
+    g_candleAnalyzer.SetMinBodyPercentage(0.1);
+    g_candleAnalyzer.SetWickRatioThreshold(InpMaxWickToBodyRatio);
+    if(InpLogDebugInfo)
+        Print("[Grande] Candle Analyzer initialized");
+    
+    // Create Fibonacci calculator
+    g_fibCalculator = new CGrandeFibonacciCalculator(_Symbol, PERIOD_CURRENT);
+    if(g_fibCalculator == NULL)
+    {
+        Print("ERROR: Failed to create Fibonacci Calculator");
+        delete g_regimeDetector;
+        delete g_keyLevelDetector;
+        delete g_candleAnalyzer;
+        g_regimeDetector = NULL;
+        g_keyLevelDetector = NULL;
+        g_candleAnalyzer = NULL;
+        return INIT_FAILED;
+    }
+    g_fibCalculator.SetDefaultLookback(InpFibLookbackBars);
+    g_fibCalculator.SetMinSwingBars(InpFibMinSwingBars);
+    if(InpLogDebugInfo)
+        Print("[Grande] Fibonacci Calculator initialized");
+    
+    // Create confluence detector
+    g_confluenceDetector = new CGrandeConfluenceDetector(_Symbol, PERIOD_CURRENT);
+    if(g_confluenceDetector == NULL)
+    {
+        Print("ERROR: Failed to create Confluence Detector");
+        delete g_regimeDetector;
+        delete g_keyLevelDetector;
+        delete g_candleAnalyzer;
+        delete g_fibCalculator;
+        g_regimeDetector = NULL;
+        g_keyLevelDetector = NULL;
+        g_candleAnalyzer = NULL;
+        g_fibCalculator = NULL;
+        return INIT_FAILED;
+    }
+    g_confluenceDetector.SetProximityPips(InpConfluenceProximityPips);
+    g_confluenceDetector.SetMinConfluenceScore(InpMinConfluenceScore);
+    g_confluenceDetector.SetMaxZones(InpMaxConfluenceZones);
+    if(InpLogDebugInfo)
+        Print("[Grande] Confluence Detector initialized");
     
     // Create and initialize trend follower (if enabled)
     g_trendFollower = NULL;
@@ -713,6 +801,23 @@ void OnDeinit(const int reason)
         g_keyLevelDetector = NULL;
     }
     
+    if(g_candleAnalyzer != NULL)
+    {
+        delete g_candleAnalyzer;
+        g_candleAnalyzer = NULL;
+    }
+    
+    if(g_fibCalculator != NULL)
+    {
+        delete g_fibCalculator;
+        g_fibCalculator = NULL;
+    }
+    
+    if(g_confluenceDetector != NULL)
+    {
+        delete g_confluenceDetector;
+        g_confluenceDetector = NULL;
+    }
     
     if(g_trendFollower != NULL)
     {
@@ -767,6 +872,66 @@ void OnTick()
     }
     
     // All periodic updates are handled in OnTimer to prevent per-tick thrashing
+}
+
+//+------------------------------------------------------------------+
+//| Manage pending limit orders                                      |
+//+------------------------------------------------------------------+
+void ManagePendingOrders()
+{
+    double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double maxStaleDistance = InpStaleOrderDistancePips * GetPipSize();
+    
+    for(int i = OrdersTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(ticket == 0) continue;
+        
+        // Check if order is ours
+        if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+        if(OrderGetInteger(ORDER_MAGIC) != InpMagicNumber) continue;
+        
+        ENUM_ORDER_TYPE orderType = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+        
+        // Only manage limit orders (not stop orders)
+        if(orderType != ORDER_TYPE_BUY_LIMIT && orderType != ORDER_TYPE_SELL_LIMIT)
+            continue;
+        
+        double orderPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+        double distance = MathAbs(currentPrice - orderPrice) / GetPipSize();
+        
+        bool shouldCancel = false;
+        string cancelReason = "";
+        
+        // Check if order has moved too far from current price
+        if(distance > InpStaleOrderDistancePips)
+        {
+            shouldCancel = true;
+            cancelReason = StringFormat("Price moved %.1f pips away (max: %.1f)", distance, InpStaleOrderDistancePips);
+        }
+        
+        // Check if order has expired (if not already handled by broker)
+        datetime expiration = (datetime)OrderGetInteger(ORDER_TIME_EXPIRATION);
+        if(expiration > 0 && TimeCurrent() >= expiration)
+        {
+            shouldCancel = true;
+            cancelReason = "Order expired";
+        }
+        
+        // Cancel stale orders
+        if(shouldCancel)
+        {
+            if(g_trade.OrderDelete(ticket))
+            {
+                Print(StringFormat("[ORDER-MGR] Cancelled limit order #%I64u: %s", ticket, cancelReason));
+            }
+            else
+            {
+                Print(StringFormat("[ORDER-MGR] Failed to cancel order #%I64u: %s (error: %d)", 
+                     ticket, cancelReason, GetLastError()));
+            }
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -1020,6 +1185,12 @@ void OnTimer()
             }
         }
         g_lastRiskUpdate = currentTime;
+    }
+    
+    // Manage pending limit orders (cancel stale, track fills)
+    if(InpUseLimitOrders && InpCancelStaleOrders)
+    {
+        ManagePendingOrders();
     }
     
     // Update intelligent position scaling range information
@@ -2668,20 +2839,111 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "
     }
     
     bool tradeResult = false;
-    if(bullish)
-        tradeResult = g_trade.Buy(lot, _Symbol, price, sl, tp, comment);
+    double limitPrice = price; // Default to current price
+    string orderTypeStr = "MARKET";
+    
+    // Use limit orders if enabled
+    if(InpUseLimitOrders && g_confluenceDetector != NULL)
+    {
+        // Prepare key levels for confluence analysis
+        double resistanceLevels[];
+        double supportLevels[];
+        int resCount = 0;
+        int supCount = 0;
+        
+        // Extract key levels from detector
+        if(g_keyLevelDetector != NULL)
+        {
+            int levelCount = g_keyLevelDetector.GetKeyLevelCount();
+            for(int i = 0; i < levelCount; i++)
+            {
+                SKeyLevel level;
+                if(g_keyLevelDetector.GetKeyLevel(i, level))
+                {
+                    if(level.isResistance)
+                    {
+                        ArrayResize(resistanceLevels, resCount + 1);
+                        resistanceLevels[resCount++] = level.price;
+                    }
+                    else
+                    {
+                        ArrayResize(supportLevels, supCount + 1);
+                        supportLevels[supCount++] = level.price;
+                    }
+                }
+            }
+            
+            // Add key levels to confluence detector
+            g_confluenceDetector.AddKeyLevelsToAnalysis(resistanceLevels, supportLevels);
+        }
+        
+        // Find best limit order price using confluence
+        limitPrice = g_confluenceDetector.GetBestLimitOrderPrice(bullish, price, InpMaxLimitDistancePips);
+        
+        if(limitPrice > 0 && MathAbs(limitPrice - price) / GetPipSize() <= InpMaxLimitDistancePips)
+        {
+            // Valid confluence zone found - use limit order
+            orderTypeStr = "LIMIT";
+            
+            // Adjust SL/TP based on limit price (not current market price)
+            sl = bullish ? limitPrice - MathAbs(price - sl) : limitPrice + MathAbs(price - sl);
+            tp = bullish ? limitPrice + MathAbs(tp - price) : limitPrice - MathAbs(tp - price);
+            
+            // Normalize stops
+            NormalizeStops(bullish, limitPrice, sl, tp);
+            
+            // Calculate expiration time
+            datetime expiration = TimeCurrent() + (InpLimitOrderExpirationHours * 3600);
+            
+            if(InpLogConfluenceAnalysis)
+            {
+                ConfluenceZone zone = g_confluenceDetector.GetBestConfluenceZone(bullish, price, InpMaxLimitDistancePips);
+                Print(logPrefix + "LIMIT ORDER CONFLUENCE ZONE:");
+                Print(logPrefix + "  Price: ", DoubleToString(limitPrice, _Digits));
+                Print(logPrefix + "  Score: ", zone.score);
+                Print(logPrefix + "  Factors: ", zone.factors);
+                Print(logPrefix + "  Distance: ", DoubleToString(zone.distanceFromPrice, 1), " pips");
+                Print(logPrefix + "  Expiration: ", TimeToString(expiration));
+            }
+            
+            // Place limit order
+            if(bullish)
+                tradeResult = g_trade.BuyLimit(lot, limitPrice, _Symbol, sl, tp, ORDER_TIME_SPECIFIED, expiration, comment);
+            else
+                tradeResult = g_trade.SellLimit(lot, limitPrice, _Symbol, sl, tp, ORDER_TIME_SPECIFIED, expiration, comment);
+        }
+        else
+        {
+            // No valid confluence zone - fall back to market order if allowed
+            if(InpLogConfluenceAnalysis)
+                Print(logPrefix + "⚠️ No valid confluence zone found - using market order");
+            
+            orderTypeStr = "MARKET";
+            if(bullish)
+                tradeResult = g_trade.Buy(lot, _Symbol, price, sl, tp, comment);
+            else
+                tradeResult = g_trade.Sell(lot, _Symbol, price, sl, tp, comment);
+        }
+    }
     else
-        tradeResult = g_trade.Sell(lot, _Symbol, price, sl, tp, comment);
+    {
+        // Limit orders disabled - use market orders
+        if(bullish)
+            tradeResult = g_trade.Buy(lot, _Symbol, price, sl, tp, comment);
+        else
+            tradeResult = g_trade.Sell(lot, _Symbol, price, sl, tp, comment);
+    }
     
     // Always-on concise summary for monitoring
-    Print(StringFormat("[TREND] %s %s @%s SL=%s TP=%s lot=%.2f rr=%.2f%s",
-                       (tradeResult?"FILLED":"FAILED"),
+    Print(StringFormat("[TREND] %s %s %s @%s SL=%s TP=%s lot=%.2f rr=%.2f%s",
+                       orderTypeStr,
+                       (tradeResult?"PLACED":"FAILED"),
                        bullish?"BUY":"SELL",
-                       DoubleToString(price, _Digits),
+                       DoubleToString(limitPrice, _Digits),
                        DoubleToString(sl, _Digits),
                        DoubleToString(tp, _Digits),
                        lot,
-                       (MathAbs(tp-price)/MathMax(1e-10, MathAbs(price-sl))),
+                       (MathAbs(tp-limitPrice)/MathMax(1e-10, MathAbs(limitPrice-sl))),
                        (sentimentSupports?" senti=YES":"")));
     
     // Log scaling decision for successful trades
@@ -2947,12 +3209,108 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
         return;
     }
     
-    // Place order (market order for momentum surge, stop order for normal breakout)
+    // Place order - use limit orders if enabled, otherwise use stop/market orders
     bool tradeResult = false;
-    if(strongMomentumSurge)
+    double limitPrice = breakoutLevel;
+    string orderTypeStr = strongMomentumSurge ? "MARKET" : "STOP";
+    bool isBuyDirection = strongestLevel.isResistance;
+    currentPrice = isBuyDirection ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    
+    if(InpUseLimitOrders && g_confluenceDetector != NULL && !strongMomentumSurge)
     {
-        // Momentum surge - place market order immediately
-        if(strongestLevel.isResistance)
+        // Prepare key levels for confluence analysis
+        double resistanceLevels[];
+        double supportLevels[];
+        int resCount = 0;
+        int supCount = 0;
+        
+        // Extract key levels from detector
+        if(g_keyLevelDetector != NULL)
+        {
+            int levelCount = g_keyLevelDetector.GetKeyLevelCount();
+            for(int i = 0; i < levelCount; i++)
+            {
+                SKeyLevel level;
+                if(g_keyLevelDetector.GetKeyLevel(i, level))
+                {
+                    if(level.isResistance)
+                    {
+                        ArrayResize(resistanceLevels, resCount + 1);
+                        resistanceLevels[resCount++] = level.price;
+                    }
+                    else
+                    {
+                        ArrayResize(supportLevels, supCount + 1);
+                        supportLevels[supCount++] = level.price;
+                    }
+                }
+            }
+            
+            g_confluenceDetector.AddKeyLevelsToAnalysis(resistanceLevels, supportLevels);
+        }
+        
+        // Find best limit order price using confluence
+        limitPrice = g_confluenceDetector.GetBestLimitOrderPrice(isBuyDirection, currentPrice, InpMaxLimitDistancePips);
+        
+        if(limitPrice > 0 && MathAbs(limitPrice - currentPrice) / GetPipSize() <= InpMaxLimitDistancePips)
+        {
+            // Valid confluence zone found - use limit order
+            orderTypeStr = "LIMIT";
+            
+            // Adjust SL/TP based on limit price
+            breakoutSL = isBuyDirection ? limitPrice - MathAbs(breakoutLevel - breakoutSL) : limitPrice + MathAbs(breakoutLevel - breakoutSL);
+            breakoutTP = isBuyDirection ? limitPrice + MathAbs(breakoutTP - breakoutLevel) : limitPrice - MathAbs(breakoutTP - breakoutLevel);
+            
+            // Normalize stops
+            NormalizeStops(isBuyDirection, limitPrice, breakoutSL, breakoutTP);
+            
+            // Calculate expiration time
+            datetime expiration = TimeCurrent() + (InpLimitOrderExpirationHours * 3600);
+            
+            if(InpLogConfluenceAnalysis)
+            {
+                ConfluenceZone zone = g_confluenceDetector.GetBestConfluenceZone(isBuyDirection, currentPrice, InpMaxLimitDistancePips);
+                Print("[BREAKOUT] LIMIT ORDER CONFLUENCE ZONE:");
+                Print("[BREAKOUT]   Price: ", DoubleToString(limitPrice, _Digits));
+                Print("[BREAKOUT]   Score: ", zone.score);
+                Print("[BREAKOUT]   Factors: ", zone.factors);
+                Print("[BREAKOUT]   Distance: ", DoubleToString(zone.distanceFromPrice, 1), " pips");
+            }
+            
+            // Place limit order
+            if(isBuyDirection)
+                tradeResult = g_trade.BuyLimit(NormalizeDouble(lot, 2), NormalizeDouble(limitPrice, _Digits), _Symbol, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), ORDER_TIME_SPECIFIED, expiration, comment);
+            else
+                tradeResult = g_trade.SellLimit(NormalizeDouble(lot, 2), NormalizeDouble(limitPrice, _Digits), _Symbol, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), ORDER_TIME_SPECIFIED, expiration, comment);
+            
+            if(tradeResult)
+                Print(StringFormat("[BREAKOUT] LIMIT ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
+            else
+                Print(StringFormat("[BREAKOUT] LIMIT ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
+        }
+        else
+        {
+            // No valid confluence - fall back to stop orders
+            orderTypeStr = "STOP";
+            if(InpLogConfluenceAnalysis)
+                Print("[BREAKOUT] ⚠️ No valid confluence zone - using stop order");
+            
+            if(isBuyDirection)
+                tradeResult = g_trade.BuyStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), _Symbol, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), ORDER_TIME_GTC, 0, comment);
+            else
+                tradeResult = g_trade.SellStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), _Symbol, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), ORDER_TIME_GTC, 0, comment);
+            
+            if(tradeResult)
+                Print(StringFormat("[BREAKOUT] STOP ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
+            else
+                Print(StringFormat("[BREAKOUT] STOP ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
+        }
+    }
+    else if(strongMomentumSurge)
+    {
+        // Strong momentum surge - use market order immediately (as originally designed)
+        orderTypeStr = "MARKET-SURGE";
+        if(isBuyDirection)
             tradeResult = g_trade.Buy(NormalizeDouble(lot, 2), _Symbol, 0, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
         else
             tradeResult = g_trade.Sell(NormalizeDouble(lot, 2), _Symbol, 0, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
@@ -2964,16 +3322,17 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
     }
     else
     {
-        // Normal breakout - place stop order
-        if(strongestLevel.isResistance)
-            tradeResult = g_trade.BuyStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
+        // Limit orders disabled - use traditional stop orders
+        orderTypeStr = "STOP";
+        if(isBuyDirection)
+            tradeResult = g_trade.BuyStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), _Symbol, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), ORDER_TIME_GTC, 0, comment);
         else
-            tradeResult = g_trade.SellStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
+            tradeResult = g_trade.SellStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), _Symbol, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), ORDER_TIME_GTC, 0, comment);
         
         if(tradeResult)
-            Print(StringFormat("[BREAKOUT] ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
+            Print(StringFormat("[BREAKOUT] STOP ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
         else
-            Print(StringFormat("[BREAKOUT] ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
+            Print(StringFormat("[BREAKOUT] STOP ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
     }
     
     if(InpLogDetailedInfo)
@@ -5520,6 +5879,230 @@ void CacheRsiForCycle()
     g_lastRsiCacheTime = now;
 }
 
+//+------------------------------------------------------------------+
+//| Validate candle structure for entry                              |
+//+------------------------------------------------------------------+
+bool ValidateCandleStructure(bool isBuy, RegimeSnapshot &rs, string &reason)
+{
+    if(!InpEnableTechnicalValidation)
+        return true; // Technical validation disabled
+    
+    if(g_candleAnalyzer == NULL)
+    {
+        reason = "Candle analyzer not initialized";
+        return false;
+    }
+    
+    // Validate current candle structure
+    if(!g_candleAnalyzer.ValidateWickStructure(isBuy, 0, reason))
+    {
+        return false;
+    }
+    
+    // Check for excessive wicks if enabled
+    if(InpRejectExcessiveWicks)
+    {
+        CandleStructure candle = g_candleAnalyzer.AnalyzeCandleStructure(0);
+        if(candle.wickToBodyRatio > InpMaxWickToBodyRatio)
+        {
+            reason = StringFormat("Wick-to-body ratio too high: %.2f (max: %.2f)", 
+                                 candle.wickToBodyRatio, InpMaxWickToBodyRatio);
+            return false;
+        }
+    }
+    
+    // Check for doji candles if enabled
+    if(InpRejectDojiCandles)
+    {
+        CandleStructure candle = g_candleAnalyzer.AnalyzeCandleStructure(0);
+        if(candle.isDoji)
+        {
+            reason = "Doji candle indicates indecision";
+            return false;
+        }
+    }
+    
+    // Validate multi-candle setup
+    if(!g_candleAnalyzer.ValidateMultiCandleSetup(isBuy, 0, reason))
+    {
+        return false;
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Validate price position relative to key levels                   |
+//+------------------------------------------------------------------+
+bool ValidatePricePosition(bool isBuy, double price, RegimeSnapshot &rs, string &reason)
+{
+    if(!InpEnableTechnicalValidation)
+        return true;
+    
+    if(g_keyLevelDetector == NULL)
+    {
+        reason = "Key level detector not initialized";
+        return false;
+    }
+    
+    // Get nearby key levels
+    double nearestResistance = 0;
+    double nearestSupport = 0;
+    double proximityPips = 20.0; // Check within 20 pips
+    
+    // Find nearest key levels
+    int levelCount = g_keyLevelDetector.GetKeyLevelCount();
+    for(int i = 0; i < levelCount; i++)
+    {
+        SKeyLevel level;
+        if(g_keyLevelDetector.GetKeyLevel(i, level))
+        {
+            double distance = MathAbs(price - level.price) / GetPipSize();
+            
+            if(distance > proximityPips)
+                continue;
+            
+            if(level.isResistance)
+            {
+                if(nearestResistance == 0 || MathAbs(price - level.price) < MathAbs(price - nearestResistance))
+                    nearestResistance = level.price;
+            }
+            else
+            {
+                if(nearestSupport == 0 || MathAbs(price - level.price) < MathAbs(price - nearestSupport))
+                    nearestSupport = level.price;
+            }
+        }
+    }
+    
+    // For buy orders, don't enter at resistance
+    if(isBuy && nearestResistance > 0 && price >= nearestResistance * 0.995)
+    {
+        reason = StringFormat("Price at resistance level: %.5f", nearestResistance);
+        return false;
+    }
+    
+    // For sell orders, don't enter at support
+    if(!isBuy && nearestSupport > 0 && price <= nearestSupport * 1.005)
+    {
+        reason = StringFormat("Price at support level: %.5f", nearestSupport);
+        return false;
+    }
+    
+    // Check EMA alignment
+    double ema20 = GetEMAValue(InpEMA20Period);
+    double ema50 = GetEMAValue(InpEMA50Period);
+    double ema200 = GetEMAValue(InpEMA200Period);
+    
+    if(ema20 > 0 && ema50 > 0 && ema200 > 0)
+    {
+        // For buy orders in uptrend, prefer price near or above EMA support
+        if(isBuy && ema20 > ema50 && ema50 > ema200)
+        {
+            if(price < ema200)
+            {
+                reason = "Price too far below EMA support in uptrend";
+                return false;
+            }
+        }
+        
+        // For sell orders in downtrend, prefer price near or below EMA resistance
+        if(!isBuy && ema20 < ema50 && ema50 < ema200)
+        {
+            if(price > ema200)
+            {
+                reason = "Price too far above EMA resistance in downtrend";
+                return false;
+            }
+        }
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Main technical validation function                               |
+//+------------------------------------------------------------------+
+bool ValidateTechnicalEntry(bool isBuy, RegimeSnapshot &rs, string &rejectionReason)
+{
+    if(!InpEnableTechnicalValidation)
+        return true; // Technical validation disabled
+    
+    double currentPrice = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    
+    // Step 1: Validate candle structure
+    string candleReason = "";
+    if(!ValidateCandleStructure(isBuy, rs, candleReason))
+    {
+        rejectionReason = "Candle: " + candleReason;
+        return false;
+    }
+    
+    // Step 2: Validate price position
+    string positionReason = "";
+    if(!ValidatePricePosition(isBuy, currentPrice, rs, positionReason))
+    {
+        rejectionReason = "Position: " + positionReason;
+        return false;
+    }
+    
+    // Step 3: Check for Fibonacci confluence if required
+    if(InpRequireFibConfluence && g_fibCalculator != NULL)
+    {
+        FibLevels fib = g_fibCalculator.CalculateAutoFibonacci();
+        if(fib.isValid)
+        {
+            string fibLevel;
+            if(!g_fibCalculator.IsPriceNearFibLevel(currentPrice, fib, InpFibProximityPips, fibLevel))
+            {
+                rejectionReason = "No Fibonacci confluence nearby";
+                return false;
+            }
+        }
+    }
+    
+    // Step 4: Check for key level confluence if required
+    if(InpRequireKeyLevelConfluence && g_keyLevelDetector != NULL)
+    {
+        bool nearKeyLevel = false;
+        double proximityPips = InpConfluenceProximityPips;
+        
+        int levelCount = g_keyLevelDetector.GetKeyLevelCount();
+        for(int i = 0; i < levelCount; i++)
+        {
+            SKeyLevel level;
+            if(g_keyLevelDetector.GetKeyLevel(i, level))
+            {
+                double distance = MathAbs(currentPrice - level.price) / GetPipSize();
+                
+                if(distance <= proximityPips)
+                {
+                    // Check if it's the right type of level
+                    if(isBuy && !level.isResistance) // Buy at support
+                    {
+                        nearKeyLevel = true;
+                        break;
+                    }
+                    else if(!isBuy && level.isResistance) // Sell at resistance
+                    {
+                        nearKeyLevel = true;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if(!nearKeyLevel)
+        {
+            rejectionReason = "No key level confluence nearby";
+            return false;
+        }
+    }
+    
+    // All checks passed
+    return true;
+}
+
 bool ValidateInputParameters()
 {
     bool isValid = true;
@@ -7056,6 +7639,32 @@ bool IsInCooloffPeriod(bool isBuySignal)
     if(secondsSinceExit >= cooloffSeconds)
     {
         g_coolOffState.isActive = false;
+        
+        // TECHNICAL VALIDATION GATE - even after cooloff expires, check technical conditions
+        if(InpEnableTechnicalValidation)
+        {
+            string techRejectionReason = "";
+            RegimeSnapshot currentRegime;
+            if(g_regimeDetector != NULL)
+                currentRegime = g_regimeDetector.DetectCurrentRegime();
+            
+            if(!ValidateTechnicalEntry(isBuySignal, currentRegime, techRejectionReason))
+            {
+                if(InpLogCooloffDecisions)
+                {
+                    Print(StringFormat("[TECH-GATE] %s blocked after cooloff expired: %s", 
+                         isBuySignal ? "BUY" : "SELL", techRejectionReason));
+                }
+                return true; // Block entry due to technical rejection
+            }
+            
+            if(InpLogCooloffDecisions)
+            {
+                Print(StringFormat("[TECH-GATE] %s passed technical validation after cooloff", 
+                     isBuySignal ? "BUY" : "SELL"));
+            }
+        }
+        
         return false;
     }
     
