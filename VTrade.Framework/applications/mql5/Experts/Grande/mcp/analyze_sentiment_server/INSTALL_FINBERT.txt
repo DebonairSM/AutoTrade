@@ -2,18 +2,26 @@
              INSTALLING FINBERT FOR GRANDE TRADING SYSTEM
 ================================================================================
 
-QUICK INSTALL:
---------------
-1. Right-click "install_finbert.ps1" 
-2. Select "Run with PowerShell"
-3. Wait 5-10 minutes for installation
-4. Restart MT5 terminal and EA
+QUICK INSTALL (2 STEPS):
+------------------------
+STEP 1: Install FinBERT packages
+   1. Right-click "install_finbert.ps1" 
+   2. Select "Run with PowerShell"
+   3. Wait 5-10 minutes for installation
 
-OR
+   OR
 
-1. Double-click "install_finbert.bat"
-2. Wait 5-10 minutes for installation
-3. Restart MT5 terminal and EA
+   1. Double-click "install_finbert.bat"
+   2. Wait 5-10 minutes for installation
+
+STEP 2: Start the FinBERT File Watcher Service
+   1. Double-click "start_finbert_watcher.bat"
+   2. Service will run in a separate window (keep it open)
+   3. Service will automatically process new market data
+   
+   To stop the service:
+   - Close the service window, OR
+   - Double-click "stop_finbert_watcher.bat"
 
 WHAT GETS INSTALLED:
 --------------------
@@ -26,17 +34,26 @@ TOTAL SIZE: ~1GB
 
 CHECKING IF IT WORKS:
 ---------------------
-After installation, look in your MT5 Experts log for:
 
-SUCCESS - Real FinBERT Active:
-  [OK] FinBERT dependencies loaded successfully
-  [OK] Enhanced FinBERT pipeline initialized successfully
-  [OK] FinBERT AI: Real financial sentiment analysis active
+STEP 1: Check if FinBERT packages are installed
+   Run: python -m pip list
+   Look for: torch, transformers, numpy
 
-FAILURE - Using Fallback:
-  [ERROR][ERROR][ERROR] FINBERT NOT AVAILABLE [ERROR][ERROR][ERROR]
-  [WARNING] FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)
-  [WARNING] Calendar analysis is using KEYWORD MATCHING
+STEP 2: Check if the file watcher service is running
+   - You should see a window titled "FinBERT File Watcher Service"
+   - Check the log: mcp\analyze_sentiment_server\finbert_watcher.log
+   - Look for: "Service started successfully - monitoring for new files..."
+
+STEP 3: Verify in MT5 Experts log
+   SUCCESS - Real FinBERT Active:
+     [OK] FinBERT dependencies loaded successfully
+     [OK] Enhanced FinBERT pipeline initialized successfully
+     [OK] FinBERT AI: Real financial sentiment analysis active
+
+   FAILURE - Using Fallback:
+     [ERROR][ERROR][ERROR] FINBERT NOT AVAILABLE [ERROR][ERROR][ERROR]
+     [WARNING] FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)
+     [WARNING] Calendar analysis is using KEYWORD MATCHING
 
 MANUAL INSTALLATION:
 --------------------
@@ -109,13 +126,54 @@ REAL FINBERT AI:
   - Much more accurate
   - Research-backed confidence scoring
 
+IMPORTANT: FILE WATCHER SERVICE
+--------------------------------
+The FinBERT File Watcher Service MUST be running for automatic analysis.
+
+What it does:
+  - Monitors MT5 Common Files for new market_context_*.json files
+  - Automatically runs FinBERT analysis when Grande EA creates new files
+  - Outputs enhanced_finbert_analysis.json for the EA to read
+
+How to start:
+  - Double-click "start_finbert_watcher.bat"
+  - Keep the service window open while trading
+  - Service will run continuously until stopped
+
+How to stop:
+  - Close the service window, OR
+  - Press Ctrl+C in the service window, OR
+  - Double-click "stop_finbert_watcher.bat"
+
+Log file location:
+  - mcp\analyze_sentiment_server\finbert_watcher.log
+
 NEED HELP?
 ----------
-1. Check MT5 Experts log for emoji indicators
-2. Run Python scripts manually to see errors
-3. Verify Python is installed: python --version
-4. Check pip works: python -m pip --version
-5. List installed packages: python -m pip list
+1. Check the file watcher log: finbert_watcher.log
+2. Check MT5 Experts log for emoji indicators
+3. Run Python scripts manually to see errors
+4. Verify Python is installed: python --version
+5. Check pip works: python -m pip --version
+6. List installed packages: python -m pip list
+7. Verify service is running: Look for python process
+
+TROUBLESHOOTING FILE WATCHER:
+------------------------------
+Problem: Service window closes immediately
+Solution: Check finbert_watcher.log for errors
+          Make sure Python packages are installed
+          Run: python finbert_watcher_service.py --test
+
+Problem: No analysis output appearing
+Solution: Check that Grande EA is creating market_context_*.json files
+          Check Common Files directory location
+          Verify service log shows "Processing file: ..."
+
+Problem: Service uses too much CPU
+Solution: This is normal during analysis (30-60 seconds per file)
+          Service sleeps between checks (10 seconds)
+          Consider reducing InpFinBERTAnalysisInterval in EA
 
 ================================================================================
 

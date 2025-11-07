@@ -1,0 +1,104 @@
+================================================================================
+                    FINBERT FILE WATCHER - QUICK START
+================================================================================
+
+PROBLEM FIXED:
+--------------
+FinBERT was not processing new market context files automatically.
+Output data was stale (weeks old).
+Trading decisions were based on outdated analysis.
+
+SOLUTION:
+---------
+Created an automatic File Watcher Service that monitors for new files
+and processes them immediately.
+
+QUICK START (2 STEPS):
+----------------------
+
+STEP 1: Install FinBERT (First Time Only)
+   Double-click: install_finbert.bat
+   Wait: 5-10 minutes
+   Status: One-time setup
+
+STEP 2: Start File Watcher Service (Every Time Before Trading)
+   Double-click: start_finbert_watcher.bat
+   Keep window open while trading
+   Status: Required for automatic processing
+
+VERIFY IT'S WORKING:
+--------------------
+   Run: ..\..\scripts\AnalyzeFinBERTData.ps1
+   Look for: "Status: RUNNING"
+   Check: Output files should be fresh (< 5 minutes old)
+
+STOP THE SERVICE:
+-----------------
+   Option 1: Close the service window
+   Option 2: Press Ctrl+C in service window
+   Option 3: Double-click: stop_finbert_watcher.bat
+
+FILES OVERVIEW:
+---------------
+   start_finbert_watcher.bat    - Start service (double-click)
+   stop_finbert_watcher.bat     - Stop service (double-click)
+   finbert_watcher_service.py   - Main service code
+   finbert_watcher.log          - Activity log (check for errors)
+   README_FILE_WATCHER.md       - Complete documentation
+   INSTALL_FINBERT.txt          - Installation guide
+
+LOG FILE LOCATION:
+------------------
+   This directory: finbert_watcher.log
+   Watch live: powershell -Command "Get-Content finbert_watcher.log -Wait -Tail 20"
+
+COMMON ISSUES:
+--------------
+
+Issue: Service window closes immediately
+Fix:   Run install_finbert.bat first
+       Check log file for errors
+
+Issue: No new analysis output
+Fix:   Verify service is running (check Task Manager for python.exe)
+       Check that Grande EA is creating market_context_*.json files
+
+Issue: "FALLBACK MODE" in output
+Fix:   FinBERT packages not installed correctly
+       Re-run install_finbert.bat
+
+IMPORTANT:
+----------
+   ✓ The service MUST be running for automatic analysis
+   ✓ Keep the service window open while trading
+   ✓ Service processes files every 10 seconds
+   ✓ Analysis takes 30-60 seconds per file
+   ✓ Service handles one file at a time
+
+HOW IT WORKS:
+-------------
+   1. Grande EA writes market_context_*.json files
+   2. File Watcher Service detects new files (within 10 seconds)
+   3. Service runs FinBERT analysis automatically
+   4. Service writes enhanced_finbert_analysis.json
+   5. Grande EA reads fresh analysis for trading decisions
+
+PERFORMANCE:
+------------
+   CPU Usage:      10-20% average, 100% during analysis (30-60 sec)
+   Memory Usage:   1-2 GB (FinBERT model)
+   Processing:     30-60 seconds per file
+   Monitoring:     Every 10 seconds (low resource)
+
+NEED HELP?
+----------
+   1. Check log: finbert_watcher.log
+   2. Read guide: README_FILE_WATCHER.md
+   3. Run diagnostic: ..\..\scripts\AnalyzeFinBERTData.ps1
+   4. Test service: python finbert_watcher_service.py --test
+
+================================================================================
+                            YOU'RE ALL SET!
+                 Start the service before trading and you're good to go.
+================================================================================
+

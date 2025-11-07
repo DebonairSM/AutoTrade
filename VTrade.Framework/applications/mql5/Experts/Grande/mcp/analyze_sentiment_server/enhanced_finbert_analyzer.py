@@ -112,6 +112,31 @@ class TechnicalAnalysis:
     ema_20: float
     ema_50: float
     ema_200: float
+    
+    # Enhanced: Price-EMA Relationships
+    price_to_ema20_pips: float
+    price_to_ema50_pips: float
+    price_to_ema200_pips: float
+    ema_alignment: str
+    
+    # Enhanced: Spread & Execution Quality
+    spread_current: float
+    spread_average: float
+    spread_status: str
+    
+    # Enhanced: Momentum Indicators
+    rsi_slope: str
+    price_momentum_3bar: float
+    atr_slope: str
+    
+    # Enhanced: Candlestick Context
+    candle_pattern: str
+    candle_body_ratio: float
+    rejection_signal: str
+    
+    # Enhanced: Session & Timing
+    trading_session: str
+    hour_of_day: int
 
 @dataclass
 class MarketRegime:
@@ -733,7 +758,50 @@ def analyze_enhanced_market_data(market_context_data: Dict[str, Any]) -> Dict[st
             'analyzer': 'Enhanced FinBERT',
             'timestamp': market_context_data['timestamp'],
             'symbol': market_context_data['symbol'],
-            'timeframe': market_context_data['timeframe']
+            'timeframe': market_context_data['timeframe'],
+            # Diagnostic information
+            'component_weights': {
+                'technical_trend': analyzer.weights['technical_trend'],
+                'market_regime': analyzer.weights['market_regime'],
+                'key_levels': analyzer.weights['key_levels'],
+                'economic_sentiment': analyzer.weights['economic_sentiment'],
+                'risk_assessment': analyzer.weights['risk_assessment'],
+                'finbert_sentiment': analyzer.weights['finbert_sentiment']
+            },
+            'component_scores': {
+                'technical_score': decision.technical_score,
+                'regime_score': decision.regime_score,
+                'levels_score': decision.levels_score,
+                'economic_score': decision.economic_score,
+                'finbert_sentiment_score': decision.weighted_score  # Overall weighted score
+            },
+            'component_contributions': {
+                'technical_contribution': decision.technical_score * analyzer.weights['technical_trend'],
+                'regime_contribution': decision.regime_score * analyzer.weights['market_regime'],
+                'levels_contribution': decision.levels_score * analyzer.weights['key_levels'],
+                'economic_contribution': decision.economic_score * analyzer.weights['economic_sentiment'],
+                'finbert_contribution': decision.weighted_score * analyzer.weights['finbert_sentiment']
+            },
+            'confidence_breakdown': {
+                'base_confidence': decision.confidence,
+                'technical_confidence': abs(decision.technical_score),
+                'regime_confidence': context.market_regime.confidence,
+                'confluence_confidence': decision.confluence_score,
+                'finbert_confidence': decision.confidence
+            },
+            'input_data_summary': {
+                'symbol': context.symbol,
+                'timeframe': context.timeframe,
+                'current_price': context.market_data['price']['current'],
+                'trend_direction': context.technical_indicators.trend_direction,
+                'trend_strength': context.technical_indicators.trend_strength,
+                'current_regime': context.market_regime.current_regime,
+                'regime_confidence': context.market_regime.confidence,
+                'rsi_current': context.technical_indicators.rsi_current,
+                'volatility_level': context.technical_indicators.volatility_level,
+                'economic_events_today': context.economic_calendar.events_today,
+                'high_impact_events': context.economic_calendar.high_impact_events
+            }
         }
         
         return result

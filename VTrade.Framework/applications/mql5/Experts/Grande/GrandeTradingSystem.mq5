@@ -6970,10 +6970,11 @@ void CollectEnhancedMarketDataForFinBERT()
     if((currentTime - g_lastFinBERTAnalysisTime) < InpFinBERTAnalysisInterval)
         return;
     
+    // TEMPORARY: Skip bar check for immediate testing
     // Check if we have a new bar
-    datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-    if(currentBarTime == g_lastBarTime)
-        return;
+    // datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+    // if(currentBarTime == g_lastBarTime)
+    //     return;
     
     g_lastFinBERTAnalysisTime = currentTime;
     
@@ -7116,30 +7117,61 @@ string CreateComprehensiveMarketContext()
     json += "\"ratio\":" + DoubleToString(volumeRatio, 2);
     json += "}";
     json += "},";
+    
+    // Calculate enhanced technical indicators
+    double currentSpread = GetCurrentSpreadPips();
+    double avgSpread = GetAverageSpread();
+    string spreadStatus = GetSpreadStatus(currentSpread, avgSpread);
+    
+    double priceToEma20 = (currentPrice - ema20) / _Point;
+    double priceToEma50 = (currentPrice - ema50) / _Point;
+    double priceToEma200 = (currentPrice - ema200) / _Point;
+    string emaAlignment = GetEMAAlignment(ema20, ema50, ema200);
+    
+    string rsiSlope = GetRSISlope();
+    double priceMomentum3bar = GetPriceMomentum3Bar();
+    string atrSlope = GetATRSlope();
+    
+    string candlePattern = GetCandlePattern();
+    double candleBodyRatio = GetCandleBodyRatio();
+    string rejectionSignal = GetRejectionSignal();
+    
+    string tradingSession = GetTradingSession();
+    MqlDateTime dt;
+    TimeToStruct(TimeCurrent(), dt);
+    int hourOfDay = dt.hour;
+    
     json += "\"technical_indicators\":{";
-    json += "\"trend\":{";
-    json += "\"ema_20\":" + DoubleToString(ema20, _Digits) + ",";
-    json += "\"ema_50\":" + DoubleToString(ema50, _Digits) + ",";
-    json += "\"ema_200\":" + DoubleToString(ema200, _Digits) + ",";
     json += "\"trend_direction\":\"" + trendDirection + "\",";
-    json += "\"trend_strength\":" + DoubleToString(trendStrength, 2);
-    json += "},";
-    json += "\"momentum\":{";
+    json += "\"trend_strength\":" + DoubleToString(trendStrength, 2) + ",";
     json += "\"rsi_current\":" + DoubleToString(rsiCurrent, 1) + ",";
     json += "\"rsi_h4\":" + DoubleToString(rsiH4, 1) + ",";
     json += "\"rsi_d1\":" + DoubleToString(rsiD1, 1) + ",";
-    json += "\"rsi_status\":\"" + rsiStatus + "\"";
-    json += "},";
-    json += "\"volatility\":{";
-    json += "\"atr_current\":" + DoubleToString(atr, _Digits) + ",";
-    json += "\"atr_average\":" + DoubleToString(atrAverage, _Digits) + ",";
-    json += "\"volatility_level\":\"" + volatilityLevel + "\"";
-    json += "},";
-    json += "\"oscillators\":{";
+    json += "\"rsi_status\":\"" + rsiStatus + "\",";
     json += "\"stoch_k\":" + DoubleToString(stochK, 1) + ",";
     json += "\"stoch_d\":" + DoubleToString(stochD, 1) + ",";
-    json += "\"stoch_signal\":\"" + stochSignal + "\"";
-    json += "}";
+    json += "\"stoch_signal\":\"" + stochSignal + "\",";
+    json += "\"atr_current\":" + DoubleToString(atr, _Digits) + ",";
+    json += "\"atr_average\":" + DoubleToString(atrAverage, _Digits) + ",";
+    json += "\"volatility_level\":\"" + volatilityLevel + "\",";
+    json += "\"ema_20\":" + DoubleToString(ema20, _Digits) + ",";
+    json += "\"ema_50\":" + DoubleToString(ema50, _Digits) + ",";
+    json += "\"ema_200\":" + DoubleToString(ema200, _Digits) + ",";
+    json += "\"price_to_ema20_pips\":" + DoubleToString(priceToEma20, 1) + ",";
+    json += "\"price_to_ema50_pips\":" + DoubleToString(priceToEma50, 1) + ",";
+    json += "\"price_to_ema200_pips\":" + DoubleToString(priceToEma200, 1) + ",";
+    json += "\"ema_alignment\":\"" + emaAlignment + "\",";
+    json += "\"spread_current\":" + DoubleToString(currentSpread, 1) + ",";
+    json += "\"spread_average\":" + DoubleToString(avgSpread, 1) + ",";
+    json += "\"spread_status\":\"" + spreadStatus + "\",";
+    json += "\"rsi_slope\":\"" + rsiSlope + "\",";
+    json += "\"price_momentum_3bar\":" + DoubleToString(priceMomentum3bar, 3) + ",";
+    json += "\"atr_slope\":\"" + atrSlope + "\",";
+    json += "\"candle_pattern\":\"" + candlePattern + "\",";
+    json += "\"candle_body_ratio\":" + DoubleToString(candleBodyRatio, 2) + ",";
+    json += "\"rejection_signal\":\"" + rejectionSignal + "\",";
+    json += "\"trading_session\":\"" + tradingSession + "\",";
+    json += "\"hour_of_day\":" + IntegerToString(hourOfDay);
     json += "},";
     json += "\"market_regime\":{";
     json += "\"current_regime\":\"" + currentRegime + "\",";
@@ -7284,6 +7316,205 @@ void SaveMarketContextToFile(string jsonData)
     {
         Print("[GrandeFinBERT] ERROR: Failed to save market context to file");
     }
+}
+
+//+------------------------------------------------------------------+
+//| Enhanced FinBERT Helper Functions                               |
+//+------------------------------------------------------------------+
+
+// Get current spread in pips
+double GetCurrentSpreadPips()
+{
+    return (SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID)) / _Point;
+}
+
+// Get average spread over last 20 bars (simplified - using current spread as proxy)
+double GetAverageSpread()
+{
+    // Note: Real implementation would track spread history
+    // For now, returning current spread as reasonable estimate
+    return GetCurrentSpreadPips();
+}
+
+// Determine spread status
+string GetSpreadStatus(double currentSpread, double avgSpread)
+{
+    if(avgSpread <= 0) return "NORMAL";
+    
+    double ratio = currentSpread / avgSpread;
+    if(ratio > 1.5) return "WIDE";
+    if(ratio < 0.7) return "TIGHT";
+    return "NORMAL";
+}
+
+// Get RSI slope (rising/falling/flat)
+string GetRSISlope()
+{
+    double rsi0 = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+    double rsi1 = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 1);
+    double rsi2 = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 2);
+    
+    double slope = (rsi0 - rsi2) / 2.0;
+    
+    if(slope > 2.0) return "RISING";
+    if(slope < -2.0) return "FALLING";
+    return "FLAT";
+}
+
+// Get price momentum over last 3 bars
+double GetPriceMomentum3Bar()
+{
+    double close0 = iClose(_Symbol, PERIOD_CURRENT, 0);
+    double close3 = iClose(_Symbol, PERIOD_CURRENT, 3);
+    
+    if(close3 == 0) return 0;
+    return ((close0 - close3) / close3) * 100.0;
+}
+
+// Get ATR slope (increasing/decreasing/stable)
+string GetATRSlope()
+{
+    double atr0 = GetATRValue();
+    
+    // Calculate ATR from 5 bars ago
+    double atrSum5 = 0;
+    for(int i = 1; i <= 5; i++)
+    {
+        double high = iHigh(_Symbol, PERIOD_CURRENT, i);
+        double low = iLow(_Symbol, PERIOD_CURRENT, i);
+        atrSum5 += (high - low) / _Point;
+    }
+    double atr5 = atrSum5 / 5.0;
+    
+    // Calculate ATR from 10 bars ago
+    double atrSum10 = 0;
+    for(int i = 6; i <= 10; i++)
+    {
+        double high = iHigh(_Symbol, PERIOD_CURRENT, i);
+        double low = iLow(_Symbol, PERIOD_CURRENT, i);
+        atrSum10 += (high - low) / _Point;
+    }
+    double atr10 = atrSum10 / 5.0;
+    
+    double atrCurrent = atr0 / _Point;
+    
+    if(atrCurrent > atr5 && atr5 > atr10) return "INCREASING";
+    if(atrCurrent < atr5 && atr5 < atr10) return "DECREASING";
+    return "STABLE";
+}
+
+// Simple candlestick pattern detection
+string GetCandlePattern()
+{
+    double open = iOpen(_Symbol, PERIOD_CURRENT, 0);
+    double high = iHigh(_Symbol, PERIOD_CURRENT, 0);
+    double low = iLow(_Symbol, PERIOD_CURRENT, 0);
+    double close = iClose(_Symbol, PERIOD_CURRENT, 0);
+    
+    double body = MathAbs(close - open);
+    double totalRange = high - low;
+    double upperWick = high - MathMax(open, close);
+    double lowerWick = MathMin(open, close) - low;
+    
+    if(totalRange == 0) return "NORMAL";
+    
+    double bodyRatio = body / totalRange;
+    
+    // Doji: very small body
+    if(bodyRatio < 0.1) return "DOJI";
+    
+    // Hammer: long lower wick, small body at top
+    if(lowerWick > body * 2 && upperWick < body && close > open)
+        return "HAMMER";
+    
+    // Shooting Star: long upper wick, small body at bottom
+    if(upperWick > body * 2 && lowerWick < body && close < open)
+        return "SHOOTING_STAR";
+    
+    // Engulfing check (simplified)
+    double prevBody = MathAbs(iClose(_Symbol, PERIOD_CURRENT, 1) - iOpen(_Symbol, PERIOD_CURRENT, 1));
+    if(body > prevBody * 1.5)
+        return "ENGULFING";
+    
+    return "NORMAL";
+}
+
+// Get candle body ratio
+double GetCandleBodyRatio()
+{
+    double open = iOpen(_Symbol, PERIOD_CURRENT, 0);
+    double high = iHigh(_Symbol, PERIOD_CURRENT, 0);
+    double low = iLow(_Symbol, PERIOD_CURRENT, 0);
+    double close = iClose(_Symbol, PERIOD_CURRENT, 0);
+    
+    double body = MathAbs(close - open);
+    double totalRange = high - low;
+    
+    return totalRange > 0 ? body / totalRange : 0;
+}
+
+// Get rejection signal from wicks
+string GetRejectionSignal()
+{
+    double open = iOpen(_Symbol, PERIOD_CURRENT, 0);
+    double high = iHigh(_Symbol, PERIOD_CURRENT, 0);
+    double low = iLow(_Symbol, PERIOD_CURRENT, 0);
+    double close = iClose(_Symbol, PERIOD_CURRENT, 0);
+    
+    double body = MathAbs(close - open);
+    double upperWick = high - MathMax(open, close);
+    double lowerWick = MathMin(open, close) - low;
+    
+    // Strong upper wick rejection
+    if(upperWick > body * 2 && upperWick > lowerWick * 2)
+        return "BEARISH_REJECTION";
+    
+    // Strong lower wick rejection
+    if(lowerWick > body * 2 && lowerWick > upperWick * 2)
+        return "BULLISH_REJECTION";
+    
+    return "NONE";
+}
+
+// Get current trading session
+string GetTradingSession()
+{
+    datetime currentTime = TimeCurrent();
+    MqlDateTime dt;
+    TimeToStruct(currentTime, dt);
+    int hour = dt.hour;
+    
+    // Asian: 0-8 GMT
+    if(hour >= 0 && hour < 8) return "ASIAN";
+    
+    // London: 8-16 GMT
+    if(hour >= 8 && hour < 16) return "LONDON";
+    
+    // NY: 13-21 GMT (overlaps with London 13-16)
+    if(hour >= 13 && hour < 21)
+    {
+        if(hour >= 13 && hour < 16)
+            return "LONDON_NY_OVERLAP";
+        return "NEW_YORK";
+    }
+    
+    // After hours
+    return "AFTER_HOURS";
+}
+
+// Get EMA alignment status
+string GetEMAAlignment(double ema20, double ema50, double ema200)
+{
+    // Perfect bullish stack
+    if(ema20 > ema50 && ema50 > ema200)
+        return "BULLISH_STACK";
+    
+    // Perfect bearish stack
+    if(ema20 < ema50 && ema50 < ema200)
+        return "BEARISH_STACK";
+    
+    // Mixed/transitioning
+    return "MIXED";
 }
 
 double NormalizeVolumeToStep(const string symbol, double volume)

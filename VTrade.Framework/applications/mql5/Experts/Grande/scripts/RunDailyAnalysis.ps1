@@ -134,7 +134,143 @@ if ($symbolPerf.Count -gt 0) {
     $report += "`n"
 }
 
-# 4. Generate Recommendations
+# 4. FinBERT Performance Analysis
+Write-Host "  Analyzing FinBERT performance..." -ForegroundColor Gray
+
+$report += @"
+## FinBERT Performance
+
+"@
+
+# Check if we have FinBERT data
+$finbertCheckQuery = "SELECT COUNT(*) as count FROM decisions WHERE calendar_signal IS NOT NULL AND calendar_signal != '' AND timestamp >= datetime('now', '-$DaysToAnalyze days');"
+$finbertCheck = Invoke-SqliteQuery -DataSource $DatabasePath -Query $finbertCheckQuery
+
+if ($finbertCheck.count -gt 0) {
+    # Signal Distribution
+    $signalDistQuery = @"
+SELECT 
+    calendar_signal,
+    COUNT(*) as count,
+    ROUND(AVG(calendar_confidence), 3) as avg_confidence
+FROM decisions
+WHERE timestamp >= datetime('now', '-$DaysToAnalyze days')
+    AND calendar_signal IS NOT NULL 
+    AND calendar_signal != ''
+GROUP BY calendar_signal
+ORDER BY count DESC;
+"@
+
+    $finbertSignals = Invoke-SqliteQuery -DataSource $DatabasePath -Query $signalDistQuery
+    
+    if ($finbertSignals -and $finbertSignals.Count -gt 0) {
+        $report += @"
+### Signal Distribution
+
+| Signal | Count | Avg Confidence |
+|--------|-------|----------------|
+"@
+
+        foreach ($sig in $finbertSignals) {
+            $report += "| $($sig.calendar_signal) | $($sig.count) | $($sig.avg_confidence) |`n"
+        }
+        
+        $report += "`n"
+    }
+    
+    # Performance by Alignment
+    $alignmentQuery = @"
+SELECT 
+    CASE 
+        WHEN d.calendar_signal IN ('BUY','STRONG_BUY') AND t.direction='BUY' THEN 'ALIGNED'
+        WHEN d.calendar_signal IN ('SELL','STRONG_SELL') AND t.direction='SELL' THEN 'ALIGNED'
+        WHEN d.calendar_signal='NEUTRAL' THEN 'NEUTRAL'
+        ELSE 'OPPOSED'
+    END as alignment,
+    COUNT(*) as trades,
+    SUM(CASE WHEN t.outcome IN ('TP_HIT','SL_HIT') THEN 1 ELSE 0 END) as closed,
+    ROUND(100.0 * SUM(CASE WHEN t.pips_gained > 0 THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN t.outcome IN ('TP_HIT','SL_HIT') THEN 1 ELSE 0 END), 0), 2) as win_rate,
+    ROUND(AVG(t.pips_gained), 2) as avg_pips
+FROM trades t
+INNER JOIN decisions d ON t.timestamp = d.timestamp AND t.symbol = d.symbol
+WHERE t.timestamp >= datetime('now', '-$DaysToAnalyze days')
+    AND d.calendar_signal IS NOT NULL 
+    AND d.calendar_signal != ''
+    AND d.decision = 'EXECUTED'
+GROUP BY alignment
+ORDER BY trades DESC;
+"@
+
+    $finbertAlignment = Invoke-SqliteQuery -DataSource $DatabasePath -Query $alignmentQuery
+    
+    if ($finbertAlignment -and $finbertAlignment.Count -gt 0) {
+        $report += @"
+### Performance by FinBERT Alignment
+
+| Alignment | Trades | Closed | Win Rate | Avg Pips |
+|-----------|--------|--------|----------|----------|
+"@
+
+        $bestAlignment = $null
+        $bestWinRate = 0
+        
+        foreach ($align in $finbertAlignment) {
+            $winRateDisplay = if ($align.closed -gt 0) { "$($align.win_rate)%" } else { "N/A" }
+            $avgPipsDisplay = if ($null -ne $align.avg_pips) { $align.avg_pips } else { "0" }
+            $report += "| $($align.alignment) | $($align.trades) | $($align.closed) | $winRateDisplay | $avgPipsDisplay |`n"
+            
+            if ($align.closed -ge 5 -and $align.win_rate -gt $bestWinRate) {
+                $bestWinRate = $align.win_rate
+                $bestAlignment = $align.alignment
+            }
+        }
+        
+        $report += "`n"
+        
+        if ($bestAlignment) {
+            $report += "**Key Finding**: $bestAlignment trades show $bestWinRate% win rate.`n`n"
+        }
+    }
+    
+    # High Confidence Performance
+    $highConfQuery = @"
+SELECT 
+    COUNT(*) as trades,
+    SUM(CASE WHEN t.outcome IN ('TP_HIT','SL_HIT') THEN 1 ELSE 0 END) as closed,
+    ROUND(100.0 * SUM(CASE WHEN t.pips_gained > 0 THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN t.outcome IN ('TP_HIT','SL_HIT') THEN 1 ELSE 0 END), 0), 2) as win_rate,
+    ROUND(AVG(t.pips_gained), 2) as avg_pips
+FROM trades t
+INNER JOIN decisions d ON t.timestamp = d.timestamp AND t.symbol = d.symbol
+WHERE t.timestamp >= datetime('now', '-$DaysToAnalyze days')
+    AND d.calendar_confidence >= 0.7
+    AND d.decision = 'EXECUTED';
+"@
+
+    $highConf = Invoke-SqliteQuery -DataSource $DatabasePath -Query $highConfQuery
+    
+    if ($highConf -and $highConf.trades -gt 0) {
+        $winRateDisplay = if ($highConf.closed -gt 0) { "$($highConf.win_rate)%" } else { "N/A" }
+        $avgPipsDisplay = if ($null -ne $highConf.avg_pips) { $highConf.avg_pips } else { "0" }
+        
+        $report += @"
+### High Confidence Signals (>0.7)
+
+- **Trades**: $($highConf.trades)
+- **Closed**: $($highConf.closed)
+- **Win Rate**: $winRateDisplay
+- **Avg Pips**: $avgPipsDisplay
+
+"@
+    }
+    
+    Write-Host "    FinBERT decisions: $($finbertCheck.count)" -ForegroundColor White
+} else {
+    $report += "**Status**: No FinBERT data available in this period.`n`n"
+    $report += "Enable FinBERT in EA settings (InpEnableCalendarAI = true) to track sentiment analysis performance.`n`n"
+    Write-Host "    No FinBERT data available" -ForegroundColor Yellow
+}
+
+# 5. Generate Recommendations
 Write-Host "  Generating recommendations..." -ForegroundColor Gray
 
 $report += @"

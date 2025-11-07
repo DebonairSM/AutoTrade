@@ -52,6 +52,10 @@ CREATE TABLE IF NOT EXISTS trades (
     execution_slippage REAL DEFAULT 0.0,
     account_equity_at_open REAL,
     account_equity_at_close REAL,
+    finbert_multiplier REAL DEFAULT 1.0,
+    finbert_rejected BOOLEAN DEFAULT 0,
+    lot_size_base REAL,
+    lot_size_adjusted REAL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -61,6 +65,7 @@ Invoke-SqliteQuery -DataSource $DatabasePath -Query "CREATE INDEX IF NOT EXISTS 
 Invoke-SqliteQuery -DataSource $DatabasePath -Query "CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);" | Out-Null
 Invoke-SqliteQuery -DataSource $DatabasePath -Query "CREATE INDEX IF NOT EXISTS idx_trades_signal_type ON trades(signal_type);" | Out-Null
 Invoke-SqliteQuery -DataSource $DatabasePath -Query "CREATE INDEX IF NOT EXISTS idx_trades_outcome ON trades(outcome);" | Out-Null
+Invoke-SqliteQuery -DataSource $DatabasePath -Query "CREATE INDEX IF NOT EXISTS idx_trades_finbert_rejected ON trades(finbert_rejected);" | Out-Null
 
 # Create decisions table
 Invoke-SqliteQuery -DataSource $DatabasePath -Query @"
