@@ -6109,6 +6109,27 @@ bool ValidateInputParameters()
     
     // Symbol validation and compatibility check
     string symbol = _Symbol;
+    
+    // First, ensure the symbol is selected in Market Watch and available
+    if(!SymbolInfoInteger(symbol, SYMBOL_SELECT))
+    {
+        Print("INFO: Symbol ", symbol, " not in Market Watch, attempting to add...");
+        if(!SymbolSelect(symbol, true))
+        {
+            Print("ERROR: Failed to add ", symbol, " to Market Watch");
+            Print("ERROR: This symbol may not be available from your broker");
+            Print("HINT: Check that the symbol name is correct for your broker");
+            Print("HINT: Some brokers use suffixes like .m, .pro, -m, or ! for different account types");
+            isValid = false;
+            return isValid; // Exit early if symbol cannot be selected
+        }
+        else
+        {
+            Print("INFO: Successfully added ", symbol, " to Market Watch");
+            Sleep(500); // Give MT5 time to load symbol properties
+        }
+    }
+    
     int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
     
     // Validate symbol is a Forex pair
@@ -6117,14 +6138,21 @@ bool ValidateInputParameters()
         Print("WARNING: Symbol name too short. Expected format: EURUSD, GBPJPY, etc.");
     }
     
+    // Extract base pair name (remove broker suffixes like !, .m, etc.)
+    string basePairName = symbol;
+    StringReplace(basePairName, "!", "");
+    StringReplace(basePairName, ".m", "");
+    StringReplace(basePairName, ".pro", "");
+    StringReplace(basePairName, "-m", "");
+    
     // Check if this is a known major pair
     bool isKnownMajor = (
-        symbol == "EURUSD" || symbol == "GBPUSD" || symbol == "USDJPY" || 
-        symbol == "USDCHF" || symbol == "USDCAD" || symbol == "AUDUSD" || 
-        symbol == "NZDUSD" || symbol == "EURJPY" || symbol == "GBPJPY" || 
-        symbol == "AUDJPY" || symbol == "EURGBP" || symbol == "EURAUD" ||
-        symbol == "EURCHF" || symbol == "GBPAUD" || symbol == "GBPCAD" ||
-        symbol == "AUDCAD" || symbol == "AUDNZD"
+        basePairName == "EURUSD" || basePairName == "GBPUSD" || basePairName == "USDJPY" || 
+        basePairName == "USDCHF" || basePairName == "USDCAD" || basePairName == "AUDUSD" || 
+        basePairName == "NZDUSD" || basePairName == "EURJPY" || basePairName == "GBPJPY" || 
+        basePairName == "AUDJPY" || basePairName == "EURGBP" || basePairName == "EURAUD" ||
+        basePairName == "EURCHF" || basePairName == "GBPAUD" || basePairName == "GBPCAD" ||
+        basePairName == "AUDCAD" || basePairName == "AUDNZD"
     );
     
     if(!isKnownMajor)
@@ -6134,7 +6162,7 @@ bool ValidateInputParameters()
     }
     else
     {
-        Print("INFO: Trading on ", symbol, " - Recognized major currency pair");
+        Print("INFO: Trading on ", symbol, " (", basePairName, ") - Recognized major currency pair");
     }
     
     // Validate digit count
@@ -6161,10 +6189,33 @@ bool ValidateInputParameters()
     }
     
     // Check if trading is allowed for this symbol
-    if(!SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE))
+    long tradeMode = SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
+    if(tradeMode == SYMBOL_TRADE_MODE_DISABLED)
     {
-        Print("ERROR: Trading not allowed for ", symbol);
+        Print("ERROR: Trading is disabled for ", symbol, " (SYMBOL_TRADE_MODE = ", tradeMode, ")");
+        Print("ERROR: This symbol cannot be traded on your account/broker");
+        Print("HINT: Check if this is a valid trading symbol or if you need a different account type");
         isValid = false;
+    }
+    else if(tradeMode == SYMBOL_TRADE_MODE_LONGONLY)
+    {
+        Print("INFO: Only LONG positions allowed for ", symbol);
+    }
+    else if(tradeMode == SYMBOL_TRADE_MODE_SHORTONLY)
+    {
+        Print("INFO: Only SHORT positions allowed for ", symbol);
+    }
+    else if(tradeMode == SYMBOL_TRADE_MODE_CLOSEONLY)
+    {
+        Print("WARNING: Only position closing allowed for ", symbol);
+    }
+    else if(tradeMode == SYMBOL_TRADE_MODE_FULL)
+    {
+        Print("INFO: Full trading enabled for ", symbol);
+    }
+    else
+    {
+        Print("WARNING: Unknown trade mode (", tradeMode, ") for ", symbol);
     }
     
     // Market Regime Settings
@@ -7267,33 +7318,168 @@ string GetKeyLevelsJson()
 {
     string json = "{";
     json += "\"support_levels\":[";
+    
+    // Get support levels from key level detector
+    if(g_keyLevelDetector != NULL)
+    {
+        int levelCount = g_keyLevelDetector.GetKeyLevelCount();
+        bool firstSupport = true;
+        
+        for(int i = 0; i < levelCount; i++)
+        {
+            SKeyLevel level;
+            if(g_keyLevelDetector.GetKeyLevel(i, level) && !level.isResistance)
+            {
+                if(!firstSupport) json += ",";
+                json += "{";
+                json += "\"price\":" + DoubleToString(level.price, _Digits) + ",";
+                json += "\"strength\":" + DoubleToString(level.strength, 2) + ",";
+                json += "\"touches\":" + IntegerToString(level.touchCount);
+                json += "}";
+                firstSupport = false;
+            }
+        }
+    }
+    
     json += "],";
     json += "\"resistance_levels\":[";
+    
+    // Get resistance levels from key level detector
+    if(g_keyLevelDetector != NULL)
+    {
+        int levelCount = g_keyLevelDetector.GetKeyLevelCount();
+        bool firstResistance = true;
+        
+        for(int i = 0; i < levelCount; i++)
+        {
+            SKeyLevel level;
+            if(g_keyLevelDetector.GetKeyLevel(i, level) && level.isResistance)
+            {
+                if(!firstResistance) json += ",";
+                json += "{";
+                json += "\"price\":" + DoubleToString(level.price, _Digits) + ",";
+                json += "\"strength\":" + DoubleToString(level.strength, 2) + ",";
+                json += "\"touches\":" + IntegerToString(level.touchCount);
+                json += "}";
+                firstResistance = false;
+            }
+        }
+    }
+    
     json += "],";
-    json += "\"nearest_support\":{\"price\":0.0,\"distance_pips\":0.0},";
-    json += "\"nearest_resistance\":{\"price\":0.0,\"distance_pips\":0.0}";
+    
+    // Find nearest support and resistance
+    double nearestSupportPrice = 0.0;
+    double nearestSupportDist = 0.0;
+    double nearestResistancePrice = 0.0;
+    double nearestResistanceDist = 0.0;
+    
+    if(g_keyLevelDetector != NULL)
+    {
+        double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        double pipSize = GetPipSize();
+        int levelCount = g_keyLevelDetector.GetKeyLevelCount();
+        
+        double minSupportDist = 999999.0;
+        double minResistanceDist = 999999.0;
+        
+        for(int i = 0; i < levelCount; i++)
+        {
+            SKeyLevel level;
+            if(g_keyLevelDetector.GetKeyLevel(i, level))
+            {
+                double distance = MathAbs(level.price - currentPrice);
+                double distancePips = distance / pipSize;
+                
+                if(level.isResistance && level.price > currentPrice)
+                {
+                    if(distance < minResistanceDist)
+                    {
+                        minResistanceDist = distance;
+                        nearestResistancePrice = level.price;
+                        nearestResistanceDist = distancePips;
+                    }
+                }
+                else if(!level.isResistance && level.price < currentPrice)
+                {
+                    if(distance < minSupportDist)
+                    {
+                        minSupportDist = distance;
+                        nearestSupportPrice = level.price;
+                        nearestSupportDist = distancePips;
+                    }
+                }
+            }
+        }
+    }
+    
+    json += "\"nearest_support\":{";
+    json += "\"price\":" + DoubleToString(nearestSupportPrice, _Digits) + ",";
+    json += "\"distance_pips\":" + DoubleToString(nearestSupportDist, 1);
+    json += "},";
+    json += "\"nearest_resistance\":{";
+    json += "\"price\":" + DoubleToString(nearestResistancePrice, _Digits) + ",";
+    json += "\"distance_pips\":" + DoubleToString(nearestResistanceDist, 1);
+    json += "}";
     json += "}";
     
-    // TODO: Integrate with key level detector when available
     return json;
 }
 
 string GetEconomicCalendarJson()
 {
+    int eventsToday = 0;
+    int highImpactEvents = 0;
+    string nextEventTime = "";
+    string nextEventCurrency = "";
+    string nextEventName = "";
+    string nextEventImpact = "";
+    
+    // Get calendar data from calendar reader
+    if(g_calendarReader.IsCalendarAvailable())
+    {
+        eventsToday = g_calendarReader.GetEventCount();
+        
+        // Count high impact events and find next upcoming event
+        datetime currentTime = TimeCurrent();
+        datetime nextEventDateTime = D'2099.12.31 23:59:59';
+        
+        for(int i = 0; i < eventsToday; i++)
+        {
+            NewsEvent evt = g_calendarReader.GetEvent(i);
+            
+            // Count high impact events
+            if(evt.impact >= NEWS_IMPACT_HIGH)
+            {
+                highImpactEvents++;
+            }
+            
+            // Find next upcoming event (future event closest to now)
+            if(evt.time > currentTime && evt.time < nextEventDateTime)
+            {
+                nextEventDateTime = evt.time;
+                nextEventTime = TimeToString(evt.time, TIME_DATE|TIME_SECONDS);
+                nextEventCurrency = evt.currency;
+                nextEventName = evt.event;
+                nextEventImpact = g_calendarReader.GetImpactString(evt.impact);
+            }
+        }
+    }
+    
+    // Build JSON
     string json = "{";
-    json += "\"events_today\":0,";
-    json += "\"high_impact_events\":0,";
+    json += "\"events_today\":" + IntegerToString(eventsToday) + ",";
+    json += "\"high_impact_events\":" + IntegerToString(highImpactEvents) + ",";
     json += "\"finbert_signal\":\"NEUTRAL\",";
     json += "\"finbert_confidence\":0.0,";
     json += "\"next_event\":{";
-    json += "\"time\":\"\",";
-    json += "\"currency\":\"\",";
-    json += "\"name\":\"\",";
-    json += "\"impact\":\"\"";
+    json += "\"time\":\"" + nextEventTime + "\",";
+    json += "\"currency\":\"" + nextEventCurrency + "\",";
+    json += "\"name\":\"" + nextEventName + "\",";
+    json += "\"impact\":\"" + nextEventImpact + "\"";
     json += "}";
     json += "}";
     
-    // TODO: Integrate with economic calendar when available
     return json;
 }
 

@@ -18,9 +18,18 @@ from __future__ import annotations
 import os
 import json
 import time
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
+
+# Set up logger for diagnostic output
+logger = logging.getLogger("EnhancedFinBERT")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 
 # ----------------------------- Paths & IO ------------------------------------
@@ -59,10 +68,10 @@ def get_finbert_pipeline():
         print("✅ Enhanced FinBERT dependencies loaded successfully")
     except Exception as e:
         print("=" * 80)
-        print("🚨🚨🚨 FINBERT NOT AVAILABLE 🚨🚨🚨")
-        print(f"❌ ERROR: Transformers library not found: {e}")
-        print("⚠️  FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
-        print("📦 To install FinBERT, run: python -m pip install torch transformers")
+        print("!!! FINBERT NOT AVAILABLE !!!")
+        print(f"[ERROR] Transformers library not found: {e}")
+        print("[WARNING] FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
+        print("[INFO] To install FinBERT, run: python -m pip install torch transformers")
         print("=" * 80)
         return None
 
@@ -80,14 +89,14 @@ def get_finbert_pipeline():
             return_all_scores=True,
             device=device,
         )
-        print(f"✅ Enhanced FinBERT pipeline initialized successfully on device: {device}")
+        print(f"[OK] Enhanced FinBERT pipeline initialized successfully on device: {device}")
         return _PIPELINE
     except Exception as e:
         print("=" * 80)
-        print("🚨🚨🚨 FINBERT FAILED TO LOAD 🚨🚨🚨")
-        print(f"❌ ERROR: {e}")
-        print("⚠️  FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
-        print("📦 To install FinBERT, run: python -m pip install torch transformers")
+        print("!!! FINBERT FAILED TO LOAD !!!")
+        print(f"[ERROR] {e}")
+        print("[WARNING] FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
+        print("[INFO] To install FinBERT, run: python -m pip install torch transformers")
         print("=" * 80)
         return None
 
@@ -206,18 +215,22 @@ class EnhancedFinBERTAnalyzer:
     
     def __init__(self):
         self.finbert_pipeline = get_finbert_pipeline()
+        # Refactored weights: FinBERT now analyzes ONLY calendar events (its trained purpose)
+        # Removed risk_assessment from weights (computed separately)
+        # Combined economic_sentiment and finbert_sentiment into economic_finbert
         self.weights = {
-            'technical_trend': 0.25,
-            'market_regime': 0.20,
-            'key_levels': 0.20,
-            'economic_sentiment': 0.15,
-            'risk_assessment': 0.10,
-            'finbert_sentiment': 0.10
+            'technical_trend': 0.30,      # Increased from 0.25
+            'market_regime': 0.25,         # Increased from 0.20
+            'key_levels': 0.20,            # Unchanged
+            'economic_finbert': 0.25       # NEW: Combined calendar + FinBERT sentiment
         }
     
     def analyze_comprehensive_market_data(self, market_context: MarketContext) -> EnhancedFinBERTDecision:
         """Analyze comprehensive market data and generate trading decision"""
         start_time = time.time()
+        
+        # Validate input data quality
+        self._validate_market_context(market_context)
         
         # 1. Technical Analysis Summary
         technical_summary = self._create_technical_summary(market_context)
@@ -231,13 +244,13 @@ class EnhancedFinBERTAnalyzer:
         # 4. Economic Calendar Integration
         calendar_analysis = self._analyze_economic_context(market_context)
         
-        # 5. Combined FinBERT Analysis
-        combined_prompt = self._create_combined_prompt(
-            technical_summary, regime_analysis, levels_analysis, calendar_analysis, market_context
-        )
+        # 5. Calendar-Only FinBERT Analysis
+        # FinBERT analyzes ONLY economic calendar events (its trained purpose)
+        # Technical analysis uses pure rule-based scoring
+        calendar_prompt = self._create_calendar_prompt(calendar_analysis, market_context)
         
-        # 6. FinBERT Processing
-        finbert_result = self._process_finbert_analysis(combined_prompt)
+        # 6. FinBERT Processing (calendar events only)
+        finbert_result = self._process_finbert_analysis(calendar_prompt)
         
         # 7. Risk Assessment
         risk_analysis = self._assess_risk(market_context, finbert_result)
@@ -252,6 +265,67 @@ class EnhancedFinBERTAnalyzer:
         final_decision.processing_time_ms = processing_time
         
         return final_decision
+    
+    def _validate_market_context(self, context: MarketContext) -> None:
+        """
+        Validate market context data quality and log warnings for missing data.
+        System continues with graceful degradation even if data is missing.
+        """
+        warnings = []
+        
+        # Check key levels
+        support_count = len(context.key_levels.support_levels)
+        resistance_count = len(context.key_levels.resistance_levels)
+        
+        if support_count == 0 and resistance_count == 0:
+            warnings.append("[WARNING] No key levels detected (empty support and resistance arrays)")
+            logger.warning("Key levels data is empty - key_levels component will have minimal influence")
+        elif support_count == 0:
+            warnings.append(f"[WARNING] No support levels detected ({resistance_count} resistance levels found)")
+        elif resistance_count == 0:
+            warnings.append(f"[WARNING] No resistance levels detected ({support_count} support levels found)")
+        else:
+            logger.info(f"[OK] Key levels: {support_count} support, {resistance_count} resistance")
+        
+        # Check nearest levels
+        if context.key_levels.nearest_support['price'] == 0.0:
+            warnings.append("[WARNING] No nearest support level identified")
+        if context.key_levels.nearest_resistance['price'] == 0.0:
+            warnings.append("[WARNING] No nearest resistance level identified")
+        
+        # Check economic calendar with weekend awareness
+        if context.economic_calendar.events_today == 0:
+            from datetime import datetime
+            day_of_week = datetime.now().strftime('%A')
+            is_weekend = day_of_week in ['Saturday', 'Sunday']
+            
+            if is_weekend:
+                logger.info(f"[OK] Economic calendar empty (expected on {day_of_week}). Using market structure analysis.")
+            else:
+                warnings.append("[WARNING] No economic events on trading day - check MT5 calendar settings (Tools > Options > Server > 'Enable news')")
+                logger.warning("Economic calendar has 0 events on weekday - FinBERT analysis will be less informative")
+        else:
+            high_impact = context.economic_calendar.high_impact_events
+            logger.info(f"[OK] Economic calendar: {context.economic_calendar.events_today} events "
+                       f"({high_impact} high-impact)")
+        
+        # Check next event (only warn on weekdays)
+        if not context.economic_calendar.next_event['name']:
+            from datetime import datetime
+            day_of_week = datetime.now().strftime('%A')
+            if day_of_week not in ['Saturday', 'Sunday']:
+                warnings.append("[WARNING] No upcoming economic events identified")
+        
+        # Log all warnings
+        if warnings:
+            logger.warning("=" * 80)
+            logger.warning("DATA QUALITY WARNINGS:")
+            for warning in warnings:
+                logger.warning(f"  {warning}")
+            logger.warning("Analysis will continue with graceful degradation")
+            logger.warning("=" * 80)
+        else:
+            logger.info("[OK] All input data validation passed")
     
     def _create_technical_summary(self, context: MarketContext) -> Dict[str, Any]:
         """Create technical analysis summary"""
@@ -375,65 +449,82 @@ class EnhancedFinBERTAnalyzer:
             'next_event': calendar.next_event
         }
     
-    def _create_combined_prompt(self, technical_summary: Dict, regime_analysis: Dict, 
-                               levels_analysis: Dict, calendar_analysis: Dict, 
-                               context: MarketContext) -> str:
-        """Create comprehensive prompt for FinBERT analysis"""
-        
-        prompt = f"""
-        Enhanced Financial Market Analysis Request:
-        
-        Current Market Situation:
-        - Symbol: {context.symbol} at {context.market_data['price']['current']}
-        - Trend: {technical_summary['trend_direction']} (Strength: {technical_summary['trend_strength']})
-        - RSI: {context.technical_indicators.rsi_current} (Status: {technical_summary['rsi_status']})
-        - Market Regime: {regime_analysis['regime']} (Confidence: {regime_analysis['confidence']})
-        - Volatility: {technical_summary['volatility_level']}
-        
-        Key Levels Analysis:
-        - Nearest Support: {levels_analysis['nearest_support']['price']} ({levels_analysis['nearest_support']['distance_pips']} pips away)
-        - Nearest Resistance: {levels_analysis['nearest_resistance']['price']} ({levels_analysis['nearest_resistance']['distance_pips']} pips away)
-        - Support Proximity: {levels_analysis['support_proximity']:.2f}
-        - Resistance Proximity: {levels_analysis['resistance_proximity']:.2f}
-        
-        Economic Context:
-        - FinBERT Signal: {calendar_analysis['signal']} (Confidence: {calendar_analysis['confidence']})
-        - Events Today: {calendar_analysis['events_today']} (High Impact: {calendar_analysis['high_impact_events']})
-        - Next Event: {calendar_analysis['next_event']['name']} at {calendar_analysis['next_event']['time']}
-        
-        Technical Confluence:
-        - Technical Score: {technical_summary['technical_score']:.3f}
-        - Regime Score: {regime_analysis['score']:.3f}
-        - Levels Score: {levels_analysis['levels_score']:.3f}
-        - Economic Score: {calendar_analysis['score']:.3f}
-        
-        Trading Decision Required:
-        Based on the comprehensive technical analysis, market regime, key levels proximity, 
-        and economic sentiment, provide a detailed trading recommendation:
-        
-        1. Overall market bias (BULLISH/BEARISH/NEUTRAL)
-        2. Entry recommendation (STRONG_BUY/BUY/HOLD/SELL/STRONG_SELL)
-        3. Risk assessment (LOW/MEDIUM/HIGH)
-        4. Key factors supporting the decision
-        5. Potential price targets and stop loss levels
-        6. Confidence level (0.0-1.0)
-        7. Position sizing recommendation
-        
-        Consider:
-        - Technical trend alignment across timeframes
-        - Support/resistance level proximity and strength
-        - Economic calendar impact and timing
-        - Volatility conditions and risk management
-        - Multi-timeframe confluence
-        - Market regime characteristics
+    def _create_calendar_prompt(self, calendar_analysis: Dict, context: MarketContext) -> str:
         """
+        Create financial news-style text from calendar events for FinBERT analysis.
         
-        return prompt
+        FinBERT was trained on short financial news headlines and articles (typically < 512 tokens).
+        This method formats calendar events into natural financial news text that FinBERT can analyze.
+        Keep under 100 words for optimal FinBERT performance.
+        """
+        calendar = context.economic_calendar
+        symbol = context.symbol
+        
+        # Extract base currency from symbol (e.g., USD from USDJPY)
+        base_currency = symbol[:3] if len(symbol) >= 6 else "USD"
+        
+        # If no events, return neutral market statement (common on weekends)
+        if calendar.events_today == 0:
+            from datetime import datetime
+            day_of_week = datetime.now().strftime('%A')
+            
+            # On weekends, note that markets are closed
+            if day_of_week in ['Saturday', 'Sunday']:
+                return f"{base_currency} markets remain steady with no economic releases scheduled on {day_of_week}. Weekend trading conditions."
+            else:
+                return f"{base_currency} markets remain steady with no major economic releases scheduled. Trading conditions normal."
+        
+        # Build news-style text from calendar events
+        news_parts = []
+        
+        # Add event count context
+        if calendar.high_impact_events > 0:
+            news_parts.append(f"{calendar.high_impact_events} high-impact economic event(s) scheduled for {base_currency}.")
+        else:
+            news_parts.append(f"{calendar.events_today} economic event(s) scheduled for {base_currency}.")
+        
+        # Add next event details if available
+        next_event = calendar.next_event
+        if next_event['name'] and next_event['currency']:
+            impact_descriptor = "major" if next_event['impact'] in ["HIGH", "CRITICAL"] else "scheduled"
+            news_parts.append(f"Next {impact_descriptor} release: {next_event['currency']} {next_event['name']}.")
+        
+        # Add market context from technical indicators
+        tech = context.technical_indicators
+        
+        # Add trend context
+        if tech.trend_direction == "BULLISH":
+            news_parts.append(f"{symbol} showing bullish momentum with positive technical outlook.")
+        elif tech.trend_direction == "BEARISH":
+            news_parts.append(f"{symbol} showing bearish pressure with negative technical outlook.")
+        else:
+            news_parts.append(f"{symbol} trading in neutral range with mixed signals.")
+        
+        # Add volatility context
+        if tech.volatility_level == "ABOVE_AVERAGE":
+            news_parts.append("Market volatility elevated.")
+        elif tech.volatility_level == "BELOW_AVERAGE":
+            news_parts.append("Market volatility subdued.")
+        
+        # Combine into cohesive financial news text (under 100 words)
+        news_text = " ".join(news_parts)
+        
+        # Truncate if too long (keep under 512 characters for FinBERT)
+        if len(news_text) > 500:
+            news_text = news_text[:497] + "..."
+        
+        return news_text
     
     def _process_finbert_analysis(self, prompt: str) -> Dict[str, Any]:
-        """Process prompt through FinBERT pipeline"""
+        """Process prompt through FinBERT pipeline with detailed diagnostic logging"""
+        logger.info("=" * 80)
+        logger.info("FinBERT Analysis Starting")
+        logger.info(f"Input text length: {len(prompt)} characters")
+        logger.info(f"Input text: {prompt[:200]}{'...' if len(prompt) > 200 else ''}")
+        
         if self.finbert_pipeline is None:
-            print("⚠️  Using FALLBACK analysis (FinBERT not loaded)")
+            logger.warning("[WARNING] Using FALLBACK analysis (FinBERT not loaded)")
+            print("[WARNING] Using FALLBACK analysis (FinBERT not loaded)")
             return self._fallback_sentiment_analysis(prompt)
         
         try:
@@ -445,44 +536,71 @@ class EnhancedFinBERTAnalyzer:
                 label = str(item.get("label", "")).lower()
                 probs[label] = float(item.get("score", 0.0))
             
+            # Log raw FinBERT probabilities
+            logger.info("Raw FinBERT Probability Distribution:")
+            for label, prob in sorted(probs.items(), key=lambda x: -x[1]):
+                logger.info(f"  {label:>10}: {prob:.4f} ({prob*100:.2f}%)")
+            
             p_pos = float(probs.get("positive", probs.get("bullish", 0.0)))
             p_neg = float(probs.get("negative", probs.get("bearish", 0.0)))
             p_neu = float(probs.get("neutral", 0.0))
             
             # Calculate sentiment score
             score = p_pos - p_neg
+            logger.info(f"Sentiment Score: {score:.4f} (positive: {p_pos:.4f} - negative: {p_neg:.4f})")
             
-            # Enhanced confidence calculation
-            confidence = self._calculate_enhanced_confidence(p_pos, p_neg, p_neu, prompt)
+            # Enhanced confidence calculation (entropy-based only)
+            confidence = self._calculate_enhanced_confidence(p_pos, p_neg, p_neu)
+            logger.info(f"Calculated Confidence: {confidence:.4f} ({confidence*100:.2f}%)")
+            
+            # Log entropy details
+            probs_list = [p_pos, p_neg, p_neu]
+            entropy = -sum(p * np.log(p + 1e-10) for p in probs_list if p > 0)
+            max_entropy = np.log(3)
+            normalized_entropy = 1 - (entropy / max_entropy)
+            logger.info(f"Entropy: {entropy:.4f}, Normalized: {normalized_entropy:.4f}, Max Prob: {max(probs_list):.4f}")
+            logger.info("[OK] Using REAL FinBERT AI analysis")
+            logger.info("=" * 80)
             
             return {
                 'sentiment_score': float(score),
                 'confidence': float(confidence),
                 'probabilities': probs,
-                'reasoning': f"✅ Real FinBERT AI analysis: {score:.3f} sentiment with {confidence:.3f} confidence"
+                'reasoning': f"[OK] Real FinBERT AI analysis: {score:.3f} sentiment with {confidence:.3f} confidence"
             }
         except Exception as e:
-            print(f"❌ FinBERT analysis error: {e}")
-            print("⚠️  Falling back to keyword analysis")
+            logger.error(f"[ERROR] FinBERT analysis error: {e}", exc_info=True)
+            logger.warning("[WARNING] Falling back to keyword analysis")
+            print(f"[ERROR] FinBERT analysis error: {e}")
+            print("[WARNING] Falling back to keyword analysis")
             return self._fallback_sentiment_analysis(prompt)
     
-    def _calculate_enhanced_confidence(self, p_pos: float, p_neg: float, p_neu: float, text: str) -> float:
-        """Calculate enhanced confidence using multiple uncertainty metrics"""
-        # Base confidence from prediction entropy
+    def _calculate_enhanced_confidence(self, p_pos: float, p_neg: float, p_neu: float) -> float:
+        """
+        Calculate confidence using entropy-based uncertainty metrics.
+        
+        FinBERT works best with SHORT text (headlines/articles), so we removed the 
+        text_length_factor that incorrectly penalized shorter inputs.
+        
+        Confidence is based purely on probability distribution entropy:
+        - High confidence when one class dominates (low entropy)
+        - Low confidence when probabilities are similar (high entropy)
+        """
         probs = [p_pos, p_neg, p_neu]
         max_prob = max(probs)
+        
+        # Calculate entropy (uncertainty measure)
         entropy = -sum(p * np.log(p + 1e-10) for p in probs if p > 0)
         max_entropy = np.log(3)  # For 3 classes
         normalized_entropy = 1 - (entropy / max_entropy)
         
-        # Text length confidence factor
-        text_length_factor = min(1.0, len(text) / 500.0)  # Normalize to 500 chars
+        # Confidence is weighted combination of max probability and normalized entropy
+        # Max prob (70%): How strongly the model predicts the top class
+        # Normalized entropy (30%): How certain vs uncertain the distribution is
+        confidence = max_prob * 0.7 + normalized_entropy * 0.3
         
-        # Combined confidence
-        base_confidence = max_prob * 0.5 + normalized_entropy * 0.3
-        contextual_confidence = text_length_factor * 0.2
-        
-        final_confidence = min(1.0, max(0.1, base_confidence + contextual_confidence))
+        # Ensure confidence stays in reasonable bounds
+        final_confidence = min(1.0, max(0.1, confidence))
         
         return final_confidence
     
@@ -501,7 +619,7 @@ class EnhancedFinBERTAnalyzer:
                 'sentiment_score': 0.0,
                 'confidence': 0.3,
                 'probabilities': {'positive': 0.33, 'negative': 0.33, 'neutral': 0.34},
-                'reasoning': '⚠️  FALLBACK KEYWORD ANALYSIS (NOT REAL AI) - neutral sentiment with low confidence'
+                'reasoning': '[WARNING] FALLBACK KEYWORD ANALYSIS (NOT REAL AI) - neutral sentiment with low confidence'
             }
         
         score = (pos_count - neg_count) / total
@@ -511,7 +629,7 @@ class EnhancedFinBERTAnalyzer:
             'sentiment_score': float(score),
             'confidence': float(confidence),
             'probabilities': {'positive': 0.5 + score/2, 'negative': 0.5 - score/2, 'neutral': 0.2},
-            'reasoning': f'⚠️  FALLBACK KEYWORD ANALYSIS (NOT REAL AI) - {score:.3f} sentiment with {confidence:.3f} confidence'
+            'reasoning': f'[WARNING] FALLBACK KEYWORD ANALYSIS (NOT REAL AI) - {score:.3f} sentiment with {confidence:.3f} confidence'
         }
     
     def _assess_risk(self, context: MarketContext, finbert_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -565,19 +683,34 @@ class EnhancedFinBERTAnalyzer:
         technical_score = technical_summary['technical_score']
         regime_score = regime_analysis['score']
         levels_score = levels_analysis['levels_score']
+        
+        # Combine calendar economic score with FinBERT sentiment
+        # Both come from the same source (economic calendar events)
         economic_score = calendar_analysis['score']
         finbert_score = finbert_result['sentiment_score']
-        risk_score = risk_analysis['risk_score']
+        finbert_confidence = finbert_result['confidence']
         
-        # Apply weights
+        # Weight the FinBERT score by its confidence (low confidence = less influence)
+        weighted_finbert = finbert_score * finbert_confidence
+        
+        # Combine economic and FinBERT into single economic_finbert score
+        # If FinBERT has high confidence, it dominates; if low confidence, rule-based economic score takes over
+        economic_finbert_score = (weighted_finbert * 0.7 + economic_score * 0.3)
+        
+        # Apply component weights (no more risk_assessment in weights)
         weighted_score = (
             technical_score * self.weights['technical_trend'] +
             regime_score * self.weights['market_regime'] +
             levels_score * self.weights['key_levels'] +
-            economic_score * self.weights['economic_sentiment'] +
-            finbert_score * self.weights['finbert_sentiment'] +
-            (1.0 - risk_score) * self.weights['risk_assessment']  # Lower risk = higher score
+            economic_finbert_score * self.weights['economic_finbert']
         )
+        
+        # Apply risk adjustment (multiplicative, not additive)
+        risk_score = risk_analysis['risk_score']
+        if risk_score > 0.5:
+            weighted_score *= 0.7  # High risk: reduce signal strength by 30%
+        elif risk_score > 0.3:
+            weighted_score *= 0.85  # Medium risk: reduce signal strength by 15%
         
         # Calculate confluence score
         confluence_score = (technical_score + regime_score + levels_score + economic_score) / 4
@@ -594,8 +727,35 @@ class EnhancedFinBERTAnalyzer:
         else:
             signal = "NEUTRAL"
         
-        # Calculate confidence
-        confidence = min(1.0, abs(weighted_score) + finbert_result['confidence'] * 0.3)
+        # Calculate final trading decision confidence
+        # This represents signal conviction, NOT FinBERT sentiment quality
+        signal_conviction = abs(weighted_score)
+        
+        # Combine with component confidences
+        technical_confidence = abs(technical_summary['trend_strength']) if 'trend_strength' in technical_summary else 0.5
+        regime_confidence = context.market_regime.confidence
+        finbert_sentiment_confidence = finbert_result['confidence']
+        
+        # Weighted average of all confidence sources
+        combined_confidence = (
+            technical_confidence * 0.3 +
+            regime_confidence * 0.3 +
+            finbert_sentiment_confidence * 0.4
+        )
+        
+        # If signal is weak, use signal conviction instead of component average
+        # This prevents high component confidence from masking weak trading signals
+        if signal_conviction < 0.4:
+            final_confidence = signal_conviction
+            logger.info(f"Weak trading signal detected (conviction: {signal_conviction:.3f} < 0.4)")
+            logger.info(f"FinBERT sentiment confidence: {finbert_sentiment_confidence:.3f} (sentiment quality is good)")
+            logger.info(f"Position size will be reduced due to conflicting/weak component signals")
+        else:
+            final_confidence = combined_confidence
+            logger.info(f"Strong trading signal (conviction: {signal_conviction:.3f})")
+            logger.info(f"Combined confidence: {combined_confidence:.3f}")
+        
+        confidence = min(1.0, final_confidence)
         
         # Generate reasoning
         reasoning = self._generate_reasoning(
@@ -698,8 +858,31 @@ class EnhancedFinBERTAnalyzer:
         return stop_loss
     
     def _calculate_position_size_multiplier(self, confidence: float, risk_level: str, confluence_score: float) -> float:
-        """Calculate position size multiplier based on confidence and risk"""
+        """
+        Calculate position size multiplier based on signal conviction and risk.
+        
+        Note: 'confidence' parameter represents TRADING SIGNAL CONVICTION, not FinBERT sentiment quality.
+        Low conviction = weak/conflicting signals across technical, regime, levels, and economic components.
+        
+        Implements weak signal penalty:
+        - conviction < 0.4: multiply by 0.3 (severe reduction for weak signals)
+        - conviction < 0.6: multiply by conviction (gradual reduction)
+        - conviction >= 0.6: no penalty (strong unified signal)
+        """
         base_multiplier = confidence
+        
+        # Apply weak signal penalty (not sentiment confidence penalty)
+        if confidence < 0.4:
+            signal_penalty = 0.3  # Severe reduction for very weak/conflicting signals
+            logger.info(f"Weak trading signal penalty applied: {confidence:.3f} < 0.4, using penalty {signal_penalty}")
+        elif confidence < 0.6:
+            signal_penalty = confidence  # Gradual reduction for moderate signals
+            logger.info(f"Moderate signal strength: {confidence:.3f} < 0.6, using proportional sizing")
+        else:
+            signal_penalty = 1.0  # No penalty for strong unified signals
+            logger.info(f"Strong signal detected: {confidence:.3f} >= 0.6, full position sizing")
+        
+        base_multiplier *= signal_penalty
         
         # Adjust for risk level
         risk_adjustments = {
@@ -714,6 +897,9 @@ class EnhancedFinBERTAnalyzer:
         confluence_multiplier = 0.8 + (confluence_score * 0.4)  # 0.8 to 1.2 range
         
         final_multiplier = base_multiplier * risk_multiplier * confluence_multiplier
+        
+        logger.info(f"Position sizing: base={base_multiplier:.3f}, risk={risk_multiplier:.3f}, "
+                   f"confluence={confluence_multiplier:.3f}, final={final_multiplier:.3f}")
         
         return max(0.1, min(2.0, final_multiplier))  # Clamp between 0.1 and 2.0
 
@@ -764,9 +950,7 @@ def analyze_enhanced_market_data(market_context_data: Dict[str, Any]) -> Dict[st
                 'technical_trend': analyzer.weights['technical_trend'],
                 'market_regime': analyzer.weights['market_regime'],
                 'key_levels': analyzer.weights['key_levels'],
-                'economic_sentiment': analyzer.weights['economic_sentiment'],
-                'risk_assessment': analyzer.weights['risk_assessment'],
-                'finbert_sentiment': analyzer.weights['finbert_sentiment']
+                'economic_finbert': analyzer.weights['economic_finbert']
             },
             'component_scores': {
                 'technical_score': decision.technical_score,
@@ -779,8 +963,7 @@ def analyze_enhanced_market_data(market_context_data: Dict[str, Any]) -> Dict[st
                 'technical_contribution': decision.technical_score * analyzer.weights['technical_trend'],
                 'regime_contribution': decision.regime_score * analyzer.weights['market_regime'],
                 'levels_contribution': decision.levels_score * analyzer.weights['key_levels'],
-                'economic_contribution': decision.economic_score * analyzer.weights['economic_sentiment'],
-                'finbert_contribution': decision.weighted_score * analyzer.weights['finbert_sentiment']
+                'economic_finbert_contribution': decision.economic_score * analyzer.weights['economic_finbert']
             },
             'confidence_breakdown': {
                 'base_confidence': decision.confidence,
@@ -872,7 +1055,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("🚨 WARNING: Using FALLBACK analysis (FinBERT not available)")
     else:
         result["finbert_status"] = "REAL_AI"
-        print("✅ Using REAL FinBERT AI analysis")
+        print("[OK] Using REAL FinBERT AI analysis")
 
     # Write result
     output_path = args.output_path or default_output_path()

@@ -1,243 +1,246 @@
 # Grande Trading System
 
-## Overview
-
-Grande Trading System is an advanced MQL5 Expert Advisor with integrated AI-powered calendar analysis. The system combines technical analysis, market regime detection, key level identification, and FinBERT sentiment analysis for informed trading decisions.
-
-## Current Status: Operational
-
-### Core Components
-- **Trading Engine**: Multi-timeframe trend following with regime detection
-- **Key Level Detection**: Support/resistance identification with strength scoring
-- **Market Regime Detector**: Identifies trending, ranging, and breakout conditions
-- **AI Calendar Analysis**: FinBERT-powered economic event sentiment analysis
-- **Risk Management**: ATR-based position sizing and stop loss management
-- **Database Logging**: SQLite database for trade analysis and reporting
-
-### Supported Currency Pairs
-
-**Standard Pairs (5 digits)**: EUR/USD, GBP/USD, USD/CHF, USD/CAD, AUD/USD, NZD/USD
-
-**JPY Pairs (3 digits)**: USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY
-
-**Cross Pairs**: EUR/GBP, EUR/AUD, GBP/CAD, AUD/CAD
-
-The EA automatically adapts to different pip sizes and volatility levels using ATR-based calculations.
+Multi-timeframe trend-following Expert Advisor for MT5 with AI-powered sentiment analysis and automated trade management.
 
 ## Quick Start
 
-### Installation
+### First Time Setup
 
-1. Copy all `.mqh` files to your MT5 `Include` folder
-2. Copy `GrandeTradingSystem.mq5` to your MT5 `Experts` folder
-3. Copy `GrandeMonitorIndicator.mq5` to your MT5 `Indicators` folder
-4. Compile or use the build script: `.\GrandeBuild.ps1`
+1. **Install FinBERT service:**
+   ```powershell
+   cd mcp\analyze_sentiment_server
+   .\install_finbert.bat
+   ```
 
-### Critical Settings
+2. **Start the sentiment analysis service:**
+   ```powershell
+   .\start_finbert_watcher.bat
+   ```
 
-**For all currency pairs:**
-```
-InpTouchZone = 0  // Auto-calculate from ATR (critical!)
-InpEnableTrading = true
-InpLogDetailedInfo = true
-```
+3. **Build and deploy the EA:**
+   ```powershell
+   cd scripts
+   .\GrandeBuild.ps1
+   ```
 
-**Risk Management:**
-```
-InpRiskPctTrend = 2.0  // Lower to 1.0-1.5% for volatile pairs
-InpMaxPositions = 7
-InpMaxDrawdownPct = 30.0
-```
+4. **Attach EA to chart in MT5:**
+   - Open any supported currency pair
+   - Drag GrandeTradingSystem from Navigator to chart
+   - Configure settings (see EA Settings section)
+   - Enable AutoTrading
 
-**ATR-Based Risk:**
-```
-InpSLATRMultiplier = 1.8  // Increase to 2.0-2.5 for volatile pairs
-InpTPRewardRatio = 3.0
-```
+### Daily Operations
 
-### Settings by Pair Type
-
-#### Low Volatility (EUR/USD, USD/CHF)
-- Risk: 2.0%
-- SL ATR: 1.8
-- TP R:R: 3.0
-- Min Range: 15 pips
-
-#### High Volatility (GBP/USD, GBP/JPY)
-- Risk: 1.5%
-- SL ATR: 2.0
-- TP R:R: 2.5
-- Min Range: 30 pips
-
-#### JPY Pairs (USD/JPY, EUR/JPY)
-- Risk: 2.0%
-- SL ATR: 1.8
-- TP R:R: 3.0
-- Min Range: 25 pips
-- **Must use InpTouchZone = 0**
-
-## Features
-
-### Universal Compatibility
-
-The EA works across all major currency pairs through:
-
-1. **Automatic Pip Size Detection**: Handles 2, 3, 4, and 5-digit quotes
-2. **ATR-Based Calculations**: Adapts to each pair's volatility
-3. **Dynamic Symbol Properties**: Queries broker-specific values
-4. **Smart Position Sizing**: Calculates correct pip values for accurate risk management
-
-### AI Calendar Integration
-
-- Analyzes economic events using FinBERT sentiment analysis
-- Provides trading signals with confidence scores
-- Updates automatically every 15 minutes
-- File-based integration (no Docker required)
-
-### Market Regime Detection
-
-- **Trend Bull/Bear**: Strong directional movement
-- **Ranging**: Consolidation between support/resistance
-- **Breakout Setup**: Tight consolidation before breakout
-- **High Volatility**: Elevated risk conditions
-
-### Key Level Detection
-
-- Identifies support and resistance levels
-- Scores level strength based on touches and price action
-- Updates every 5 minutes
-- Visualizes levels on chart
-
-## File Structure
-
-### Core Trading Files
-- `GrandeTradingSystem.mq5` - Main EA
-- `GrandeMonitorIndicator.mq5` - Chart monitor indicator
-- `GrandeMarketRegimeDetector.mqh` - Regime detection
-- `GrandeKeyLevelDetector.mqh` - Support/resistance detection
-- `GrandeMultiTimeframeAnalyzer.mqh` - Multi-timeframe analysis
-- `GrandeDatabaseManager.mqh` - SQLite database management
-- `GrandeIntelligentReporter.mqh` - Reporting system
-
-### AI Integration
-- `GrandeMT5CalendarReader.mqh` - Calendar data reader
-- `mcp/analyze_sentiment_server/GrandeNewsSentimentIntegration.mqh` - FinBERT integration
-- `mcp/analyze_sentiment_server/finbert_calendar_analyzer.py` - Python analysis script
-
-### Build & Configuration
-- `GrandeBuild.ps1` - Automated build script
-- `Set-MT5Environment.ps1` - Environment setup
-- `BUILD_USAGE.md` - Build system documentation
-- `PATH_CONFIGURATION.md` - Path configuration guide
-
-## Testing Procedure
-
-### Before Live Trading
-
-1. **Strategy Tester** (3-6 months)
-   - Verify no "Invalid stops" errors
-   - Check lot sizes are reasonable
-   - Confirm risk calculations
-
-2. **Demo Account** (1-2 weeks)
-   - Monitor order execution
-   - Verify stop/limit placement
-   - Check position sizing
-
-3. **Live (Minimum Size)** (1 week)
-   - Start with 0.01 lot
-   - Watch first 5-10 trades
-   - Adjust settings if needed
-
-## Monitoring
-
-### Daily Checks
-
-Check these files for system health:
-
-```
-%APPDATA%\MetaQuotes\Terminal\Common\Files\
-├── economic_events.json (Calendar data)
-├── integrated_calendar_analysis.json (FinBERT results)
-└── integrated_news_analysis.json (News sentiment)
-
-%APPDATA%\MetaQuotes\Terminal\{ID}\MQL5\Files\
-├── FinBERT_Data_EURUSD!_YYYY.MM.DD.csv (Trade log)
-├── GrandeReport_EURUSD!_YYYY.MM.DD.txt (Reports)
-└── GrandeTradingData.db (SQLite database)
-```
-
-### Monitoring Script
-
-Run the included monitoring script:
+**Start trading session:**
 ```powershell
-.\monitor_improvements.ps1
+cd mcp\analyze_sentiment_server
+.\start_finbert_watcher.bat
 ```
+
+**Stop trading session:**
+```powershell
+cd mcp\analyze_sentiment_server
+.\stop_finbert_watcher.bat
+```
+
+**Check FinBERT status:**
+- View `finbert_watcher.log` for recent activity
+- Verify `integrated_calendar_analysis.json` in `%APPDATA%\MetaQuotes\Terminal\Common\Files\`
+- Timestamps should update every 15 minutes
+
+**Generate performance report:**
+```powershell
+cd scripts
+.\RunDailyAnalysis.ps1
+```
+View report in `docs\daily_analysis\DAILY_ANALYSIS_REPORT_YYYYMMDD.md`
+
+## EA Settings
+
+### Recommended Settings by Pair Type
+
+**Standard Pairs (EURUSD, GBPUSD, USDCHF, USDCAD, AUDUSD, NZDUSD):**
+- `InpRiskPercent`: 1.5 - 2.0
+- `InpSLATRMultiplier`: 1.8 - 2.0
+- `InpRewardRatio`: 2.5 - 3.0
+- `InpTouchZone`: 0 (auto-calculate from ATR)
+
+**JPY Pairs (USDJPY, EURJPY, GBPJPY, AUDJPY):**
+- `InpRiskPercent`: 2.0
+- `InpSLATRMultiplier`: 1.8
+- `InpRewardRatio`: 2.5 - 3.0
+- `InpTouchZone`: 0 (required)
+
+**Cross Pairs (EURGBP, EURAUD, GBPCAD, AUDCAD):**
+- `InpRiskPercent`: 1.5 - 2.0
+- `InpSLATRMultiplier`: 2.0
+- `InpRewardRatio`: 2.5 - 3.0
+- `InpTouchZone`: 0
+
+### Critical Setting Notes
+
+- Always set `InpTouchZone = 0` to use ATR-based calculation
+- EA adapts automatically to different pip sizes and volatility
+- Adjust risk based on your account size and risk tolerance
+- Higher ATR multipliers reduce false stops but lower win rate
+
+## System Components
+
+### Trading Logic
+- Multi-timeframe trend analysis (H1, H4, D1)
+- Market regime detection (trending vs ranging)
+- Key support/resistance level identification
+- Triangle pattern detection and breakout trading
+- ATR-based dynamic position sizing and stop loss
+
+### AI Sentiment Integration
+- FinBERT analyzes economic calendar events
+- Updates every 15 minutes
+- Provides sentiment scores and trading signals
+- No Docker required, runs as Windows service
+
+### Data Management
+- SQLite database stores all trade history
+- Automated daily reporting
+- Performance analytics and optimization
+- Sentiment correlation tracking
+
+## Analysis Tools
+
+**Performance Analysis:**
+```powershell
+cd scripts
+.\RunDailyAnalysis.ps1
+```
+Generates comprehensive report with win rates, profit analysis, and parameter recommendations.
+
+**FinBERT Impact Analysis:**
+```powershell
+.\AnalyzeFinBERTImpact.ps1
+```
+Correlates sentiment scores with trade outcomes.
+
+**FinBERT Quality Check:**
+```powershell
+.\AssessFinBERTQuality.ps1
+```
+Validates sentiment data accuracy and coverage.
+
+**Reset Database (testing only):**
+```powershell
+.\SeedTradingDatabase.ps1
+```
+
+## Development
+
+### Making Changes to EA
+
+1. **Edit source files:**
+   - Main EA: `GrandeTradingSystem.mq5`
+   - Components: `Include\Grande*.mqh`
+
+2. **Build and deploy:**
+   ```powershell
+   cd scripts
+   .\GrandeBuild.ps1
+   ```
+
+3. **Verify in MT5:**
+   - Check Navigator panel for compilation errors
+   - Restart EA on active charts
+   - Monitor Experts tab for runtime errors
+
+### File Locations
+
+**Source Code:**
+- `GrandeTradingSystem.mq5` - Main EA
+- `Include\*.mqh` - All components and libraries
+- `mcp\analyze_sentiment_server\` - FinBERT service
+
+**MT5 Common Files:** `%APPDATA%\MetaQuotes\Terminal\Common\Files\`
+- `economic_events.json` - Raw calendar data
+- `integrated_calendar_analysis.json` - FinBERT analysis
+
+**MT5 Terminal Files:** `%APPDATA%\MetaQuotes\Terminal\{ID}\MQL5\Files\`
+- `FinBERT_Data_*.csv` - Trade logs with sentiment
+- `GrandeReport_*.txt` - Daily reports
+- `GrandeTradingData.db` - Trade database
+
+**Reports:**
+- `docs\daily_analysis\` - Performance reports
+- `Data\GrandeTradingData.db` - Source database
 
 ## Troubleshooting
 
-### "Invalid Stops" Error
+### FinBERT Service Issues
+
+**Service not running:**
+```powershell
+cd mcp\analyze_sentiment_server
+.\start_finbert_watcher.bat
+```
+
+**Check logs:**
+- View `finbert_watcher.log` for errors
+- Verify Python installation
+- Check network connectivity for calendar data
+
+**Files not updating:**
+- Confirm service is running
+- Check file timestamps in Common Files folder
+- Restart service if stale
+
+### EA Issues
+
+**Compilation errors:**
+- Run `.\scripts\GrandeBuild.ps1` to see specific errors
+- Verify Include files are in MT5 Include directory
+- Check for syntax errors in modified files
+
+**Invalid stops error:**
 - Increase `InpSLATRMultiplier` to 2.0+
-- Check broker's `SYMBOL_TRADE_STOPS_LEVEL`
-- Verify `InpMinStopDistanceMultiplier`
+- Check broker's minimum stop distance requirements
+- Verify ATR is providing sufficient values
 
-### "Invalid Volume" Error
-- Check broker's min/max lot sizes
-- Verify sufficient margin
-- Adjust risk percentages downward
+**No trades opening:**
+- Check if FinBERT service is running
+- Verify AutoTrading is enabled in MT5
+- Review recent market conditions (may not meet criteria)
+- Check Journal tab for rejection reasons
 
-### Positions Not Opening
-- Enable `InpLogDetailedInfo = true`
-- Check Experts tab for rejection reasons
-- Verify `InpEnableTrading = true`
+**Database errors:**
+- Verify `GrandeTradingData.db` exists in Data folder
+- Check file permissions
+- Run `.\scripts\SeedTradingDatabase.ps1` to reset
 
-### Calendar Analysis Not Loading
-- Check `integrated_calendar_analysis.json` exists
-- Run `python finbert_calendar_analyzer.py`
-- Enable calendar in MT5: Tools > Options > Server > Enable news
+### Performance Issues
 
-## Documentation
+**Review daily analysis report:**
+- Check win rates by signal type
+- Identify underperforming conditions
+- Review recommended parameter adjustments
+- Implement changes with confidence levels
 
-- `docs/GRANDE_EA_STATUS.md` - Detailed system status and monitoring guide
-- `docs/DEBUG_LOGS_PROMPT.md` - Debugging guide
-- `docs/PROFIT_LOSS_ANALYSIS_PROMPT.md` - P&L analysis guide
-- `BUILD_USAGE.md` - Build system documentation
-- `PATH_CONFIGURATION.md` - Path configuration
+**Adjust settings:**
+- Start with recommended values
+- Test changes in Strategy Tester first
+- Make one change at a time
+- Monitor results for 20+ trades before evaluating
 
-## Version History
+## Supported Currency Pairs
 
-### v1.01 (Current)
-- Universal multi-currency support
-- Auto-calculated touch zones from ATR
-- Symbol validation on initialization
-- Enhanced logging and reporting
-- Fixed RSI logic for trend trading
-- Fixed Risk Manager error counter
-- Database logging improvements
+**Major Pairs:** EURUSD, GBPUSD, USDCHF, USDCAD, AUDUSD, NZDUSD
 
-### v1.00
-- Initial release
-- Core trading logic
-- AI calendar integration
-- Basic multi-timeframe analysis
+**JPY Pairs:** USDJPY, EURJPY, GBPJPY, AUDJPY
 
-## Support
+**Cross Pairs:** EURGBP, EURAUD, GBPCAD, AUDCAD
 
-For issues or questions:
-1. Check this README first
-2. Review initialization logs (Experts tab)
-3. Enable detailed logging (`InpLogDetailedInfo = true`)
-4. Check the docs folder for specific guides
+All pairs use automatic pip size and volatility adjustment via ATR calculations.
 
-## Requirements
+## Additional Documentation
 
-- MetaTrader 5 (build 3661+)
-- Python 3.8+ (for AI calendar analysis)
-- Windows 10/11
-- Minimum account: $1,000 recommended
-
-## License
-
-Copyright 2024, Grande Tech
-https://www.grandetech.com.br
+- `docs\AI_CONTEXT.md` - System architecture and component details
+- `docs\daily_analysis\README.md` - Analysis report documentation
+- `mcp\analyze_sentiment_server\README_FILE_WATCHER.md` - FinBERT service details
+- `SETTINGS_TEMPLATES_BY_PAIR.txt` - Detailed settings for each pair
 
