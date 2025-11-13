@@ -342,6 +342,7 @@ double NormalizeVolumeToStep(const string symbol, double volume);
 void NormalizeStops(const bool isBuy, const double entryPrice, double &sl, double &tp);
 bool IsPendingPriceValid(const bool isBuyStop, const double levelPrice);
 bool HasSimilarPendingOrderForBreakout(const bool isBuyStop, const double levelPrice, const int tolerancePoints);
+bool HasSimilarPendingLimitOrder(const bool isBuyLimit, const double levelPrice, const int tolerancePoints);
 void CollectMarketDataForDatabase();
 void CollectEnhancedMarketDataForFinBERT();
 string CreateComprehensiveMarketContext();
@@ -2882,6 +2883,14 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "
         
         if(limitPrice > 0 && MathAbs(limitPrice - price) / GetPipSize() <= InpMaxLimitDistancePips)
         {
+            // Check if similar limit order already exists to prevent duplicates
+            if(HasSimilarPendingLimitOrder(bullish, limitPrice, 3))
+            {
+                if(InpLogDetailedInfo)
+                    Print(logPrefix + "Skip: similar pending limit order already exists near ", DoubleToString(limitPrice, _Digits));
+                return;
+            }
+            
             // Valid confluence zone found - use limit order
             orderTypeStr = "LIMIT";
             
@@ -3254,6 +3263,14 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
         
         if(limitPrice > 0 && MathAbs(limitPrice - currentPrice) / GetPipSize() <= InpMaxLimitDistancePips)
         {
+            // Check if similar limit order already exists to prevent duplicates
+            if(HasSimilarPendingLimitOrder(isBuyDirection, limitPrice, 3))
+            {
+                if(InpLogDetailedInfo)
+                    Print("[BREAKOUT] Skip: similar pending limit order already exists near ", DoubleToString(limitPrice, _Digits));
+                return;
+            }
+            
             // Valid confluence zone found - use limit order
             orderTypeStr = "LIMIT";
             
@@ -7786,6 +7803,33 @@ bool HasSimilarPendingOrderForBreakout(const bool isBuyStop, const double levelP
         long type = OrderGetInteger(ORDER_TYPE);
         if(isBuyStop && type != ORDER_TYPE_BUY_STOP) continue;
         if(!isBuyStop && type != ORDER_TYPE_SELL_STOP) continue;
+        if((int)OrderGetInteger(ORDER_MAGIC) != InpMagicNumber) continue;
+        double price = OrderGetDouble(ORDER_PRICE_OPEN);
+        if(MathAbs(price - levelPrice) <= tol)
+            return true;
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check if similar pending limit order already exists              |
+//| Returns true if a similar limit order exists within tolerance    |
+//+------------------------------------------------------------------+
+bool HasSimilarPendingLimitOrder(const bool isBuyLimit, const double levelPrice, const int tolerancePoints)
+{
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    double tol = MathMax(1, tolerancePoints) * point;
+    int total = OrdersTotal();
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(ticket == 0) continue;
+        if(!OrderSelect(ticket))
+            continue;
+        if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+        long type = OrderGetInteger(ORDER_TYPE);
+        if(isBuyLimit && type != ORDER_TYPE_BUY_LIMIT) continue;
+        if(!isBuyLimit && type != ORDER_TYPE_SELL_LIMIT) continue;
         if((int)OrderGetInteger(ORDER_MAGIC) != InpMagicNumber) continue;
         double price = OrderGetDouble(ORDER_PRICE_OPEN);
         if(MathAbs(price - levelPrice) <= tol)
