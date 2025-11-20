@@ -31,9 +31,17 @@ from __future__ import annotations
 import os
 import re
 import json
+import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+# Fix Windows encoding issues with Unicode characters
+if sys.platform == "win32":
+    import codecs
+    try:
+        sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
+    except:
+        pass
 
 # ----------------------------- Paths & IO ------------------------------------
 
@@ -102,19 +110,19 @@ def get_finbert_pipeline():
             AutoModelForSequenceClassification,  # type: ignore
             TextClassificationPipeline,  # type: ignore
         )
-        print("✅ FinBERT dependencies loaded successfully")
+        print("[OK] FinBERT dependencies loaded successfully")
     except Exception as e:
         print("=" * 80)
-        print("🚨🚨🚨 FINBERT NOT AVAILABLE 🚨🚨🚨")
-        print(f"❌ ERROR: Transformers library not found: {e}")
-        print("⚠️  FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
-        print("📦 To install FinBERT, run: python -m pip install torch transformers")
+        print("!!! FINBERT NOT AVAILABLE !!!")
+        print(f"[ERROR] Transformers library not found: {e}")
+        print("[WARNING] FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
+        print("[INFO] To install FinBERT, run: python -m pip install torch transformers")
         print("=" * 80)
         return None
 
     try:
         model_name = os.environ.get("FINBERT_MODEL", "yiyanghkust/finbert-tone")
-        print(f"🤖 Loading FinBERT model: {model_name}")
+        print(f"[MODEL] Loading FinBERT model: {model_name}")
         
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
@@ -126,14 +134,14 @@ def get_finbert_pipeline():
             return_all_scores=True,
             device=device,
         )
-        print(f"✅ FinBERT pipeline initialized successfully on device: {device}")
+        print(f"[OK] FinBERT pipeline initialized successfully on device: {device}")
         return _PIPELINE
     except Exception as e:
         print("=" * 80)
-        print("🚨🚨🚨 FINBERT FAILED TO LOAD 🚨🚨🚨")
-        print(f"❌ ERROR: {e}")
-        print("⚠️  FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
-        print("📦 To install FinBERT, run: python -m pip install torch transformers")
+        print("!!! FINBERT FAILED TO LOAD !!!")
+        print(f"[ERROR] {e}")
+        print("[WARNING] FALLING BACK TO KEYWORD-BASED ANALYSIS (NOT REAL AI)")
+        print("[INFO] To install FinBERT, run: python -m pip install torch transformers")
         print("=" * 80)
         return None
 
@@ -147,7 +155,7 @@ def classify_finbert(text: str) -> Tuple[float, float]:
     
     if pipe is None:
         # Fallback sentiment analysis using keyword matching
-        print("⚠️  Using FALLBACK sentiment analysis (FinBERT not available)")
+        print("[WARNING] Using FALLBACK sentiment analysis (FinBERT not available)")
         return fallback_sentiment_analysis(text)
     
     try:
@@ -225,7 +233,7 @@ except ImportError:
 
 def fallback_sentiment_analysis(text: str) -> Tuple[float, float]:
     """Simple fallback sentiment analysis using keyword matching."""
-    print("⚠️  USING KEYWORD FALLBACK (NOT REAL AI)")
+    print("[WARNING] USING KEYWORD FALLBACK (NOT REAL AI)")
     positive_words = ["better", "higher", "increase", "growth", "strong", "bullish", "up", "rise", "gain", "positive", "hawkish", "above", "beat", "exceed"]
     negative_words = ["worse", "lower", "decrease", "decline", "weak", "bearish", "down", "fall", "drop", "negative", "dovish", "below", "miss", "disappoint"]
     
@@ -562,7 +570,7 @@ def analyze_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     )
 
     # Check if using real FinBERT or fallback
-    finbert_status = "✅ Real FinBERT AI" if _PIPELINE is not None else "⚠️  FALLBACK KEYWORD ANALYSIS"
+    finbert_status = "[OK] Real FinBERT AI" if _PIPELINE is not None else "[WARNING] FALLBACK KEYWORD ANALYSIS"
     
     reasoning = (
         f"{finbert_status} | Analysis of {len(events)} events. "

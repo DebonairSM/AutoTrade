@@ -31,6 +31,7 @@ echo This will install:
 echo   - PyTorch (Deep Learning Framework^)
 echo   - Transformers (HuggingFace Library^)
 echo   - NumPy (Numerical Computing^)
+echo   - Protobuf (Required by Transformers^)
 echo.
 echo This may take several minutes...
 echo.
@@ -55,6 +56,11 @@ REM Install NumPy
 echo.
 echo Installing NumPy...
 python -m pip install numpy
+
+REM Install Protobuf (required by Transformers)
+echo.
+echo Installing Protobuf (required by Transformers^)...
+python -m pip install protobuf
 
 REM Test installation
 echo.
