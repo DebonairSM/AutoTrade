@@ -72,6 +72,16 @@ input double InpMaxDrawdownPct = 30.0;           // Maximum Account Drawdown %
 input double InpEquityPeakReset = 5.0;           // Reset Peak after X% Recovery
 input int    InpMaxPositions = 7;                // Maximum Concurrent Positions
 
+input group "=== Emergency Margin Protection ==="
+input bool   InpEnableMarginProtection = true;   // Enable Emergency Margin Protection
+input double InpMinMarginLevelToTrade = 150.0;   // Minimum Margin Level to Open New Trades (%)
+input double InpMarginWarningLevel = 150.0;      // Margin Level Warning Threshold (%)
+input double InpMarginCriticalLevel = 120.0;     // Margin Level Critical Threshold (%)
+input double InpMarginEmergencyLevel = 110.0;    // Margin Level Emergency Threshold (%)
+input int    InpMarginCheckIntervalSeconds = 5;  // Margin Check Interval (seconds)
+input bool   InpCloseWorstPositionsFirst = true; // Close worst-performing positions first
+input int    InpMaxPositionsToClose = 2;         // Max positions to close per emergency cycle
+
 input group "=== Stop Loss & Take Profit ==="
 input double InpSLATRMultiplier = 1.8;           // Stop Loss ATR Multiplier (wider for H4)
 input double InpTPRewardRatio = 3.0;             // Take Profit Reward Ratio (R:R)
@@ -963,6 +973,14 @@ void OnTimer()
     
     // Report cool-off statistics periodically
     ReportCooloffStatistics();
+    
+    // Emergency margin protection - check margin level and close positions if critical
+    static datetime g_lastMarginCheck = 0;
+    if(InpEnableMarginProtection && (currentTime - g_lastMarginCheck >= InpMarginCheckIntervalSeconds))
+    {
+        CheckEmergencyMarginProtection();
+        g_lastMarginCheck = currentTime;
+    }
     
     // Periodic risk manager updates (trailing stop, breakeven, etc.)
     if(g_riskManager != NULL && currentTime - g_lastRiskUpdate >= InpRiskUpdateSeconds)
@@ -6778,6 +6796,22 @@ bool ValidateMarginBeforeTrade(ENUM_ORDER_TYPE orderType, double lotSize, double
     double accountFreeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
     double accountMargin = AccountInfoDouble(ACCOUNT_MARGIN);
     
+    // Calculate current margin level FIRST - block all trades if current margin is too low
+    double currentMarginLevel = (accountMargin > 0) ? (accountEquity / accountMargin * 100.0) : 0.0;
+    
+    // CRITICAL: Don't open new positions if current margin level is already below minimum threshold
+    if(accountMargin > 0 && currentMarginLevel < InpMinMarginLevelToTrade)
+    {
+        Print(logPrefix + "BLOCKED: Current margin level too low to open new positions");
+        Print(logPrefix + "  Current margin level: ", DoubleToString(currentMarginLevel, 2), "%");
+        Print(logPrefix + "  Minimum required to trade: ", DoubleToString(InpMinMarginLevelToTrade, 2), "%");
+        Print(logPrefix + "  Balance: $", DoubleToString(accountBalance, 2));
+        Print(logPrefix + "  Equity: $", DoubleToString(accountEquity, 2));
+        Print(logPrefix + "  Margin: $", DoubleToString(accountMargin, 2));
+        Print(logPrefix + "Trade BLOCKED - Wait for margin level to recover");
+        return false;
+    }
+    
     // Calculate required margin for the trade
     double requiredMargin = 0.0;
     if(!OrderCalcMargin(orderType, _Symbol, lotSize, entryPrice, requiredMargin))
@@ -6798,15 +6832,14 @@ bool ValidateMarginBeforeTrade(ENUM_ORDER_TYPE orderType, double lotSize, double
         return false;
     }
     
-    // Calculate margin levels
-    double currentMarginLevel = (accountMargin > 0) ? (accountEquity / accountMargin * 100.0) : 0.0;
+    // Calculate margin level after this trade
     double marginLevelAfterTrade = ((accountMargin + requiredMargin) > 0) ? 
                                    (accountEquity / (accountMargin + requiredMargin) * 100.0) : 0.0;
     
     // Don't trade if margin level would drop below 200%
     if(accountMargin > 0 && marginLevelAfterTrade < 200.0)
     {
-        Print(logPrefix + "CRITICAL: Margin level too low");
+        Print(logPrefix + "CRITICAL: Margin level too low after trade");
         Print(logPrefix + "  Current margin level: ", DoubleToString(currentMarginLevel, 1), "%");
         Print(logPrefix + "  After trade would be: ", DoubleToString(marginLevelAfterTrade, 1), "%");
         Print(logPrefix + "  Minimum required: 200.0%");
@@ -6823,6 +6856,266 @@ bool ValidateMarginBeforeTrade(ENUM_ORDER_TYPE orderType, double lotSize, double
     }
     
     return true;
+}
+
+//+------------------------------------------------------------------+
+//| Emergency Margin Protection                                      |
+//| Monitors margin level and takes protective action when critical  |
+//+------------------------------------------------------------------+
+void CheckEmergencyMarginProtection()
+{
+    if(!InpEnableMarginProtection)
+        return;
+    
+    // Get current margin information
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double accountFreeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+    double accountMargin = AccountInfoDouble(ACCOUNT_MARGIN);
+    
+    if(accountMargin <= 0)
+        return; // No positions open, no margin risk
+    
+    // Calculate current margin level
+    double marginLevel = (accountEquity / accountMargin) * 100.0;
+    
+    // Track last margin level for state changes
+    static double lastMarginLevel = 0.0;
+    static bool warningShown = false;
+    static bool criticalShown = false;
+    static bool emergencyShown = false;
+    
+    // Reset flags if margin recovers
+    if(marginLevel > InpMarginWarningLevel)
+    {
+        warningShown = false;
+        criticalShown = false;
+        emergencyShown = false;
+        lastMarginLevel = marginLevel;
+        return;
+    }
+    
+    // EMERGENCY LEVEL: Close positions immediately
+    if(marginLevel <= InpMarginEmergencyLevel)
+    {
+        if(!emergencyShown || marginLevel != lastMarginLevel)
+        {
+            Print("========================================");
+            Print("[MARGIN PROTECTION] EMERGENCY: Margin level at ", DoubleToString(marginLevel, 2), "%");
+            Print("[MARGIN PROTECTION] Balance: $", DoubleToString(accountBalance, 2));
+            Print("[MARGIN PROTECTION] Equity: $", DoubleToString(accountEquity, 2));
+            Print("[MARGIN PROTECTION] Margin: $", DoubleToString(accountMargin, 2));
+            Print("[MARGIN PROTECTION] Free Margin: $", DoubleToString(accountFreeMargin, 2));
+            Print("[MARGIN PROTECTION] Closing positions to prevent liquidation!");
+            Print("========================================");
+            emergencyShown = true;
+        }
+        
+        // Cancel all pending orders immediately
+        CancelPendingOrdersForMarginProtection();
+        
+        // Close worst-performing positions
+        int positionsClosed = CloseWorstPositionsForMargin(InpMaxPositionsToClose);
+        
+        if(positionsClosed > 0)
+        {
+            Print("[MARGIN PROTECTION] Closed ", positionsClosed, " position(s) in emergency response");
+        }
+    }
+    // CRITICAL LEVEL: Close some positions and cancel pending orders
+    else if(marginLevel <= InpMarginCriticalLevel)
+    {
+        if(!criticalShown || marginLevel != lastMarginLevel)
+        {
+            Print("========================================");
+            Print("[MARGIN PROTECTION] CRITICAL: Margin level at ", DoubleToString(marginLevel, 2), "%");
+            Print("[MARGIN PROTECTION] Balance: $", DoubleToString(accountBalance, 2));
+            Print("[MARGIN PROTECTION] Equity: $", DoubleToString(accountEquity, 2));
+            Print("[MARGIN PROTECTION] Taking protective action...");
+            Print("========================================");
+            criticalShown = true;
+        }
+        
+        // Cancel pending orders to prevent further margin usage
+        CancelPendingOrdersForMarginProtection();
+        
+        // Close worst-performing positions (fewer than emergency)
+        int positionsToClose = MathMax(1, InpMaxPositionsToClose / 2);
+        int positionsClosed = CloseWorstPositionsForMargin(positionsToClose);
+        
+        if(positionsClosed > 0)
+        {
+            Print("[MARGIN PROTECTION] Closed ", positionsClosed, " position(s) in critical response");
+        }
+    }
+    // WARNING LEVEL: Log warning and cancel pending orders
+    else if(marginLevel <= InpMarginWarningLevel)
+    {
+        if(!warningShown || marginLevel != lastMarginLevel)
+        {
+            Print("[MARGIN PROTECTION] WARNING: Margin level at ", DoubleToString(marginLevel, 2), "%");
+            Print("[MARGIN PROTECTION] Balance: $", DoubleToString(accountBalance, 2));
+            Print("[MARGIN PROTECTION] Equity: $", DoubleToString(accountEquity, 2));
+            Print("[MARGIN PROTECTION] Free Margin: $", DoubleToString(accountFreeMargin, 2));
+            Print("[MARGIN PROTECTION] Cancelling pending orders to preserve margin");
+            warningShown = true;
+        }
+        
+        // Cancel pending orders to prevent further margin usage
+        CancelPendingOrdersForMarginProtection();
+    }
+    
+    lastMarginLevel = marginLevel;
+}
+
+//+------------------------------------------------------------------+
+//| Cancel Pending Orders for Margin Protection                      |
+//| Cancels all pending orders to free up margin                    |
+//+------------------------------------------------------------------+
+void CancelPendingOrdersForMarginProtection()
+{
+    int ordersCancelled = 0;
+    
+    for(int i = OrdersTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(ticket == 0) continue;
+        
+        // Check if order is ours
+        if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+        if((int)OrderGetInteger(ORDER_MAGIC) != InpMagicNumber) continue;
+        
+        // Cancel the order
+        if(g_trade.OrderDelete(ticket))
+        {
+            ordersCancelled++;
+            Print("[MARGIN PROTECTION] Cancelled pending order #", ticket, " to preserve margin");
+        }
+        else
+        {
+            Print("[MARGIN PROTECTION] Failed to cancel order #", ticket, " (error: ", GetLastError(), ")");
+        }
+    }
+    
+    if(ordersCancelled > 0)
+    {
+        Print("[MARGIN PROTECTION] Cancelled ", ordersCancelled, " pending order(s)");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Close Worst Positions for Margin                                 |
+//| Closes worst-performing positions to free up margin             |
+//+------------------------------------------------------------------+
+int CloseWorstPositionsForMargin(int maxPositionsToClose)
+{
+    if(maxPositionsToClose <= 0)
+        return 0;
+    
+    // Collect all positions with their profit/loss
+    struct PositionInfo
+    {
+        ulong ticket;
+        double profit;
+        double margin;
+        string symbol;
+    };
+    
+    PositionInfo positions[];
+    ArrayResize(positions, 0);
+    
+    // Collect position information
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        if(!PositionSelectByTicket(ticket)) continue;
+        
+        // Check if position is ours
+        if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+        if((int)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+        
+        PositionInfo pos;
+        pos.ticket = ticket;
+        pos.profit = PositionGetDouble(POSITION_PROFIT);
+        pos.symbol = PositionGetString(POSITION_SYMBOL);
+        
+        // Calculate margin used by this position
+        double volume = PositionGetDouble(POSITION_VOLUME);
+        double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        ENUM_ORDER_TYPE orderType = (ENUM_ORDER_TYPE)PositionGetInteger(POSITION_TYPE);
+        ENUM_ORDER_TYPE calcType = (orderType == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+        
+        if(OrderCalcMargin(calcType, pos.symbol, volume, openPrice, pos.margin))
+        {
+            int size = ArraySize(positions);
+            ArrayResize(positions, size + 1);
+            positions[size] = pos;
+        }
+    }
+    
+    if(ArraySize(positions) == 0)
+        return 0;
+    
+    // Sort positions by profit (worst first if InpCloseWorstPositionsFirst, otherwise by margin)
+    if(InpCloseWorstPositionsFirst)
+    {
+        // Sort by profit ascending (worst losses first)
+        for(int i = 0; i < ArraySize(positions) - 1; i++)
+        {
+            for(int j = i + 1; j < ArraySize(positions); j++)
+            {
+                if(positions[i].profit > positions[j].profit)
+                {
+                    PositionInfo temp = positions[i];
+                    positions[i] = positions[j];
+                    positions[j] = temp;
+                }
+            }
+        }
+    }
+    else
+    {
+        // Sort by margin descending (largest margin first)
+        for(int i = 0; i < ArraySize(positions) - 1; i++)
+        {
+            for(int j = i + 1; j < ArraySize(positions); j++)
+            {
+                if(positions[i].margin < positions[j].margin)
+                {
+                    PositionInfo temp = positions[i];
+                    positions[i] = positions[j];
+                    positions[j] = temp;
+                }
+            }
+        }
+    }
+    
+    // Close the worst positions
+    int positionsClosed = 0;
+    int toClose = MathMin(maxPositionsToClose, ArraySize(positions));
+    
+    for(int i = 0; i < toClose; i++)
+    {
+        ulong ticket = positions[i].ticket;
+        double profit = positions[i].profit;
+        double margin = positions[i].margin;
+        
+        if(g_trade.PositionClose(ticket))
+        {
+            positionsClosed++;
+            Print("[MARGIN PROTECTION] Closed position #", ticket, 
+                  " (Profit: $", DoubleToString(profit, 2), 
+                  ", Margin: $", DoubleToString(margin, 2), ")");
+        }
+        else
+        {
+            Print("[MARGIN PROTECTION] Failed to close position #", ticket, 
+                  " (error: ", GetLastError(), ")");
+        }
+    }
+    
+    return positionsClosed;
 }
 
 //+------------------------------------------------------------------+
