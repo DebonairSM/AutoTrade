@@ -2923,15 +2923,14 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "
         }
         else
         {
-            // No valid confluence zone - fall back to market order if allowed
+            // No valid confluence zone - skip trade when limit orders are required
             if(InpLogConfluenceAnalysis)
-                Print(logPrefix + "⚠️ No valid confluence zone found - using market order");
+                Print(logPrefix + "⚠️ No valid confluence zone found - skipping trade (limit orders required)");
             
-            orderTypeStr = "MARKET";
-            if(bullish)
-                tradeResult = g_trade.Buy(lot, _Symbol, price, sl, tp, comment);
-            else
-                tradeResult = g_trade.Sell(lot, _Symbol, price, sl, tp, comment);
+            execution.decision = "REJECTED";
+            execution.rejection_reason = "No valid confluence zone for limit order";
+            if(g_reporter != NULL) g_reporter.RecordDecision(execution);
+            return; // Skip trade instead of using market order
         }
     }
     else
@@ -3307,35 +3306,18 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
         }
         else
         {
-            // No valid confluence - fall back to stop orders
-            orderTypeStr = "STOP";
+            // No valid confluence - skip trade when limit orders are required
             if(InpLogConfluenceAnalysis)
-                Print("[BREAKOUT] ⚠️ No valid confluence zone - using stop order");
-            
-            if(isBuyDirection)
-                tradeResult = g_trade.BuyStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), _Symbol, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), ORDER_TIME_GTC, 0, comment);
-            else
-                tradeResult = g_trade.SellStop(NormalizeDouble(lot, 2), NormalizeDouble(breakoutLevel, _Digits), _Symbol, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), ORDER_TIME_GTC, 0, comment);
-            
-            if(tradeResult)
-                Print(StringFormat("[BREAKOUT] STOP ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
-            else
-                Print(StringFormat("[BREAKOUT] STOP ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
+                Print("[BREAKOUT] ⚠️ No valid confluence zone - skipping trade (limit orders required)");
+            return; // Skip trade instead of using stop order
         }
     }
     else if(strongMomentumSurge)
     {
-        // Strong momentum surge - use market order immediately (as originally designed)
-        orderTypeStr = "MARKET-SURGE";
-        if(isBuyDirection)
-            tradeResult = g_trade.Buy(NormalizeDouble(lot, 2), _Symbol, 0, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
-        else
-            tradeResult = g_trade.Sell(NormalizeDouble(lot, 2), _Symbol, 0, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), comment);
-        
-        if(tradeResult)
-            Print(StringFormat("[BREAKOUT-SURGE] MARKET ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
-        else
-            Print(StringFormat("[BREAKOUT-SURGE] MARKET ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
+        // Strong momentum surge - skip trade when limit orders are required
+        if(InpLogConfluenceAnalysis)
+            Print("[BREAKOUT] ⚠️ Strong momentum surge detected - skipping trade (limit orders required)");
+        return; // Skip trade instead of using market order
     }
     else
     {

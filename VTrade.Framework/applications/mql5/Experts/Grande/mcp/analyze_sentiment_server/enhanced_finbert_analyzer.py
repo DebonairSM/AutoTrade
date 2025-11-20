@@ -22,6 +22,15 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
+import sys
+
+# Fix Windows encoding issues with Unicode characters
+if sys.platform == "win32":
+    import codecs
+    try:
+        sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
+    except:
+        pass
 
 # Set up logger for diagnostic output
 logger = logging.getLogger("EnhancedFinBERT")
@@ -65,7 +74,7 @@ def get_finbert_pipeline():
             AutoModelForSequenceClassification,
             TextClassificationPipeline,
         )
-        print("✅ Enhanced FinBERT dependencies loaded successfully")
+        print("[OK] Enhanced FinBERT dependencies loaded successfully")
     except Exception as e:
         print("=" * 80)
         print("!!! FINBERT NOT AVAILABLE !!!")
@@ -79,8 +88,19 @@ def get_finbert_pipeline():
         model_name = os.environ.get("FINBERT_MODEL", "yiyanghkust/finbert-tone")
         print(f"🤖 Loading Enhanced FinBERT model: {model_name}")
         
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        # Try loading with PyTorch first
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        except OSError as e:
+            if "does not appear to have a file named pytorch_model.bin" in str(e) or "TensorFlow weights" in str(e):
+                print("[INFO] Model has TensorFlow weights, converting to PyTorch...")
+                # Load from TensorFlow and convert to PyTorch
+                tokenizer = AutoTokenizer.from_pretrained(model_name)
+                model = AutoModelForSequenceClassification.from_pretrained(model_name, from_tf=True)
+            else:
+                raise
+        
         device = 0 if getattr(torch, "cuda", None) and torch.cuda.is_available() else -1
         
         _PIPELINE = TextClassificationPipeline(
@@ -89,7 +109,7 @@ def get_finbert_pipeline():
             return_all_scores=True,
             device=device,
         )
-        print(f"[OK] Enhanced FinBERT pipeline initialized successfully on device: {device}")
+        print(f"✅ Enhanced FinBERT pipeline initialized successfully on device: {device}")
         return _PIPELINE
     except Exception as e:
         print("=" * 80)
@@ -1052,7 +1072,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Check if using real FinBERT or fallback
     if "FALLBACK" in result['reasoning']:
         result["finbert_status"] = "FALLBACK_MODE"
-        print("🚨 WARNING: Using FALLBACK analysis (FinBERT not available)")
+        print("[WARNING] Using FALLBACK analysis (FinBERT not available)")
     else:
         result["finbert_status"] = "REAL_AI"
         print("[OK] Using REAL FinBERT AI analysis")

@@ -28,6 +28,7 @@ Write-Host "This will install:" -ForegroundColor White
 Write-Host "  - PyTorch (Deep Learning Framework)" -ForegroundColor White
 Write-Host "  - Transformers (HuggingFace Library)" -ForegroundColor White
 Write-Host "  - NumPy (Numerical Computing)" -ForegroundColor White
+Write-Host "  - Protobuf (Required by Transformers)" -ForegroundColor White
 Write-Host ""
 Write-Host "This may take several minutes depending on your connection..." -ForegroundColor Yellow
 Write-Host ""
@@ -50,6 +51,11 @@ python -m pip install transformers
 Write-Host ""
 Write-Host "Installing NumPy..." -ForegroundColor Cyan
 python -m pip install numpy
+
+# Install Protobuf (required by Transformers)
+Write-Host ""
+Write-Host "Installing Protobuf (required by Transformers)..." -ForegroundColor Cyan
+python -m pip install protobuf
 
 # Verify installation
 Write-Host ""
