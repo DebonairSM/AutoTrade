@@ -325,6 +325,108 @@ struct ComponentStatus
 };
 
 //+------------------------------------------------------------------+
+//| Profit Calculator Interface                                       |
+//+------------------------------------------------------------------+
+// Profit calculation components should implement this interface
+interface IProfitCalculator
+{
+    // Initialize profit calculator
+    bool Initialize(string symbol);
+    
+    // Calculate position profit
+    double CalculatePositionProfitPips(ulong ticket);
+    double CalculatePositionProfitCurrency(ulong ticket);
+    
+    // Calculate account-level metrics
+    double CalculateAccountProfit();
+    double CalculateProfitFactor(int magicNumber = -1);
+    double CalculateWinRate(int magicNumber = -1);
+};
+
+//+------------------------------------------------------------------+
+//| Risk Manager Interface                                            |
+//+------------------------------------------------------------------+
+// Risk management components should implement this interface
+interface IRiskManager
+{
+    // Initialize risk manager
+    bool Initialize(string symbol);
+    
+    // Position sizing
+    double CalculateLotSize(double stopDistancePips, MARKET_REGIME regime);
+    
+    // Risk validation
+    bool CheckDrawdown();
+    bool CheckMaxPositions();
+    bool ValidateMarginBeforeTrade(ENUM_ORDER_TYPE orderType, double lotSize, double entryPrice);
+    
+    // Stop loss and take profit
+    double CalculateStopLoss(bool isBuy, double entryPrice, double atrValue);
+    double CalculateTakeProfit(bool isBuy, double entryPrice, double stopLoss);
+};
+
+//+------------------------------------------------------------------+
+//| Performance Tracker Interface                                     |
+//+------------------------------------------------------------------+
+// Performance tracking components should implement this interface
+interface IPerformanceTracker
+{
+    // Initialize performance tracker
+    bool Initialize(string symbol);
+    
+    // Record trade outcomes
+    void RecordTradeOutcome(ulong ticket, string outcome, double closePrice);
+    
+    // Calculate performance metrics
+    double CalculateWinRate(string signalType = "", string symbol = "", string regime = "");
+    string GeneratePerformanceReport(int days = 30);
+};
+
+//+------------------------------------------------------------------+
+//| Signal Quality Analyzer Interface                                 |
+//+------------------------------------------------------------------+
+// Signal quality analysis components should implement this interface
+interface ISignalQualityAnalyzer
+{
+    // Initialize signal quality analyzer
+    bool Initialize(string symbol);
+    
+    // Score signal quality
+    double ScoreSignalQuality(string signalType, double regimeConfidence, 
+                              int confluenceScore, double rsi, double adx, 
+                              double sentimentConfidence);
+    
+    // Validate signal conditions
+    bool ValidateSignalConditions(string signalType, double regimeConfidence, 
+                                  int confluenceScore, double rsi);
+    
+    // Filter signals
+    bool FilterLowQualitySignals(double qualityScore, double threshold = -1.0);
+    
+    // Get success rates
+    double GetSignalSuccessRate(string signalType);
+};
+
+//+------------------------------------------------------------------+
+//| Position Optimizer Interface                                      |
+//+------------------------------------------------------------------+
+// Position optimization components should implement this interface
+interface IPositionOptimizer
+{
+    // Initialize position optimizer
+    bool Initialize(string symbol);
+    
+    // Position management
+    bool UpdateTrailingStops();
+    bool UpdateBreakevenStops();
+    bool ExecutePartialCloses();
+    
+    // Position optimization
+    void ManageAllPositions();
+    bool SetIntelligentSLTP(ulong ticket, bool isBuy, double entryPrice);
+};
+
+//+------------------------------------------------------------------+
 //| Helper Functions                                                  |
 //+------------------------------------------------------------------+
 

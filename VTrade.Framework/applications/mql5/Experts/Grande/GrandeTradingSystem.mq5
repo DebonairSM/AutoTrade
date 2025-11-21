@@ -48,6 +48,12 @@
 #include "Include/GrandeHealthMonitor.mqh"
 #include "Include/GrandeEventBus.mqh"
 
+// Profit-critical modules
+#include "Include/GrandeProfitCalculator.mqh"
+#include "Include/GrandePerformanceTracker.mqh"
+#include "Include/GrandeSignalQualityAnalyzer.mqh"
+#include "Include/GrandePositionOptimizer.mqh"
+
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
 //+------------------------------------------------------------------+
@@ -273,44 +279,20 @@ CGrandeConfigManager*         g_configManager;
 CGrandeComponentRegistry*     g_componentRegistry;
 CGrandeHealthMonitor*         g_healthMonitor;
 CGrandeEventBus*              g_eventBus;
-datetime                      g_lastRegimeUpdate;
-datetime                      g_lastKeyLevelUpdate;
-datetime                      g_lastDisplayUpdate;
 long                          g_chartID;
-datetime                      g_lastRiskUpdate;
+
+// Profit-critical modules
+CGrandeProfitCalculator*      g_profitCalculator;
+CGrandePerformanceTracker*    g_performanceTracker;
+CGrandeSignalQualityAnalyzer* g_signalQualityAnalyzer;
+CGrandePositionOptimizer*     g_positionOptimizer;
 
 // Signal analysis throttling variables
-datetime                      g_lastSignalAnalysisTime = 0;
-string                        g_lastRejectionReason = "";
-MARKET_REGIME                 g_lastAnalysisRegime = REGIME_RANGING;
 int                           g_signalAnalysisThrottleSeconds = 10; // Reduced from 30 to 10 seconds for faster analysis
-datetime                      g_lastCalendarUpdate;
-
-// Cached RSI values per management cycle
-datetime                      g_lastRsiCacheTime;
-double                        g_cachedRsiCTF = EMPTY_VALUE;
-double                        g_cachedRsiH4  = EMPTY_VALUE;
-double                        g_cachedRsiD1  = EMPTY_VALUE;
-
-// Database data collection variables
-datetime                      g_lastDataCollectionTime = 0;
-datetime                      g_lastBarTime = 0;
-datetime                      g_lastFinBERTAnalysisTime = 0;
 
 // Intelligent Position Scaling variables
-// Note: RangeInfo, CoolOffInfo, CoolOffStats are now in GrandeStateManager.mqh
-// These globals kept for backward compatibility during migration
-// TODO: Migrate to State Manager
-RangeInfo                     g_currentRange;
-datetime                      g_lastRangeUpdate = 0;
+// Note: All state variables (timestamps, RSI cache, range, cool-off) are now managed by GrandeStateManager
 int                           g_rangeHandle15M = INVALID_HANDLE;
-
-// Cool-off period tracking
-CoolOffInfo                   g_coolOffState;
-int                           g_lastPositionCount = 0;  // Track position count changes
-
-// Cool-off statistics tracking
-CoolOffStats                  g_coolOffStats;
 
 // Cooldown storage per ticket for partial closes
 struct SRsiExitState {
@@ -350,6 +332,10 @@ double GetEMAValue(int period);
 string GetKeyLevelsJson();
 string GetEconomicCalendarJson();
 void SaveMarketContextToFile(string jsonData);
+// Event Bus helper functions
+void PublishOrderEvent(EVENT_TYPE eventType, ulong ticket, string details);
+void PublishPositionEvent(EVENT_TYPE eventType, ulong ticket, string details);
+void PublishRiskEvent(EVENT_TYPE eventType, string details, double value);
 // Core function forward declarations
 bool ValidateInputParameters();
 void ConfigureTradeFillingMode();
@@ -758,7 +744,7 @@ int OnInit()
         {
             Print("[Grande] Calendar reader initialized for ", _Symbol);
         }
-        g_lastCalendarUpdate = 0;
+        // Calendar update timestamp now managed by State Manager
         
         // One-time calendar availability warning only on configured run timeframe
         bool calendarRunsHere = (!InpCalendarOnlyOnTimeframe || Period() == InpCalendarRunTimeframe);
@@ -805,6 +791,95 @@ int OnInit()
     
     if(InpLogDebugInfo)
         Print("[Grande] Risk Manager initialized and integrated");
+    
+    // Initialize profit-critical modules
+    // Initialize Profit Calculator
+    g_profitCalculator = new CGrandeProfitCalculator();
+    if(g_profitCalculator == NULL)
+    {
+        Print("ERROR: Failed to create Profit Calculator");
+        return INIT_FAILED;
+    }
+    if(!g_profitCalculator.Initialize(_Symbol))
+    {
+        Print("ERROR: Failed to initialize Profit Calculator");
+        delete g_profitCalculator;
+        g_profitCalculator = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Profit Calculator initialized");
+    
+    // Initialize Performance Tracker
+    g_performanceTracker = new CGrandePerformanceTracker();
+    if(g_performanceTracker == NULL)
+    {
+        Print("ERROR: Failed to create Performance Tracker");
+        return INIT_FAILED;
+    }
+    if(!g_performanceTracker.Initialize(_Symbol, g_databaseManager, g_profitCalculator))
+    {
+        Print("ERROR: Failed to initialize Performance Tracker");
+        delete g_profitCalculator;
+        delete g_performanceTracker;
+        g_profitCalculator = NULL;
+        g_performanceTracker = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Performance Tracker initialized");
+    
+    // Initialize Signal Quality Analyzer
+    g_signalQualityAnalyzer = new CGrandeSignalQualityAnalyzer();
+    if(g_signalQualityAnalyzer == NULL)
+    {
+        Print("ERROR: Failed to create Signal Quality Analyzer");
+        return INIT_FAILED;
+    }
+    if(!g_signalQualityAnalyzer.Initialize(_Symbol, g_stateManager, g_eventBus))
+    {
+        Print("ERROR: Failed to initialize Signal Quality Analyzer");
+        delete g_profitCalculator;
+        delete g_performanceTracker;
+        delete g_signalQualityAnalyzer;
+        g_profitCalculator = NULL;
+        g_performanceTracker = NULL;
+        g_signalQualityAnalyzer = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Signal Quality Analyzer initialized");
+    
+    // Initialize Position Optimizer
+    g_positionOptimizer = new CGrandePositionOptimizer();
+    if(g_positionOptimizer == NULL)
+    {
+        Print("ERROR: Failed to create Position Optimizer");
+        return INIT_FAILED;
+    }
+    if(!g_positionOptimizer.Initialize(_Symbol, g_riskManager, g_stateManager, g_eventBus))
+    {
+        Print("ERROR: Failed to initialize Position Optimizer");
+        delete g_profitCalculator;
+        delete g_performanceTracker;
+        delete g_signalQualityAnalyzer;
+        delete g_positionOptimizer;
+        g_profitCalculator = NULL;
+        g_performanceTracker = NULL;
+        g_signalQualityAnalyzer = NULL;
+        g_positionOptimizer = NULL;
+        return INIT_FAILED;
+    }
+    // Configure position optimizer settings
+    g_positionOptimizer.SetTrailingStopEnabled(InpEnableTrailingStop);
+    g_positionOptimizer.SetBreakevenEnabled(InpEnableBreakeven);
+    g_positionOptimizer.SetPartialClosesEnabled(InpEnablePartialCloses);
+    g_positionOptimizer.SetTrailingATRMultiplier(InpTrailingATRMultiplier);
+    g_positionOptimizer.SetBreakevenATR(InpBreakevenATR);
+    g_positionOptimizer.SetPartialCloseATR(InpPartialCloseATR);
+    g_positionOptimizer.SetPartialClosePercent(InpPartialClosePercent);
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Position Optimizer initialized");
     
     // Create and initialize intelligent reporter
     g_reporter = new CGrandeIntelligentReporter();
@@ -854,10 +929,7 @@ int OnInit()
     EventSetTimer(MathMin(MathMin(InpRegimeUpdateSeconds, InpKeyLevelUpdateSeconds), InpRiskUpdateSeconds));
     
     // Initialize update times
-    g_lastRegimeUpdate = 0;
-    g_lastKeyLevelUpdate = 0;
-    g_lastDisplayUpdate = 0;
-    g_lastRiskUpdate = 0;
+    // Timestamp variables now managed by State Manager
     
     // Initial analysis
     PerformInitialAnalysis();
@@ -880,27 +952,33 @@ int OnInit()
     }
     
     // Initialize cool-off state
-    g_coolOffState.isActive = false;
-    g_lastPositionCount = 0;
+    if(g_stateManager != NULL)
+    {
+        CoolOffInfo coolOff = {false, 0, 0, 0, 0.0};
+        g_stateManager.SetCoolOffInfo(coolOff);
+        g_stateManager.SetLastPositionCount(0);
+    }
     LoadCooloffState(); // Load any persisted state
     
     // Initialize cool-off statistics
-    g_coolOffStats.tradesBlocked = 0;
-    g_coolOffStats.tradesAllowed = 0;
-    g_coolOffStats.overridesUsed = 0;
-    g_coolOffStats.blockedWouldWin = 0;
-    g_coolOffStats.blockedWouldLose = 0;
-    g_coolOffStats.allowedWins = 0;
-    g_coolOffStats.allowedLosses = 0;
-    g_coolOffStats.lastReportTime = 0;
+    // Cool-off statistics now managed by State Manager
+    if(g_stateManager != NULL)
+    {
+        CoolOffStats stats;
+        stats.Reset();
+        g_stateManager.SetCoolOffStats(stats);
+    }
     
     // Register components in Component Registry
     // Note: Component registration requires components to implement IMarketAnalyzer interface
     // Currently components don't implement this interface, so registration is skipped
     // TODO: Refactor components to implement IMarketAnalyzer interface for full registry support
+    // Profit-critical modules (ProfitCalculator, PerformanceTracker, SignalQualityAnalyzer, PositionOptimizer)
+    // are initialized but not registered in Component Registry as they don't implement IMarketAnalyzer
     if(g_componentRegistry != NULL && InpLogDebugInfo)
     {
         Print("[Grande] Component Registry initialized (component registration pending interface implementation)");
+        Print("[Grande] Profit-critical modules initialized: ProfitCalculator, PerformanceTracker, SignalQualityAnalyzer, PositionOptimizer");
     }
     
     // Perform initial system health check
@@ -1057,6 +1135,31 @@ void OnDeinit(const int reason)
         g_reporter = NULL;
     }
     
+    // Clean up profit-critical modules
+    if(g_positionOptimizer != NULL)
+    {
+        delete g_positionOptimizer;
+        g_positionOptimizer = NULL;
+    }
+    
+    if(g_signalQualityAnalyzer != NULL)
+    {
+        delete g_signalQualityAnalyzer;
+        g_signalQualityAnalyzer = NULL;
+    }
+    
+    if(g_performanceTracker != NULL)
+    {
+        delete g_performanceTracker;
+        g_performanceTracker = NULL;
+    }
+    
+    if(g_profitCalculator != NULL)
+    {
+        delete g_profitCalculator;
+        g_profitCalculator = NULL;
+    }
+    
     // Multi-timeframe analyzer cleanup - temporarily disabled
     
     // Clean up chart objects
@@ -1192,7 +1295,8 @@ void OnTimer()
     }
     
     // Periodic risk manager updates (trailing stop, breakeven, etc.)
-    if(g_riskManager != NULL && currentTime - g_lastRiskUpdate >= InpRiskUpdateSeconds)
+    datetime lastRiskUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastRiskUpdate() : 0;
+    if(g_riskManager != NULL && currentTime - lastRiskUpdate >= InpRiskUpdateSeconds)
     {
         // CRITICAL FIX: Only manage positions on the designated timeframe to prevent competition
         if(!InpManageOnlyOnTimeframe || Period() == InpManagementTimeframe)
@@ -1304,7 +1408,11 @@ void OnTimer()
                         else
                         {
                             // Call risk manager OnTick
-                            g_riskManager.OnTick();
+                            // Use position optimizer for position management
+                            if(g_positionOptimizer != NULL)
+                                g_positionOptimizer.ManageAllPositions();
+                            else if(g_riskManager != NULL)
+                                g_riskManager.OnTick();
 
                             // Check for errors from risk manager
                             int postRMError = GetLastError();
@@ -1412,7 +1520,8 @@ void OnTimer()
                 // Trading disabled by risk checks; simply skip further actions this cycle
             }
         }
-        g_lastRiskUpdate = currentTime;
+        if(g_stateManager != NULL)
+            g_stateManager.SetLastRiskUpdate(currentTime);
     }
     
     // Manage pending limit orders (cancel stale, track fills)
@@ -1425,7 +1534,7 @@ void OnTimer()
     UpdateRangeInfo();
     
     // Update regime detection
-    datetime lastRegimeUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastRegimeUpdate() : g_lastRegimeUpdate;
+    datetime lastRegimeUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastRegimeUpdate() : 0;
     if(g_regimeDetector != NULL && 
        currentTime - lastRegimeUpdate >= InpRegimeUpdateSeconds)
     {
@@ -1443,7 +1552,7 @@ void OnTimer()
         }
         else
         {
-            g_lastRegimeUpdate = currentTime; // Fallback to global
+            // State Manager handles regime update timestamp automatically in SetCurrentRegime()
         }
         
         // Log regime changes and publish events
@@ -1471,7 +1580,7 @@ void OnTimer()
     }
     
     // Update key level detection
-    datetime lastKeyLevelUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastKeyLevelUpdate() : g_lastKeyLevelUpdate;
+    datetime lastKeyLevelUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastKeyLevelUpdate() : 0;
     if(g_keyLevelDetector != NULL && 
        currentTime - lastKeyLevelUpdate >= InpKeyLevelUpdateSeconds)
     {
@@ -1508,7 +1617,7 @@ void OnTimer()
         
         // Update timestamp (SetNearestSupport/SetNearestResistance already do this)
         if(g_stateManager == NULL)
-            g_lastKeyLevelUpdate = currentTime; // Fallback only
+            // State Manager handles key level update timestamp automatically in SetNearestSupport/SetNearestResistance()
     }
     
     // Update trend follower
@@ -1522,9 +1631,11 @@ void OnTimer()
     
     // Calendar AI analysis (periodic) - Aggressive updates for FinBERT integration
     bool calendarShouldRun = InpEnableCalendarAI;
-    int updateInterval = (g_lastCalendarUpdate == 0) ? 10 : (InpCalendarUpdateMinutes * 60); // First run after 10 seconds
+    datetime lastCalendarUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastCalendarUpdate() : 0;
+    int updateInterval = (lastCalendarUpdate == 0) ? 10 : (InpCalendarUpdateMinutes * 60); // First run after 10 seconds
     
-    if(calendarShouldRun && currentTime - g_lastCalendarUpdate >= updateInterval)
+    datetime lastCalendarUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastCalendarUpdate() : 0;
+    if(calendarShouldRun && currentTime - lastCalendarUpdate >= updateInterval)
     {
         if(InpLogDetailedInfo)
             Print("[CAL-AI] 🔄 Starting calendar data collection and FinBERT analysis...");
@@ -1577,11 +1688,12 @@ void OnTimer()
                 Print("[CAL-AI] Calendar analysis unavailable. Ensure Python dependencies are installed.");
             }
         }
-        g_lastCalendarUpdate = currentTime;
+        if(g_stateManager != NULL)
+            g_stateManager.SetLastCalendarUpdate(currentTime);
     }
     
     // Update display elements
-    datetime lastDisplayUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastDisplayUpdate() : g_lastDisplayUpdate;
+    datetime lastDisplayUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastDisplayUpdate() : 0;
     if(currentTime - lastDisplayUpdate >= 10) // Update display every 10 seconds
     {
         UpdateDisplayElements();
@@ -1590,7 +1702,8 @@ void OnTimer()
         if(g_stateManager != NULL)
             g_stateManager.SetLastDisplayUpdate(currentTime);
         else
-            g_lastDisplayUpdate = currentTime; // Fallback
+            if(g_stateManager != NULL)
+                g_stateManager.SetLastDisplayUpdate(currentTime);
     }
 
     // Auto-hide startup panel after expiry
@@ -1725,6 +1838,42 @@ void PerformInitialAnalysis()
 //+------------------------------------------------------------------+
 //| Update display elements                                          |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Update Display Elements                                          |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Updates all chart display elements including regime background, info panels,
+//   and visual indicators based on current market regime.
+//
+// BEHAVIOR:
+//   1. Retrieves current regime from State Manager or detector
+//   2. Updates regime background color (if enabled)
+//   3. Updates regime info panel (if enabled)
+//   4. Updates system status panel (if enabled)
+//   5. Updates trend arrows and ADX strength meter (if enabled)
+//   6. Triggers chart redraw
+//
+// RETURNS:
+//   (void) - No return value
+//
+// SIDE EFFECTS:
+//   - Creates/updates chart objects (background, labels, panels)
+//   - Triggers ChartRedraw() to update display
+//   - Reads from State Manager and regime detector
+//
+// ERROR CONDITIONS:
+//   - Returns early if regime detector is NULL
+//   - Chart object creation may fail silently
+//
+// NOTES:
+//   - Respects display flags (InpShowRegimeBackground, InpShowRegimeInfo, etc.)
+//   - Called periodically from OnTimer() and after regime changes
+//   - Performance: Updates all display elements in one call
+//
+// RELATED:
+//   - See Also: UpdateRegimeBackground(), UpdateRegimeInfoPanel(), UpdateSystemStatusPanel()
+//   - Called By: OnTimer(), PerformInitialAnalysis()
+//+------------------------------------------------------------------+
 void UpdateDisplayElements()
 {
     if(g_regimeDetector == NULL) 
@@ -1767,6 +1916,28 @@ void UpdateDisplayElements()
 
 //+------------------------------------------------------------------+
 //| Update regime background color                                   |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Updates the chart background color to reflect the current market regime.
+//
+// PARAMETERS:
+//   regime (MARKET_REGIME) - Current market regime type
+//
+// RETURNS:
+//   (void) - No return value
+//
+// SIDE EFFECTS:
+//   - Deletes existing background rectangle object
+//   - Creates new background rectangle covering visible chart area
+//   - Sets background color based on regime type
+//
+// NOTES:
+//   - Colors: Bull=Dark Green, Bear=Dark Red, Breakout=Dark Yellow, Range=Dark Gray, High Vol=Dark Purple
+//   - Background is placed behind price bars (OBJPROP_BACK=true)
+//   - Object is not selectable or visible in object list
+//
+// RELATED:
+//   - Called By: UpdateDisplayElements()
 //+------------------------------------------------------------------+
 void UpdateRegimeBackground(MARKET_REGIME regime)
 {
@@ -1819,6 +1990,29 @@ void UpdateRegimeBackground(MARKET_REGIME regime)
 //+------------------------------------------------------------------+
 //| Update regime information panel                                  |
 //+------------------------------------------------------------------+
+// PURPOSE:
+//   Updates the regime information text panel showing current market regime,
+//   ADX values, ATR ratio, DI values, and key level count.
+//
+// PARAMETERS:
+//   snapshot (RegimeSnapshot) - Current regime snapshot with ADX, ATR, DI values
+//
+// RETURNS:
+//   (void) - No return value
+//
+// SIDE EFFECTS:
+//   - Deletes existing info panel label object
+//   - Creates new text label in upper-left corner
+//   - Displays formatted regime information
+//
+// NOTES:
+//   - Panel shows: Regime name, ADX (H1/H4/D1), ATR ratio, +DI/-DI, Key level count, Update time
+//   - Positioned at upper-left corner (10, 30 pixels from edge)
+//   - Uses Consolas font, size 9, white color
+//
+// RELATED:
+//   - Called By: UpdateDisplayElements()
+//+------------------------------------------------------------------+
 void UpdateRegimeInfoPanel(const RegimeSnapshot &snapshot)
 {
     // Remove existing panel
@@ -1864,6 +2058,26 @@ void UpdateRegimeInfoPanel(const RegimeSnapshot &snapshot)
 
 //+------------------------------------------------------------------+
 //| Update system status panel                                       |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Updates the system status panel showing trading status, position information,
+//   and strongest key level details.
+//
+// RETURNS:
+//   (void) - No return value
+//
+// SIDE EFFECTS:
+//   - Deletes existing status panel label object
+//   - Creates new text label displaying system status
+//   - Reads position data from risk manager
+//
+// NOTES:
+//   - Shows: Trading status (ACTIVE/DISABLED/DEMO), Position count and profit, Strongest key level info
+//   - Positioned below regime info panel
+//   - Uses Consolas font, size 9, white color
+//
+// RELATED:
+//   - Called By: UpdateDisplayElements()
 //+------------------------------------------------------------------+
 void UpdateSystemStatusPanel()
 {
@@ -1915,7 +2129,11 @@ void UpdateSystemStatusPanel()
                 if(PositionSelectByTicket(PositionGetTicket(i)))
                 {
                     if(PositionGetString(POSITION_SYMBOL) == _Symbol)
-                        totalProfit += PositionGetDouble(POSITION_PROFIT);
+                        // Use profit calculator for consistent profit calculation
+                        if(g_profitCalculator != NULL)
+                            totalProfit += g_profitCalculator.CalculatePositionProfitCurrency(PositionGetTicket(i));
+                        else
+                            totalProfit += PositionGetDouble(POSITION_PROFIT);
                 }
             }
             positionsInfo = StringFormat("%d pos, %.2f USD", totalPositions, totalProfit);
@@ -2412,6 +2630,79 @@ void CreateTestVisuals()
 //+------------------------------------------------------------------+
 //| Core trade dispatcher                                            |
 //+------------------------------------------------------------------+
+// PURPOSE:
+//   Analyzes current market regime and executes appropriate trading
+//   strategy (trend, breakout, or range trading) based on market conditions.
+//
+// BEHAVIOR:
+//   1. Validates trading conditions (risk checks, position limits, cool-off periods)
+//   2. Determines appropriate strategy based on regime type
+//   3. Generates trading signals using regime-specific signal functions
+//   4. Executes trades if signals are valid and all checks pass
+//   5. Records trade decisions in State Manager
+//   6. Publishes events for all trading decisions and outcomes
+//
+// PARAMETERS:
+//   rs (RegimeSnapshot) - Current market regime snapshot containing:
+//                        - regime: Current market regime type (TRENDING_BULL, TRENDING_BEAR, RANGING, BREAKOUT)
+//                        - confidence: Regime confidence level (0.0-1.0)
+//                        - atr_current: Current ATR value in price units
+//                        - adx_h1, adx_h4, adx_d1: ADX values for H1, H4, and D1 timeframes
+//                        - timestamp: When regime was detected
+//
+// RETURNS:
+//   (void) - No return value. Check Event Bus for trade execution results and decisions.
+//
+// SIDE EFFECTS:
+//   - May place market or pending orders through TrendTrade(), BreakoutTrade(), or RangeTrade()
+//   - Updates State Manager with trade decision data (STradeDecision structure)
+//   - Publishes EVENT_SIGNAL_GENERATED, EVENT_SIGNAL_REJECTED, EVENT_ORDER_PLACED events
+//   - Logs trading decisions to database (if InpEnableDatabase is true)
+//   - Updates display with trade status
+//   - Updates g_lastSignalAnalysisTime in State Manager for throttling
+//
+// ERROR CONDITIONS:
+//   - Trading disabled (InpEnableTrading=false): Function returns early, no trades placed
+//   - Risk check fails: EVENT_SIGNAL_REJECTED published with rejection reason
+//   - Position limit reached: Signal rejected, no new trades placed
+//   - Cool-off period active: Signal rejected, no new trades placed
+//   - Order placement fails: EVENT_ORDER_FAILED published with error code
+//   - Insufficient margin: EVENT_MARGIN_WARNING published
+//   - Signal throttling active: Function returns early if called too frequently
+//
+// PRECONDITIONS:
+//   - EA must be initialized (OnInit() completed successfully)
+//   - State Manager must be initialized and accessible
+//   - Event Bus must be initialized and accessible
+//   - Valid symbol and timeframe must be set
+//   - Regime detector must have valid regime data
+//
+// POSTCONDITIONS:
+//   - Trade decision recorded in State Manager (if signal generated)
+//   - Events published to Event Bus for all decisions
+//   - Database updated with decision data (if database enabled)
+//   - g_lastSignalAnalysisTime updated in State Manager
+//
+// USAGE EXAMPLE:
+//   RegimeSnapshot regime = g_regimeDetector.GetCurrentRegime();
+//   ExecuteTradeLogic(regime);
+//   // Check Event Bus for results:
+//   // SystemEvent events[];
+//   // g_eventBus.GetRecentEvents(events, 10);
+//
+// NOTES:
+//   - Called from OnTick() on each price update
+//   - Throttled to prevent excessive analysis (see g_lastSignalAnalysisTime and g_signalAnalysisThrottleSeconds)
+//   - Respects InpEnableTrading flag - no trades if disabled
+//   - All trades use InpMagicNumber for identification
+//   - Integrates FinBERT sentiment analysis if available
+//   - Performs comprehensive risk validation before any trade execution
+//
+// RELATED:
+//   - See Also: TrendTrade(), BreakoutTrade(), RangeTrade()
+//   - Called By: OnTick()
+//   - Calls: Signal_TREND(), Signal_BREAKOUT(), Signal_RANGE(), IsTradeAllowed()
+//+------------------------------------------------------------------+
 void ExecuteTradeLogic(const RegimeSnapshot &rs)
 {
     string logPrefix = "[TRADE DECISION] ";
@@ -2586,9 +2877,13 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
     bool shouldThrottle = false;
     
     // Check if we should throttle signal analysis
-    if(g_lastSignalAnalysisTime > 0 && 
-       (currentTime - g_lastSignalAnalysisTime) < g_signalAnalysisThrottleSeconds &&
-       g_lastAnalysisRegime == rs.regime &&
+    datetime lastSignalAnalysisTime = (g_stateManager != NULL) ? g_stateManager.GetLastSignalAnalysisTime() : 0;
+    MARKET_REGIME lastAnalysisRegime = (g_stateManager != NULL) ? g_stateManager.GetLastAnalysisRegime() : REGIME_RANGING;
+    string lastRejectionReason = (g_stateManager != NULL) ? g_stateManager.GetLastRejectionReason() : "";
+    
+    if(lastSignalAnalysisTime > 0 && 
+       (currentTime - lastSignalAnalysisTime) < g_signalAnalysisThrottleSeconds &&
+       lastAnalysisRegime == rs.regime &&
        !HasOpenPositionForSymbolAndMagic(_Symbol, InpMagicNumber))
     {
         // Only throttle if we're in the same regime and no position exists
@@ -2596,10 +2891,10 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
         
         if(InpLogDetailedInfo)
         {
-            int remainingSeconds = g_signalAnalysisThrottleSeconds - (int)(currentTime - g_lastSignalAnalysisTime);
+            int remainingSeconds = g_signalAnalysisThrottleSeconds - (int)(currentTime - lastSignalAnalysisTime);
             Print(logPrefix + "⏸️ THROTTLED: Signal analysis throttled for ", 
                   remainingSeconds, 
-                  " more seconds (last rejection: ", g_lastRejectionReason, ")");
+                  " more seconds (last rejection: ", lastRejectionReason, ")");
         }
     }
     
@@ -2610,8 +2905,11 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
     }
     
     // Update throttling variables before analysis
-    g_lastSignalAnalysisTime = currentTime;
-    g_lastAnalysisRegime = rs.regime;
+    if(g_stateManager != NULL)
+    {
+        g_stateManager.SetLastSignalAnalysisTime(currentTime);
+        g_stateManager.SetLastAnalysisRegime(rs.regime);
+    }
     
     // Smart logging - only once per session or verbose mode
     static bool hasLoggedAnalysisStart = false;
@@ -2729,6 +3027,74 @@ void ExecuteTradeLogic(const RegimeSnapshot &rs)
 //+------------------------------------------------------------------+
 //| Trend trading logic                                              |
 //+------------------------------------------------------------------+
+// PURPOSE:
+//   Executes trend-following trades in bullish or bearish trending markets.
+//   Places market or limit orders based on trend direction and technical analysis.
+//
+// BEHAVIOR:
+//   1. Validates trend signal using Signal_TREND()
+//   2. Integrates FinBERT sentiment analysis if available
+//   3. Calculates position size based on risk percentage and ATR
+//   4. Calculates stop loss and take profit levels
+//   5. Applies intelligent position scaling if enabled
+//   6. Caps take profit at nearest strong key level if appropriate
+//   7. Places market or limit order based on configuration
+//   8. Records trade execution in database
+//
+// PARAMETERS:
+//   bullish (bool) - Trade direction: true for buy, false for sell
+//   rs (RegimeSnapshot) - Current market regime snapshot with ATR, ADX values
+//   finbertSignal (string) - FinBERT sentiment signal: "BUY", "SELL", "NEUTRAL", etc.
+//   finbertConfidence (double) - FinBERT confidence level (0.0-1.0)
+//   finbertScore (double) - FinBERT sentiment score
+//
+// RETURNS:
+//   (void) - No return value. Check Event Bus for order placement results.
+//
+// SIDE EFFECTS:
+//   - May place market or limit order through CTrade object
+//   - Updates State Manager with rejection reason if signal fails
+//   - Publishes EVENT_ORDER_PLACED or EVENT_ORDER_FAILED events
+//   - Records trade decision in database via IntelligentReporter
+//   - Logs detailed trade information if InpLogDetailedInfo is enabled
+//
+// ERROR CONDITIONS:
+//   - Signal validation fails: Returns early, updates g_lastRejectionReason
+//   - FinBERT opposes trade with high confidence: Trade rejected
+//   - Invalid lot size: Trade blocked, decision recorded
+//   - Margin validation fails: Trade rejected, EVENT_MARGIN_WARNING published
+//   - Order placement fails: EVENT_ORDER_FAILED published with error details
+//   - Cool-off period active: Trade skipped
+//   - Position scaling limit reached: Trade blocked
+//
+// PRECONDITIONS:
+//   - Signal_TREND() must return true for the given direction
+//   - Risk Manager must be initialized (if using risk manager)
+//   - State Manager must be accessible
+//   - Event Bus must be initialized
+//
+// POSTCONDITIONS:
+//   - Order placed or rejected with reason recorded
+//   - Events published to Event Bus
+//   - Trade decision recorded in database
+//
+// USAGE EXAMPLE:
+//   RegimeSnapshot regime = g_regimeDetector.GetCurrentRegime();
+//   TrendTrade(true, regime, "BUY", 0.85, 0.75);
+//
+// NOTES:
+//   - Uses InpRiskPctTrend for position sizing
+//   - Applies FinBERT sentiment multiplier to position size (up to 50% boost)
+//   - Supports limit orders if InpUseLimitOrders is enabled
+//   - Caps TP at strong key levels while maintaining minimum 1.5:1 R:R
+//   - Respects intelligent position scaling limits
+//   - All trades use InpMagicNumber for identification
+//
+// RELATED:
+//   - See Also: Signal_TREND(), BreakoutTrade(), RangeTrade()
+//   - Called By: ExecuteTradeLogic()
+//   - Calls: Signal_TREND(), CalcLot(), NormalizeVolumeToStep(), NormalizeStops()
+//+------------------------------------------------------------------+
 void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", double finbertConfidence = 0.0, double finbertScore = 0.0)
 {
     string logPrefix = "[TREND SIGNAL] ";
@@ -2778,11 +3144,49 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "
     if(!Signal_TREND(bullish, rs)) 
     {
         // Update throttling variables for rejection
-        g_lastRejectionReason = "Signal criteria not met - " + direction + " trend signal";
+        if(g_stateManager != NULL)
+            g_stateManager.SetLastRejectionReason("Signal criteria not met - " + direction + " trend signal");
         
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ ", direction, " trend signal REJECTED - signal criteria not met");
         return;
+    }
+    
+    // Score signal quality before execution
+    if(g_signalQualityAnalyzer != NULL)
+    {
+        int confluenceScore = (g_confluenceDetector != NULL) ? g_confluenceDetector.GetConfluenceScore() : 0;
+        double rsi = execution.rsi_current;
+        double adx = rs.adx_h1;
+        string signalType = execution.signal_type;
+        
+        SignalQualityScore qualityScore = g_signalQualityAnalyzer.ScoreSignalQuality(
+            signalType, rs.confidence, confluenceScore, rsi, adx, finbertConfidence);
+        
+        // Filter low-quality signals
+        if(g_signalQualityAnalyzer.FilterLowQualitySignals(qualityScore.overallScore))
+        {
+            string rejectionReason = "Signal quality too low: " + 
+                                    DoubleToString(qualityScore.overallScore, 2) + 
+                                    " (threshold: " + 
+                                    DoubleToString(g_signalQualityAnalyzer.GetMinQualityThreshold(), 2) + ")";
+            
+            if(g_stateManager != NULL)
+                g_stateManager.SetLastRejectionReason(rejectionReason);
+            
+            execution.decision = "REJECTED";
+            execution.rejection_reason = rejectionReason;
+            if(g_reporter != NULL) g_reporter.RecordDecision(execution);
+            
+            if(InpLogDetailedInfo)
+                Print(logPrefix + "❌ Signal REJECTED - Quality score too low: ", 
+                      DoubleToString(qualityScore.overallScore, 2));
+            return;
+        }
+        
+        if(InpLogDetailedInfo)
+            Print(logPrefix + "✅ Signal quality score: ", DoubleToString(qualityScore.overallScore, 2),
+                  " (", g_signalQualityAnalyzer.GetQualityDescription(qualityScore.overallScore), ")");
     }
     
     if(InpLogDetailedInfo)
@@ -3141,7 +3545,8 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "
         if(InpLogScalingDecisions)
         {
             Print(StringFormat("[SCALING] Trend trade BLOCKED - Positions: %d, Buy: %s, Range valid: %s",
-                  existingPositions, bullish ? "true" : "false", g_currentRange.isValid ? "true" : "false"));
+                  existingPositions, bullish ? "true" : "false", 
+                  (g_stateManager != NULL && g_stateManager.GetCurrentRange().isValid) ? "true" : "false"));
         }
         return;
     }
@@ -3296,28 +3701,55 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "
     
     if(tradeResult)
     {
+        ulong orderTicket = g_trade.ResultOrder();
+        double executionPrice = g_trade.ResultPrice();
+        
         execution.decision = "EXECUTED";
         execution.rejection_reason = "";
-        execution.additional_notes = StringFormat("Order #%lld filled at %.5f", 
-                                                 g_trade.ResultOrder(), 
-                                                 g_trade.ResultPrice());
+        execution.additional_notes = StringFormat("Order #%lld filled at %.5f", orderTicket, executionPrice);
         if(g_reporter != NULL) g_reporter.RecordDecision(execution);
+        
+        // Publish order placed event
+        string orderDetails = StringFormat("%s %s | Lot: %.2f | Entry: %s | SL: %s | TP: %s",
+                                         orderTypeStr, bullish ? "BUY" : "SELL", lot,
+                                         DoubleToString(limitPrice, _Digits),
+                                         DoubleToString(sl, _Digits),
+                                         DoubleToString(tp, _Digits));
+        PublishOrderEvent(EVENT_ORDER_PLACED, orderTicket, orderDetails);
+        
+        // Publish position opened event if order was filled immediately
+        if(orderTicket > 0)
+        {
+            string positionDetails = StringFormat("Trend %s | Entry: %s | SL: %s | TP: %s | Lot: %.2f",
+                                                bullish ? "BULL" : "BEAR",
+                                                DoubleToString(executionPrice, _Digits),
+                                                DoubleToString(sl, _Digits),
+                                                DoubleToString(tp, _Digits),
+                                                lot);
+            PublishPositionEvent(EVENT_POSITION_OPENED, orderTicket, positionDetails);
+        }
         
         if(InpLogDetailedInfo)
         {
             Print(logPrefix + "🎯 TRADE EXECUTED SUCCESSFULLY!");
-            Print(logPrefix + "  Ticket: ", g_trade.ResultOrder());
-            Print(logPrefix + "  Execution Price: ", DoubleToString(g_trade.ResultPrice(), _Digits));
-            Print(logPrefix + "  Slippage: ", DoubleToString(MathAbs(g_trade.ResultPrice() - price) / _Point, 1), " pips");
+            Print(logPrefix + "  Ticket: ", orderTicket);
+            Print(logPrefix + "  Execution Price: ", DoubleToString(executionPrice, _Digits));
+            Print(logPrefix + "  Slippage: ", DoubleToString(MathAbs(executionPrice - price) / _Point, 1), " pips");
         }
     }
     else
     {
         execution.decision = "FAILED";
-        execution.rejection_reason = StringFormat("Execution failed - Error %d: %s",
-                                                 g_trade.ResultRetcode(),
-                                                 g_trade.ResultRetcodeDescription());
+        string errorMsg = StringFormat("Execution failed - Error %d: %s",
+                                      g_trade.ResultRetcode(),
+                                      g_trade.ResultRetcodeDescription());
+        execution.rejection_reason = errorMsg;
         if(g_reporter != NULL) g_reporter.RecordDecision(execution);
+        
+        // Publish order failed event
+        string failureDetails = StringFormat("%s %s | Lot: %.2f | Error: %s",
+                                           orderTypeStr, bullish ? "BUY" : "SELL", lot, errorMsg);
+        PublishOrderEvent(EVENT_ORDER_FAILED, 0, failureDetails);
         
         if(InpLogDetailedInfo)
         {
@@ -3344,11 +3776,35 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
     if(!Signal_BREAKOUT(rs)) 
     {
         // Update throttling variables for rejection
-        g_lastRejectionReason = "Signal criteria not met - BREAKOUT signal";
+        if(g_stateManager != NULL)
+            g_stateManager.SetLastRejectionReason("Signal criteria not met - BREAKOUT signal");
         
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ Breakout signal REJECTED - signal criteria not met");
         return;
+    }
+    
+    // Score signal quality before execution
+    if(g_signalQualityAnalyzer != NULL)
+    {
+        int confluenceScore = (g_confluenceDetector != NULL) ? g_confluenceDetector.GetConfluenceScore() : 0;
+        double rsi = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+        if(rsi < 0) rsi = 0.0;
+        double adx = rs.adx_h1;
+        
+        SignalQualityScore qualityScore = g_signalQualityAnalyzer.ScoreSignalQuality(
+            "BREAKOUT", rs.confidence, confluenceScore, rsi, adx, finbertConfidence);
+        
+        if(g_signalQualityAnalyzer.FilterLowQualitySignals(qualityScore.overallScore))
+        {
+            if(g_stateManager != NULL)
+                g_stateManager.SetLastRejectionReason("Signal quality too low: " + 
+                                                      DoubleToString(qualityScore.overallScore, 2));
+            if(InpLogDetailedInfo)
+                Print(logPrefix + "❌ Signal REJECTED - Quality score too low: ", 
+                      DoubleToString(qualityScore.overallScore, 2));
+            return;
+        }
     }
     
     if(InpLogDetailedInfo)
@@ -3534,7 +3990,8 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
         if(InpLogScalingDecisions)
         {
             Print(StringFormat("[SCALING] Breakout trade BLOCKED - Positions: %d, Buy: %s, Range valid: %s",
-                  existingPositions, isBuyBreakout ? "true" : "false", g_currentRange.isValid ? "true" : "false"));
+                  existingPositions, isBuyBreakout ? "true" : "false", 
+                  (g_stateManager != NULL && g_stateManager.GetCurrentRange().isValid) ? "true" : "false"));
         }
         return;
     }
@@ -3630,9 +4087,26 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
                 tradeResult = g_trade.SellLimit(NormalizeDouble(lot, 2), NormalizeDouble(limitPrice, _Digits), _Symbol, NormalizeDouble(breakoutSL, _Digits), NormalizeDouble(breakoutTP, _Digits), ORDER_TIME_SPECIFIED, expiration, comment);
             
             if(tradeResult)
-                Print(StringFormat("[BREAKOUT] LIMIT ORDER PLACED OK ticket=%I64u", g_trade.ResultOrder()));
+            {
+                ulong orderTicket = g_trade.ResultOrder();
+                Print(StringFormat("[BREAKOUT] LIMIT ORDER PLACED OK ticket=%I64u", orderTicket));
+                // Publish order placed event
+                string orderDetails = StringFormat("LIMIT %s | Lot: %.2f | Price: %s | SL: %s | TP: %s",
+                                                 isBuyDirection ? "BUYLIMIT" : "SELLLIMIT", lot,
+                                                 DoubleToString(limitPrice, _Digits),
+                                                 DoubleToString(breakoutSL, _Digits),
+                                                 DoubleToString(breakoutTP, _Digits));
+                PublishOrderEvent(EVENT_ORDER_PLACED, orderTicket, orderDetails);
+            }
             else
-                Print(StringFormat("[BREAKOUT] LIMIT ORDER FAILED retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription()));
+            {
+                string errorMsg = StringFormat("retcode=%d desc=%s", g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription());
+                Print(StringFormat("[BREAKOUT] LIMIT ORDER FAILED %s", errorMsg));
+                // Publish order failed event
+                string failureDetails = StringFormat("LIMIT %s | Lot: %.2f | Error: %s",
+                                                   isBuyDirection ? "BUYLIMIT" : "SELLLIMIT", lot, errorMsg);
+                PublishOrderEvent(EVENT_ORDER_FAILED, 0, failureDetails);
+            }
         }
         else
         {
@@ -3685,6 +4159,67 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
 //+------------------------------------------------------------------+
 //| Range trading logic                                              |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Range trading logic                                              |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Executes range-bound trades by fading touches of range boundaries.
+//   Buys near support, sells near resistance, targeting mid-range.
+//
+// BEHAVIOR:
+//   1. Validates range signal using Signal_RANGE()
+//   2. Identifies current range boundaries (support and resistance)
+//   3. Determines if price is near support (buy) or resistance (sell)
+//   4. Calculates position size based on risk percentage
+//   5. Places market order with stop loss and take profit targeting mid-range
+//   6. Records trade execution in database
+//
+// PARAMETERS:
+//   rs (RegimeSnapshot) - Current market regime snapshot with ATR, ADX values
+//   finbertSignal (string) - FinBERT sentiment signal (default: "NEUTRAL")
+//   finbertConfidence (double) - FinBERT confidence level (0.0-1.0)
+//   finbertScore (double) - FinBERT sentiment score
+//
+// RETURNS:
+//   (void) - No return value. Check Event Bus for order placement results.
+//
+// SIDE EFFECTS:
+//   - May place market order through CTrade object
+//   - Publishes EVENT_ORDER_PLACED or EVENT_ORDER_FAILED events
+//   - Records trade decision in database via IntelligentReporter
+//   - Logs detailed trade information if InpLogDetailedInfo is enabled
+//
+// ERROR CONDITIONS:
+//   - Signal validation fails: Returns early
+//   - No valid range boundaries found: Trade rejected
+//   - Price not near range boundaries: Trade skipped
+//   - Invalid lot size: Trade blocked
+//   - Margin validation fails: Trade rejected
+//   - Order placement fails: EVENT_ORDER_FAILED published
+//
+// PRECONDITIONS:
+//   - Signal_RANGE() must return true
+//   - Valid range boundaries must exist (support and resistance)
+//   - Price must be near range boundary (within 0.2% of support/resistance)
+//
+// POSTCONDITIONS:
+//   - Market order placed or rejected with reason recorded
+//   - Events published to Event Bus
+//   - Trade decision recorded in database
+//
+// NOTES:
+//   - Uses InpRiskPctRange for position sizing
+//   - Fades resistance (sells) when price >= 99.8% of resistance
+//   - Fades support (buys) when price <= 100.2% of support
+//   - Take profit targets mid-range between support and resistance
+//   - Stop loss uses 0.5x ATR for tighter risk in ranging markets
+//   - All trades use InpMagicNumber for identification
+//
+// RELATED:
+//   - See Also: Signal_RANGE(), TrendTrade(), BreakoutTrade()
+//   - Called By: ExecuteTradeLogic()
+//   - Calls: Signal_RANGE(), GetRangeBoundaries(), CalcLot(), NormalizeVolumeToStep()
+//+------------------------------------------------------------------+
 void RangeTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", double finbertConfidence = 0.0, double finbertScore = 0.0)
 {
     string logPrefix = "[RANGE SIGNAL] ";
@@ -3698,11 +4233,35 @@ void RangeTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", doub
     if(!Signal_RANGE(rs)) 
     {
         // Update throttling variables for rejection
-        g_lastRejectionReason = "Signal criteria not met - RANGE signal";
+        if(g_stateManager != NULL)
+            g_stateManager.SetLastRejectionReason("Signal criteria not met - RANGE signal");
         
         if(InpLogDetailedInfo)
             Print(logPrefix + "❌ Range signal REJECTED - signal criteria not met");
         return;
+    }
+    
+    // Score signal quality before execution
+    if(g_signalQualityAnalyzer != NULL)
+    {
+        int confluenceScore = (g_confluenceDetector != NULL) ? g_confluenceDetector.GetConfluenceScore() : 0;
+        double rsi = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+        if(rsi < 0) rsi = 0.0;
+        double adx = rs.adx_h1;
+        
+        SignalQualityScore qualityScore = g_signalQualityAnalyzer.ScoreSignalQuality(
+            "RANGE", rs.confidence, confluenceScore, rsi, adx, finbertConfidence);
+        
+        if(g_signalQualityAnalyzer.FilterLowQualitySignals(qualityScore.overallScore))
+        {
+            if(g_stateManager != NULL)
+                g_stateManager.SetLastRejectionReason("Signal quality too low: " + 
+                                                      DoubleToString(qualityScore.overallScore, 2));
+            if(InpLogDetailedInfo)
+                Print(logPrefix + "❌ Signal REJECTED - Quality score too low: ", 
+                      DoubleToString(qualityScore.overallScore, 2));
+            return;
+        }
     }
     
     if(InpLogDetailedInfo)
@@ -3790,6 +4349,8 @@ void RangeTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", doub
         // CRITICAL: Validate margin before executing trade
         if(!ValidateMarginBeforeTrade(ORDER_TYPE_SELL, lot, SymbolInfoDouble(_Symbol, SYMBOL_BID), "RANGE-SELL"))
         {
+            // Publish risk warning event
+            PublishRiskEvent(EVENT_MARGIN_WARNING, "Insufficient margin for RANGE-SELL trade", lot);
             return;
         }
         
@@ -3849,6 +4410,8 @@ void RangeTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", doub
         // CRITICAL: Validate margin before executing trade
         if(!ValidateMarginBeforeTrade(ORDER_TYPE_BUY, lot, SymbolInfoDouble(_Symbol, SYMBOL_ASK), "RANGE-BUY"))
         {
+            // Publish risk warning event
+            PublishRiskEvent(EVENT_MARGIN_WARNING, "Insufficient margin for RANGE-BUY trade", lot);
             return;
         }
         
@@ -3862,15 +4425,38 @@ void RangeTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", doub
                            lot,
                            (MathAbs(tp-currentPrice)/MathMax(1e-10, MathAbs(currentPrice-sl)))));
         
-        if(InpLogDetailedInfo)
+        if(tradeResult)
         {
-            if(tradeResult)
+            ulong orderTicket = g_trade.ResultOrder();
+            double executionPrice = g_trade.ResultPrice();
+            
+            // Publish order and position events
+            string orderDetails = StringFormat("MARKET BUY | Lot: %.2f | Entry: %s | SL: %s | TP: %s",
+                                             lot, DoubleToString(currentPrice, _Digits),
+                                             DoubleToString(sl, _Digits), DoubleToString(tp, _Digits));
+            PublishOrderEvent(EVENT_ORDER_PLACED, orderTicket, orderDetails);
+            PublishPositionEvent(EVENT_POSITION_OPENED, orderTicket, 
+                               StringFormat("Range BUY | Entry: %s | SL: %s | TP: %s | Lot: %.2f",
+                                          DoubleToString(executionPrice, _Digits),
+                                          DoubleToString(sl, _Digits), DoubleToString(tp, _Digits), lot));
+            
+            if(InpLogDetailedInfo)
             {
                 Print(logPrefix + "🎯 RANGE BUY EXECUTED SUCCESSFULLY!");
-                Print(logPrefix + "  Ticket: ", g_trade.ResultOrder());
-                Print(logPrefix + "  Execution Price: ", DoubleToString(g_trade.ResultPrice(), _Digits));
+                Print(logPrefix + "  Ticket: ", orderTicket);
+                Print(logPrefix + "  Execution Price: ", DoubleToString(executionPrice, _Digits));
             }
-            else
+        }
+        else
+        {
+            // Publish order failed event
+            string errorMsg = StringFormat("Execution failed - Error %d: %s",
+                                          g_trade.ResultRetcode(),
+                                          g_trade.ResultRetcodeDescription());
+            PublishOrderEvent(EVENT_ORDER_FAILED, 0, 
+                            StringFormat("MARKET BUY | Lot: %.2f | Error: %s", lot, errorMsg));
+            
+            if(InpLogDetailedInfo)
             {
                 Print(logPrefix + "❌ RANGE BUY EXECUTION FAILED!");
                 Print(logPrefix + "  Error Code: ", g_trade.ResultRetcode());
@@ -3891,6 +4477,61 @@ void RangeTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", doub
 
 //+------------------------------------------------------------------+
 //| Signal functions - Pure logic only                              |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Validate Trend Trading Signal                                    |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Validates whether a trend trading signal meets all technical criteria
+//   for entry. Performs comprehensive multi-timeframe analysis.
+//
+// BEHAVIOR:
+//   1. Checks Trend Follower confirmation (if enabled)
+//   2. Validates EMA alignment across H1 and H4 (if required)
+//   3. Checks RSI conditions on current, H4, and D1 timeframes
+//   4. Validates candle structure and price position
+//   5. Performs technical entry validation
+//   6. Records decision in database
+//
+// PARAMETERS:
+//   bullish (bool) - Signal direction: true for buy, false for sell
+//   rs (RegimeSnapshot) - Current market regime snapshot with ADX, ATR values
+//
+// RETURNS:
+//   (bool) - true if signal passes all validation criteria, false otherwise
+//
+// SIDE EFFECTS:
+//   - Records trade decision in database via IntelligentReporter
+//   - Updates g_lastRejectionReason in State Manager if signal rejected
+//   - Logs detailed validation steps if InpLogDetailedInfo is enabled
+//
+// ERROR CONDITIONS:
+//   - Trend Follower rejects signal: Returns false, records rejection reason
+//   - EMA alignment fails: Returns false (if InpRequireEmaAlignment is true)
+//   - RSI overbought/oversold: Returns false (if InpEnableMTFRSI is true)
+//   - Candle structure invalid: Returns false
+//   - Price position invalid: Returns false
+//   - Technical validation fails: Returns false
+//
+// PRECONDITIONS:
+//   - Regime must be REGIME_TREND_BULL or REGIME_TREND_BEAR
+//   - Indicators must be initialized and data available
+//   - State Manager must be accessible
+//
+// POSTCONDITIONS:
+//   - Decision recorded in database (if reporter available)
+//   - Rejection reason stored in State Manager (if rejected)
+//
+// NOTES:
+//   - Pure signal validation logic - does not place orders
+//   - Respects InpEnableTrendFollower, InpRequireEmaAlignment, InpEnableMTFRSI flags
+//   - Uses multi-timeframe RSI filtering to avoid extreme conditions
+//   - Validates candle structure to avoid poor entry conditions
+//
+// RELATED:
+//   - See Also: Signal_BREAKOUT(), Signal_RANGE()
+//   - Called By: TrendTrade()
+//   - Calls: ValidateCandleStructure(), ValidatePricePosition(), ValidateTechnicalEntry()
 //+------------------------------------------------------------------+
 bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
 {
@@ -4234,7 +4875,8 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
     if(InpEnableMTFRSI)
     {
         // Use cached values if available
-        double rsi_h4 = (g_cachedRsiH4 != EMPTY_VALUE ? g_cachedRsiH4 : GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0));
+        double cachedRsiH4 = (g_stateManager != NULL) ? g_stateManager.GetCachedRsiH4() : EMPTY_VALUE;
+        double rsi_h4 = (cachedRsiH4 != EMPTY_VALUE ? cachedRsiH4 : GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0));
         if(rsi_h4 < 0) return false;
 
         // === REGIME-AWARE RSI THRESHOLDS ===
@@ -4297,7 +4939,11 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
         
         if(InpUseD1RSI)
         {
-            double rsi_d1 = (g_cachedRsiD1 != EMPTY_VALUE ? g_cachedRsiD1 : GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0));
+            double rsi_d1 = EMPTY_VALUE;
+            if(g_stateManager != NULL)
+                rsi_d1 = g_stateManager.GetCachedRsiD1();
+            if(rsi_d1 == EMPTY_VALUE)
+                rsi_d1 = GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0);
             if(rsi_d1 < 0) return false;
 
             // Apply same regime-aware logic to D1 RSI
@@ -4330,7 +4976,11 @@ bool Signal_TREND(bool bullish, const RegimeSnapshot &rs)
             Print(logPrefix + "  H4 Thresholds: OB=", DoubleToString(rsi_overbought_threshold, 1), " OS=", DoubleToString(rsi_oversold_threshold, 1));
             if(InpUseD1RSI)
             {
-                double rsi_d1 = (g_cachedRsiD1 != EMPTY_VALUE ? g_cachedRsiD1 : GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0));
+                double rsi_d1 = EMPTY_VALUE;
+            if(g_stateManager != NULL)
+                rsi_d1 = g_stateManager.GetCachedRsiD1();
+            if(rsi_d1 == EMPTY_VALUE)
+                rsi_d1 = GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0);
                 Print(logPrefix + "  D1 RSI: ", DoubleToString(rsi_d1, 2), " (", 
                       (bullish ? (rsi_d1 < d1_rsi_overbought_threshold ? "✅ NOT OVERBOUGHT" : "❌ OVERBOUGHT") :
                                 (rsi_d1 > d1_rsi_oversold_threshold ? "✅ NOT OVERSOLD" : "❌ OVERSOLD")), ")");
@@ -5139,6 +5789,40 @@ bool GetRangeBoundaries(SKeyLevel &resistance, SKeyLevel &support)
 //+------------------------------------------------------------------+
 //| Startup snapshot helpers                                          |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Find Nearest Key Levels                                          |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Finds the nearest support and resistance levels to the current price
+//   from the key level detector.
+//
+// PARAMETERS:
+//   currentPrice (double) - Current market price to find levels relative to
+//   outSupport (SKeyLevel&) - Output parameter: nearest support level below price
+//   outResistance (SKeyLevel&) - Output parameter: nearest resistance level above price
+//
+// RETURNS:
+//   (bool) - true if at least one level (support or resistance) was found, false otherwise
+//
+// SIDE EFFECTS:
+//   - Modifies outSupport and outResistance output parameters
+//   - None (read-only operation on key level detector)
+//
+// ERROR CONDITIONS:
+//   - Returns false if key level detector is NULL
+//   - Returns false if no key levels are available
+//   - Returns false if no levels found on either side of price
+//
+// NOTES:
+//   - Searches all key levels to find closest support (below price) and resistance (above price)
+//   - Support levels are those with price < currentPrice
+//   - Resistance levels are those with price > currentPrice
+//   - Output parameters are only valid if function returns true
+//
+// RELATED:
+//   - See Also: GetRangeBoundaries()
+//   - Called By: ExecuteTradeLogic(), BuildGoldenNugget()
+//+------------------------------------------------------------------+
 bool FindNearestKeyLevels(const double currentPrice, SKeyLevel &outSupport, SKeyLevel &outResistance)
 {
     if(g_keyLevelDetector == NULL)
@@ -5754,14 +6438,30 @@ void ApplyRSIExitRules()
         if(InpRSIExitCooldownSec > 0 && (TimeCurrent() - lastTime) < InpRSIExitCooldownSec)
             continue;
 
-        double pip = GetPipSize();
-        if(pip <= 0) pip = _Point;
-        double profitPips = (type == POSITION_TYPE_BUY ? (price - open) : (open - price)) / pip;
+        // Use profit calculator for consistent profit calculation
+        double profitPips = 0.0;
+        if(g_profitCalculator != NULL)
+            profitPips = g_profitCalculator.CalculatePositionProfitPips(ticket);
+        else
+        {
+            double pip = GetPipSize();
+            if(pip <= 0) pip = _Point;
+            profitPips = (type == POSITION_TYPE_BUY ? (price - open) : (open - price)) / pip;
+        }
         if(profitPips < InpRSIExitMinProfitPips) continue;
 
         // Use cached RSI values from current cycle
-        double rsi_ctf = (g_cachedRsiCTF != EMPTY_VALUE ? g_cachedRsiCTF : GetRSIValue(_Symbol, (ENUM_TIMEFRAMES)Period(), InpRSIPeriod, 0));
-        double rsi_h4  = (g_cachedRsiH4  != EMPTY_VALUE ? g_cachedRsiH4  : GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0));
+        double rsi_ctf = EMPTY_VALUE;
+        double rsi_h4 = EMPTY_VALUE;
+        if(g_stateManager != NULL)
+        {
+            rsi_ctf = g_stateManager.GetCachedRsiCTF();
+            rsi_h4 = g_stateManager.GetCachedRsiH4();
+        }
+        if(rsi_ctf == EMPTY_VALUE)
+            rsi_ctf = GetRSIValue(_Symbol, (ENUM_TIMEFRAMES)Period(), InpRSIPeriod, 0);
+        if(rsi_h4 == EMPTY_VALUE)
+            rsi_h4 = GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0);
         if(rsi_ctf < 0 || rsi_h4 < 0) continue;
 
         // Optional ATR guard (avoid exits when ATR collapsed)
@@ -6199,13 +6899,16 @@ void CacheRsiForCycle()
 {
     datetime now = TimeCurrent();
     // Refresh cache at most once per second to keep values coherent
-    if(now == g_lastRsiCacheTime) return;
+    datetime lastRsiCacheTime = (g_stateManager != NULL) ? g_stateManager.GetLastRsiCacheTime() : 0;
+    if(now == lastRsiCacheTime) return;
 
-    g_cachedRsiCTF = GetRSIValue(_Symbol, (ENUM_TIMEFRAMES)Period(), InpRSIPeriod, 0);
-    g_cachedRsiH4  = GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0);
+    double rsiCTF = GetRSIValue(_Symbol, (ENUM_TIMEFRAMES)Period(), InpRSIPeriod, 0);
+    double rsiH4  = GetRSIValue(_Symbol, PERIOD_H4, InpTFRsiPeriod, 0);
     // Only cache D1 if enabled to save cycles
-    g_cachedRsiD1  = InpUseD1RSI ? GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0) : EMPTY_VALUE;
-    g_lastRsiCacheTime = now;
+    double rsiD1  = InpUseD1RSI ? GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0) : EMPTY_VALUE;
+    // Store RSI cache in State Manager
+    if(g_stateManager != NULL)
+        g_stateManager.SetRsiCache(TimeCurrent(), rsiCTF, rsiH4, rsiD1);
 }
 
 //+------------------------------------------------------------------+
@@ -7121,6 +7824,10 @@ bool ValidateMarginBeforeTrade(ENUM_ORDER_TYPE orderType, double lotSize, double
         Print(logPrefix + "  Equity: $", DoubleToString(accountEquity, 2));
         Print(logPrefix + "  Margin: $", DoubleToString(accountMargin, 2));
         Print(logPrefix + "Trade BLOCKED - Wait for margin level to recover");
+        // Publish margin warning event
+        PublishRiskEvent(EVENT_MARGIN_WARNING, 
+                        StringFormat("Margin level too low: %.2f%% (min: %.2f%%)", currentMarginLevel, InpMinMarginLevelToTrade),
+                        currentMarginLevel);
         return false;
     }
     
@@ -7141,6 +7848,10 @@ bool ValidateMarginBeforeTrade(ENUM_ORDER_TYPE orderType, double lotSize, double
         Print(logPrefix + "  Balance: $", DoubleToString(accountBalance, 2));
         Print(logPrefix + "  Equity: $", DoubleToString(accountEquity, 2));
         Print(logPrefix + "Trade BLOCKED to prevent 'No money' error");
+        // Publish margin warning event
+        PublishRiskEvent(EVENT_MARGIN_WARNING,
+                        StringFormat("Insufficient margin: Required $%.2f, Available $%.2f", requiredMargin, accountFreeMargin),
+                        accountFreeMargin);
         return false;
     }
     
@@ -7156,6 +7867,10 @@ bool ValidateMarginBeforeTrade(ENUM_ORDER_TYPE orderType, double lotSize, double
         Print(logPrefix + "  After trade would be: ", DoubleToString(marginLevelAfterTrade, 1), "%");
         Print(logPrefix + "  Minimum required: 200.0%");
         Print(logPrefix + "Trade BLOCKED for account safety");
+        // Publish margin warning event
+        PublishRiskEvent(EVENT_MARGIN_WARNING,
+                        StringFormat("Margin level would drop to %.1f%% after trade (min: 200%%)", marginLevelAfterTrade),
+                        marginLevelAfterTrade);
         return false;
     }
     
@@ -7221,6 +7936,11 @@ void CheckEmergencyMarginProtection()
             Print("[MARGIN PROTECTION] Closing positions to prevent liquidation!");
             Print("========================================");
             emergencyShown = true;
+            
+            // Publish critical margin event
+            PublishRiskEvent(EVENT_MARGIN_CRITICAL,
+                            StringFormat("EMERGENCY: Margin level at %.2f%% - Closing positions to prevent liquidation", marginLevel),
+                            marginLevel);
         }
         
         // Cancel all pending orders immediately
@@ -7349,7 +8069,11 @@ int CloseWorstPositionsForMargin(int maxPositionsToClose)
         
         PositionInfo pos;
         pos.ticket = ticket;
-        pos.profit = PositionGetDouble(POSITION_PROFIT);
+        // Use profit calculator for consistent profit calculation
+        if(g_profitCalculator != NULL)
+            pos.profit = g_profitCalculator.CalculatePositionProfitCurrency(ticket);
+        else
+            pos.profit = PositionGetDouble(POSITION_PROFIT);
         pos.symbol = PositionGetString(POSITION_SYMBOL);
         
         // Calculate margin used by this position
@@ -7475,16 +8199,21 @@ void CollectMarketDataForDatabase()
     datetime currentTime = TimeCurrent();
     
     // Check if we should collect data (based on interval)
-    if((currentTime - g_lastDataCollectionTime) < InpDataCollectionInterval)
+    datetime lastDataCollectionTime = (g_stateManager != NULL) ? g_stateManager.GetLastDataCollectionTime() : 0;
+    if((currentTime - lastDataCollectionTime) < InpDataCollectionInterval)
         return;
     
     // Check if we have a new bar
     datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-    if(currentBarTime == g_lastBarTime)
+    datetime lastBarTime = (g_stateManager != NULL) ? g_stateManager.GetLastBarTime() : 0;
+    if(currentBarTime == lastBarTime)
         return;
     
-    g_lastBarTime = currentBarTime;
-    g_lastDataCollectionTime = currentTime;
+    if(g_stateManager != NULL)
+    {
+        g_stateManager.SetLastBarTime(currentBarTime);
+        g_stateManager.SetLastDataCollectionTime(currentTime);
+    }
     
     // Get current bar data
     double open = iOpen(_Symbol, PERIOD_CURRENT, 0);
@@ -7612,6 +8341,13 @@ void CollectMarketDataForDatabase()
             volatilityLevel
         );
     }
+    
+    // Publish data collection event
+    if(g_eventBus != NULL)
+    {
+        g_eventBus.PublishEvent(EVENT_DATA_COLLECTED, "DataCollector", 
+                               "Market data collected and saved to database", 0.0, 0);
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -7622,22 +8358,32 @@ void CollectEnhancedMarketDataForFinBERT()
     datetime currentTime = TimeCurrent();
     
     // Check if we should collect data (based on FinBERT analysis interval)
-    if((currentTime - g_lastFinBERTAnalysisTime) < InpFinBERTAnalysisInterval)
+    datetime lastFinBERTAnalysisTime = (g_stateManager != NULL) ? g_stateManager.GetLastFinBERTAnalysisTime() : 0;
+    if((currentTime - lastFinBERTAnalysisTime) < InpFinBERTAnalysisInterval)
         return;
     
     // TEMPORARY: Skip bar check for immediate testing
     // Check if we have a new bar
     // datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-    // if(currentBarTime == g_lastBarTime)
+    // datetime lastBarTime = (g_stateManager != NULL) ? g_stateManager.GetLastBarTime() : 0;
+    // if(currentBarTime == lastBarTime)
     //     return;
     
-    g_lastFinBERTAnalysisTime = currentTime;
+    if(g_stateManager != NULL)
+        g_stateManager.SetLastFinBERTAnalysisTime(currentTime);
     
     // Create comprehensive market context JSON
     string marketContextJson = CreateComprehensiveMarketContext();
     
     // Save to file for FinBERT analysis
     SaveMarketContextToFile(marketContextJson);
+    
+    // Publish data collection event
+    if(g_eventBus != NULL)
+    {
+        g_eventBus.PublishEvent(EVENT_DATA_COLLECTED, "DataCollector", 
+                               "Enhanced FinBERT market data collected and saved", 0.0, 0);
+    }
     
     if(InpLogDetailedInfo)
     {
@@ -7865,6 +8611,36 @@ double GetVolumeAverage(int periods)
     return validBars > 0 ? totalVolume / validBars : 0;
 }
 
+//+------------------------------------------------------------------+
+//| Get Current ATR Value                                            |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Returns the current ATR (Average True Range) value for the symbol
+//   on the current timeframe.
+//
+// RETURNS:
+//   (double) - Current ATR value in price units, or 0.0 if indicator
+//              handle is invalid or data not available.
+//
+// SIDE EFFECTS:
+//   - Creates and releases ATR indicator handle (temporary)
+//   - None (read-only operation)
+//
+// ERROR CONDITIONS:
+//   - Returns 0.0 if ATR indicator handle creation fails
+//   - Returns 0.0 if insufficient bars available for calculation
+//   - Returns 0.0 if buffer copy fails
+//
+// NOTES:
+//   - Uses InpATRPeriod for ATR calculation period
+//   - Indicator handle is created and released on each call
+//   - For better performance, consider caching ATR value
+//   - ATR value is in price units (not pips)
+//
+// RELATED:
+//   - See Also: GetATRAverage(), GetCurrentATR() in State Manager
+//   - Called By: ExecuteTradeLogic(), CreateComprehensiveMarketContext()
+//+------------------------------------------------------------------+
 double GetATRValue()
 {
     int atrHandle = iATR(_Symbol, PERIOD_CURRENT, InpATRPeriod);
@@ -7903,6 +8679,39 @@ double GetATRAverage(int periods)
     return validBars > 0 ? totalATR / validBars : 0;
 }
 
+//+------------------------------------------------------------------+
+//| Get EMA Value                                                    |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Returns the current EMA (Exponential Moving Average) value for the symbol
+//   on the current timeframe with the specified period.
+//
+// PARAMETERS:
+//   period (int) - EMA period (e.g., 20, 50, 200)
+//
+// RETURNS:
+//   (double) - Current EMA value in price units, or 0.0 if indicator
+//              handle is invalid or data not available.
+//
+// SIDE EFFECTS:
+//   - Creates and releases EMA indicator handle (temporary)
+//   - None (read-only operation)
+//
+// ERROR CONDITIONS:
+//   - Returns 0.0 if EMA indicator handle creation fails
+//   - Returns 0.0 if insufficient bars available for calculation
+//   - Returns 0.0 if buffer copy fails
+//
+// NOTES:
+//   - Uses PRICE_CLOSE for EMA calculation
+//   - Indicator handle is created and released on each call
+//   - For better performance, consider caching EMA values
+//   - EMA value is in price units
+//
+// RELATED:
+//   - See Also: Signal_TREND() for EMA alignment checks
+//   - Called By: CreateComprehensiveMarketContext(), Signal_TREND()
+//+------------------------------------------------------------------+
 double GetEMAValue(int period)
 {
     int emaHandle = iMA(_Symbol, PERIOD_CURRENT, period, 0, MODE_EMA, PRICE_CLOSE);
@@ -8307,6 +9116,43 @@ string GetEMAAlignment(double ema20, double ema50, double ema200)
     return "MIXED";
 }
 
+//+------------------------------------------------------------------+
+//| Normalize Volume to Symbol Step                                  |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Normalizes a volume value to match the symbol's volume step requirements
+//   and ensures it is within the symbol's min/max volume limits.
+//
+// PARAMETERS:
+//   symbol (string) - Symbol name to get volume constraints from
+//   volume (double) - Volume to normalize (in lots)
+//
+// RETURNS:
+//   (double) - Normalized volume value rounded to symbol's volume step,
+//              clamped to min/max limits, or minimum volume if input is too small.
+//
+// SIDE EFFECTS:
+//   - None (read-only symbol property queries)
+//
+// ERROR CONDITIONS:
+//   - Returns minimum volume if input volume is below minimum
+//   - Returns maximum volume if input volume exceeds maximum
+//   - Uses default step of 0.01 if symbol step is invalid
+//
+// NOTES:
+//   - Volume is rounded down to nearest step using MathFloor()
+//   - Ensures volume is never zero (returns minimum if normalized value is zero)
+//   - Result is normalized to 2 decimal places
+//   - Critical for order placement as brokers reject invalid lot sizes
+//
+// USAGE EXAMPLE:
+//   double lot = 0.12345;
+//   lot = NormalizeVolumeToStep(_Symbol, lot); // Returns 0.12 if step is 0.01
+//
+// RELATED:
+//   - See Also: NormalizeStops()
+//   - Called By: TrendTrade(), BreakoutTrade(), RangeTrade()
+//+------------------------------------------------------------------+
 double NormalizeVolumeToStep(const string symbol, double volume)
 {
     double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
@@ -8323,6 +9169,53 @@ double NormalizeVolumeToStep(const string symbol, double volume)
     return NormalizeDouble(normalized, 2);
 }
 
+//+------------------------------------------------------------------+
+//| Normalize Stop Loss and Take Profit Levels                       |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Normalizes stop loss and take profit levels to ensure they are on the
+//   correct side of entry price and respect broker's minimum stop distance.
+//
+// BEHAVIOR:
+//   1. Ensures SL is below entry for buys, above entry for sells
+//   2. Ensures TP is above entry for buys, below entry for sells
+//   3. Enforces minimum stop distance from entry price
+//   4. Normalizes prices to symbol's digit precision
+//
+// PARAMETERS:
+//   isBuy (bool) - Trade direction: true for buy, false for sell
+//   entryPrice (double) - Entry price for the trade
+//   sl (double&) - Stop loss level (modified in place)
+//   tp (double&) - Take profit level (modified in place)
+//
+// RETURNS:
+//   (void) - No return value. Parameters sl and tp are modified in place.
+//
+// SIDE EFFECTS:
+//   - Modifies sl and tp parameters to valid values
+//   - None (read-only symbol property queries)
+//
+// ERROR CONDITIONS:
+//   - If SL is on wrong side, it is corrected to minimum distance from entry
+//   - If TP is on wrong side, it is corrected to minimum distance from entry
+//   - If distance is less than minimum, levels are adjusted to minimum distance
+//
+// NOTES:
+//   - Critical for order placement as brokers reject invalid stop levels
+//   - Uses SYMBOL_TRADE_STOPS_LEVEL to determine minimum distance
+//   - Prices are normalized to symbol's digit precision
+//   - Must be called before placing any order with SL/TP
+//
+// USAGE EXAMPLE:
+//   double entry = 1.1000;
+//   double sl = 1.0950;
+//   double tp = 1.1100;
+//   NormalizeStops(true, entry, sl, tp); // Ensures valid levels for buy order
+//
+// RELATED:
+//   - See Also: NormalizeVolumeToStep()
+//   - Called By: TrendTrade(), BreakoutTrade(), RangeTrade()
+//+------------------------------------------------------------------+
 void NormalizeStops(const bool isBuy, const double entryPrice, double &sl, double &tp)
 {
     int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
@@ -8446,7 +9339,8 @@ void UpdateRangeInfo()
     if (!InpEnableIntelligentScaling) return;
     
     datetime currentTime = TimeCurrent();
-    if (currentTime - g_lastRangeUpdate < 900) return; // Update every 15 minutes
+    datetime lastRangeUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastRangeUpdate() : 0;
+    if (currentTime - lastRangeUpdate < 900) return; // Update every 15 minutes
     
     double high[], low[];
     ArraySetAsSeries(high, true);
@@ -8460,22 +9354,26 @@ void UpdateRangeInfo()
         double maxHigh = high[ArrayMaximum(high, 0, InpScalingRangePeriods)];
         double minLow = low[ArrayMinimum(low, 0, InpScalingRangePeriods)];
         
-        g_currentRange.upperBound = maxHigh;
-        g_currentRange.lowerBound = minLow;
-        g_currentRange.rangeSize = maxHigh - minLow;
-        g_currentRange.rangeStartTime = currentTime;
-        g_currentRange.isValid = (g_currentRange.rangeSize >= InpMinRangeSizePips * _Point);
-        g_currentRange.touchCount = 0;
+        RangeInfo currentRange;
+        currentRange.upperBound = maxHigh;
+        currentRange.lowerBound = minLow;
+        currentRange.rangeSize = maxHigh - minLow;
+        currentRange.rangeStartTime = currentTime;
+        currentRange.isValid = (currentRange.rangeSize >= InpMinRangeSizePips * _Point);
+        currentRange.touchCount = 0;
         
-        if (InpLogScalingDecisions && g_currentRange.isValid) {
+        if(g_stateManager != NULL)
+            g_stateManager.SetCurrentRange(currentRange);
+        
+        if (InpLogScalingDecisions && currentRange.isValid) {
             Print(StringFormat("[SCALING] Range Updated - Upper: %s, Lower: %s, Size: %.1f pips",
-                  DoubleToString(g_currentRange.upperBound, _Digits),
-                  DoubleToString(g_currentRange.lowerBound, _Digits),
-                  g_currentRange.rangeSize / _Point));
+                  DoubleToString(currentRange.upperBound, _Digits),
+                  DoubleToString(currentRange.lowerBound, _Digits),
+                  currentRange.rangeSize / _Point));
         }
     }
     
-    g_lastRangeUpdate = currentTime;
+        // Range update timestamp is automatically updated by SetCurrentRange() in State Manager
 }
 
 //+------------------------------------------------------------------+
@@ -8485,10 +9383,11 @@ bool ShouldAllowIntelligentScaling(int existingPositions, bool isBuySignal)
 {
     if (!InpEnableIntelligentScaling) return false;
     if (existingPositions >= InpMaxScalingPositions) return false;
-    if (!g_currentRange.isValid) return false;
+    RangeInfo currentRange = (g_stateManager != NULL) ? g_stateManager.GetCurrentRange() : RangeInfo();
+    if (!currentRange.isValid) return false;
     
     double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double rangeSize = g_currentRange.rangeSize;
+    double rangeSize = currentRange.rangeSize;
     double buffer = rangeSize * InpScalingRangeBuffer;
     
     // First position: Allow if conditions are met
@@ -8500,20 +9399,20 @@ bool ShouldAllowIntelligentScaling(int existingPositions, bool isBuySignal)
     if (existingPositions == 1) {
         if (isBuySignal) {
             // For BUY: Second position at upper bound (price goes against you, better entry)
-            bool nearUpper = (currentPrice >= g_currentRange.upperBound - buffer);
+            bool nearUpper = (currentPrice >= currentRange.upperBound - buffer);
             if (nearUpper && InpLogScalingDecisions) {
                 Print(StringFormat("[SCALING] BUY position 2 opportunity - Price: %s, Upper: %s",
                       DoubleToString(currentPrice, _Digits),
-                      DoubleToString(g_currentRange.upperBound, _Digits)));
+                      DoubleToString(currentRange.upperBound, _Digits)));
             }
             return nearUpper;
         } else {
             // For SELL: Second position at lower bound (price goes against you, better entry)
-            bool nearLower = (currentPrice <= g_currentRange.lowerBound + buffer);
+            bool nearLower = (currentPrice <= currentRange.lowerBound + buffer);
             if (nearLower && InpLogScalingDecisions) {
                 Print(StringFormat("[SCALING] SELL position 2 opportunity - Price: %s, Lower: %s",
                       DoubleToString(currentPrice, _Digits),
-                      DoubleToString(g_currentRange.lowerBound, _Digits)));
+                      DoubleToString(currentRange.lowerBound, _Digits)));
             }
             return nearLower;
         }
@@ -8523,20 +9422,20 @@ bool ShouldAllowIntelligentScaling(int existingPositions, bool isBuySignal)
     if (existingPositions == 2) {
         if (isBuySignal) {
             // For BUY: Third position at lower bound (most favorable)
-            bool nearLower = (currentPrice <= g_currentRange.lowerBound + buffer);
+            bool nearLower = (currentPrice <= currentRange.lowerBound + buffer);
             if (nearLower && InpLogScalingDecisions) {
                 Print(StringFormat("[SCALING] BUY position 3 opportunity - Price: %s, Lower: %s",
                       DoubleToString(currentPrice, _Digits),
-                      DoubleToString(g_currentRange.lowerBound, _Digits)));
+                      DoubleToString(currentRange.lowerBound, _Digits)));
             }
             return nearLower;
         } else {
             // For SELL: Third position at upper bound (most favorable)
-            bool nearUpper = (currentPrice >= g_currentRange.upperBound - buffer);
+            bool nearUpper = (currentPrice >= currentRange.upperBound - buffer);
             if (nearUpper && InpLogScalingDecisions) {
                 Print(StringFormat("[SCALING] SELL position 3 opportunity - Price: %s, Upper: %s",
                       DoubleToString(currentPrice, _Digits),
-                      DoubleToString(g_currentRange.upperBound, _Digits)));
+                      DoubleToString(currentRange.upperBound, _Digits)));
             }
             return nearUpper;
         }
@@ -8552,14 +9451,15 @@ void LogScalingDecision(int positionCount, double entryPrice, bool isBuySignal)
 {
     if (!InpLogScalingDecisions) return;
     
+    RangeInfo currentRange = (g_stateManager != NULL) ? g_stateManager.GetCurrentRange() : RangeInfo();
     string logMsg = StringFormat("[SCALING] Position %d @%s | %s | Range: %s-%s (%.1f pips) | %s",
         positionCount,
         DoubleToString(entryPrice, _Digits),
         isBuySignal ? "BUY" : "SELL",
-        DoubleToString(g_currentRange.lowerBound, _Digits),
-        DoubleToString(g_currentRange.upperBound, _Digits),
-        g_currentRange.rangeSize / _Point,
-        g_currentRange.isValid ? "VALID_RANGE" : "NO_RANGE");
+        DoubleToString(currentRange.lowerBound, _Digits),
+        DoubleToString(currentRange.upperBound, _Digits),
+        currentRange.rangeSize / _Point,
+        currentRange.isValid ? "VALID_RANGE" : "NO_RANGE");
     
     Print(logMsg);
 }
@@ -8606,10 +9506,15 @@ bool LoadCooloffState()
     if(!GlobalVariableCheck(key + "_TIME"))
         return false;
     
-    g_coolOffState.lastExitTime = (datetime)GlobalVariableGet(key + "_TIME");
-    g_coolOffState.lastDirection = (int)GlobalVariableGet(key + "_DIR");
-    g_coolOffState.exitReason = (int)GlobalVariableGet(key + "_REASON");
-    g_coolOffState.isActive = true;
+    CoolOffInfo coolOff;
+    coolOff.lastExitTime = (datetime)GlobalVariableGet(key + "_TIME");
+    coolOff.lastDirection = (int)GlobalVariableGet(key + "_DIR");
+    coolOff.exitReason = (int)GlobalVariableGet(key + "_REASON");
+    coolOff.lastExitPrice = GlobalVariableGet(key + "_PRICE");
+    coolOff.isActive = true;
+    
+    if(g_stateManager != NULL)
+        g_stateManager.SetCoolOffInfo(coolOff);
     
     return true;
 }
@@ -9059,7 +9964,8 @@ void CheckForPositionClosure()
     }
     
     // Position was closed
-    if(g_lastPositionCount > 0 && currentPositions == 0)
+    int lastPositionCount = (g_stateManager != NULL) ? g_stateManager.GetLastPositionCount() : 0;
+    if(lastPositionCount > 0 && currentPositions == 0)
     {
         // Try to determine exit reason from last deal
         int exitReason = GetLastDealExitReason();
@@ -9081,5 +9987,132 @@ void CheckForPositionClosure()
         }
     }
     
-    g_lastPositionCount = currentPositions;
+    if(g_stateManager != NULL)
+        g_stateManager.SetLastPositionCount(currentPositions);
+}
+
+//+------------------------------------------------------------------+
+//| Event Bus Helper Functions                                        |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Publish Order Event                                               |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Publishes order-related events to the Event Bus for consistent event handling.
+//
+// BEHAVIOR:
+//   - Validates Event Bus is available
+//   - Publishes event with order ticket and details
+//   - Handles NULL Event Bus gracefully (no error thrown)
+//
+// PARAMETERS:
+//   @param eventType - The type of order event (EVENT_ORDER_PLACED, EVENT_ORDER_FILLED, EVENT_ORDER_CANCELLED, EVENT_ORDER_FAILED)
+//   @param ticket - Order ticket number (0 if not applicable)
+//   @param details - Human-readable details about the order event
+//
+// RETURNS:
+//   (void) - No return value
+//
+// SIDE EFFECTS:
+//   - Publishes event to Event Bus if available
+//   - No side effects if Event Bus is NULL
+//
+// ERROR CONDITIONS:
+//   - Event Bus is NULL: Function returns silently (no error)
+//   - Invalid event type: Event may not be processed correctly by subscribers
+//
+// USAGE EXAMPLE:
+//   PublishOrderEvent(EVENT_ORDER_PLACED, 12345, "BUY LIMIT | Lot: 0.10 | Price: 1.2000");
+//
+//+------------------------------------------------------------------+
+void PublishOrderEvent(EVENT_TYPE eventType, ulong ticket, string details)
+{
+    if(g_eventBus == NULL)
+        return;
+    
+    string source = "OrderManager";
+    double value = (double)ticket;
+    g_eventBus.PublishEvent(eventType, source, details, value, (long)ticket);
+}
+
+//+------------------------------------------------------------------+
+//| Publish Position Event                                            |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Publishes position-related events to the Event Bus for consistent event handling.
+//
+// BEHAVIOR:
+//   - Validates Event Bus is available
+//   - Publishes event with position ticket and details
+//   - Handles NULL Event Bus gracefully (no error thrown)
+//
+// PARAMETERS:
+//   @param eventType - The type of position event (EVENT_POSITION_OPENED, EVENT_POSITION_MODIFIED, EVENT_POSITION_CLOSED, EVENT_PARTIAL_CLOSE)
+//   @param ticket - Position ticket number (0 if not applicable)
+//   @param details - Human-readable details about the position event
+//
+// RETURNS:
+//   (void) - No return value
+//
+// SIDE EFFECTS:
+//   - Publishes event to Event Bus if available
+//   - No side effects if Event Bus is NULL
+//
+// ERROR CONDITIONS:
+//   - Event Bus is NULL: Function returns silently (no error)
+//   - Invalid event type: Event may not be processed correctly by subscribers
+//
+// USAGE EXAMPLE:
+//   PublishPositionEvent(EVENT_POSITION_OPENED, 12345, "Trend BUY | Entry: 1.2000 | SL: 1.1950 | TP: 1.2100");
+//
+//+------------------------------------------------------------------+
+void PublishPositionEvent(EVENT_TYPE eventType, ulong ticket, string details)
+{
+    if(g_eventBus == NULL)
+        return;
+    
+    string source = "PositionManager";
+    double value = (double)ticket;
+    g_eventBus.PublishEvent(eventType, source, details, value, (long)ticket);
+}
+
+//+------------------------------------------------------------------+
+//| Publish Risk Event                                                |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Publishes risk management events to the Event Bus for consistent event handling.
+//
+// BEHAVIOR:
+//   - Validates Event Bus is available
+//   - Publishes event with risk details and numeric value
+//   - Handles NULL Event Bus gracefully (no error thrown)
+//
+// PARAMETERS:
+//   @param eventType - The type of risk event (EVENT_RISK_WARNING, EVENT_MARGIN_WARNING, EVENT_MARGIN_CRITICAL, EVENT_DRAWDOWN_WARNING)
+//   @param details - Human-readable details about the risk event
+//   @param value - Numeric value associated with the risk event (e.g., margin level percentage, drawdown percentage)
+//
+// RETURNS:
+//   (void) - No return value
+//
+// SIDE EFFECTS:
+//   - Publishes event to Event Bus if available
+//   - No side effects if Event Bus is NULL
+//
+// ERROR CONDITIONS:
+//   - Event Bus is NULL: Function returns silently (no error)
+//   - Invalid event type: Event may not be processed correctly by subscribers
+//
+// USAGE EXAMPLE:
+//   PublishRiskEvent(EVENT_MARGIN_WARNING, "Margin level at 250% - Monitor closely", 250.0);
+//
+//+------------------------------------------------------------------+
+void PublishRiskEvent(EVENT_TYPE eventType, string details, double value)
+{
+    if(g_eventBus == NULL)
+        return;
+    
+    string source = "RiskManager";
+    g_eventBus.PublishEvent(eventType, source, details, value, 0);
 }

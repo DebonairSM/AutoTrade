@@ -169,6 +169,9 @@ private:
         datetime lastFinBERTAnalysisTime;
         datetime lastCalendarUpdate;
         datetime lastBarTime;
+        
+        // Risk management tracking
+        datetime lastRiskUpdate;
     };
     
     SystemState m_state;
@@ -265,6 +268,7 @@ public:
         m_state.lastFinBERTAnalysisTime = 0;
         m_state.lastCalendarUpdate = 0;
         m_state.lastBarTime = 0;
+        m_state.lastRiskUpdate = 0;
     }
     
     //+------------------------------------------------------------------+
@@ -379,6 +383,9 @@ public:
     
     datetime GetLastBarTime() const { return m_state.lastBarTime; }
     void SetLastBarTime(datetime time) { m_state.lastBarTime = time; }
+    
+    datetime GetLastRiskUpdate() const { return m_state.lastRiskUpdate; }
+    void SetLastRiskUpdate(datetime time) { m_state.lastRiskUpdate = time; }
     
     //+------------------------------------------------------------------+
     //| State Validation                                                  |

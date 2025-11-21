@@ -92,7 +92,8 @@ See `SETTINGS_TEMPLATES_BY_PAIR.txt` for detailed templates.
 **Reports:**
 - `docs\daily_analysis\` - Performance reports
 
-**Refactoring Documentation:**
+**Documentation:**
+- `docs\LLM_IMPLEMENTATION_PLAN.md` - Comprehensive LLM-friendly development implementation plan
 - `docs\refactoring\REFACTORING.md` - Overview of refactoring work and architecture
 - `docs\refactoring\GUIDE.md` - Practical usage guide for infrastructure components
 

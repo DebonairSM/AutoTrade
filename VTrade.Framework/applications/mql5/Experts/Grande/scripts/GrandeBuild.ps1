@@ -1,3 +1,48 @@
+#Requires -Version 7.0
+<#
+.SYNOPSIS
+    Build and deploy Grande Trading System components to MT5
+
+.DESCRIPTION
+    This script builds and deploys Grande Trading System components (Expert Advisors and Indicators)
+    to the MetaTrader 5 terminal. It handles compilation, dependency copying, and deployment.
+    
+    The script automatically detects the MT5 terminal directory or uses the MT5_TERMINAL_ID
+    environment variable to specify a specific terminal.
+    
+.PARAMETER ComponentName
+    Name of the component to build. Default is "GrandeTradingSystem".
+    Options: "GrandeTradingSystem", "GrandeMonitorIndicator", "GrandeMarketRegimeDetector", 
+    "GrandeKeyLevelDetector", or "All"
+    
+.PARAMETER RunTests
+    If specified, runs automated tests after building.
+    
+.PARAMETER TestOnly
+    If specified, only runs tests without building.
+    
+.PARAMETER IndicatorOnly
+    If specified, only builds the GrandeMonitorIndicator component.
+    
+.EXAMPLE
+    .\GrandeBuild.ps1
+    Builds and deploys GrandeTradingSystem to MT5.
+    
+.EXAMPLE
+    .\GrandeBuild.ps1 -ComponentName "All"
+    Builds and deploys all components.
+    
+.EXAMPLE
+    .\GrandeBuild.ps1 -IndicatorOnly
+    Builds and deploys only the GrandeMonitorIndicator.
+    
+.NOTES
+    - Requires MetaEditor to be installed for compilation
+    - Automatically detects MT5 terminal directory
+    - Deploys compiled .ex5 files and source files to MT5
+    - Creates Build directory structure for component organization
+#>
+
 param(
     [string]$ComponentName = "GrandeTradingSystem",
     [switch]$RunTests = $false,
