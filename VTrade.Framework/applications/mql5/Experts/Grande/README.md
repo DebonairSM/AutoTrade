@@ -93,11 +93,8 @@ See `SETTINGS_TEMPLATES_BY_PAIR.txt` for detailed templates.
 - `docs\daily_analysis\` - Performance reports
 
 **Refactoring Documentation:**
-- `docs\refactoring\SUMMARY.md` - Executive summary of refactoring
-- `docs\refactoring\GUIDE.md` - Practical usage guide for new architecture
-- `docs\refactoring\PROGRESS.md` - Detailed technical progress report
-- `docs\refactoring\ARCHITECTURE.md` - Architecture, validation, and build status
-- `docs\refactoring\plans\` - Future enhancement plans
+- `docs\refactoring\REFACTORING.md` - Overview of refactoring work and architecture
+- `docs\refactoring\GUIDE.md` - Practical usage guide for infrastructure components
 
 ## Troubleshooting
 

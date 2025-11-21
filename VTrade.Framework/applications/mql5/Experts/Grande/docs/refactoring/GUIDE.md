@@ -560,7 +560,6 @@ The refactored architecture provides:
 
 ---
 
-**For detailed progress:** See `REFACTORING_PROGRESS.md`
-**For questions:** Contact development team
+**For overview:** See `REFACTORING.md`
 **Version:** 1.0
 
