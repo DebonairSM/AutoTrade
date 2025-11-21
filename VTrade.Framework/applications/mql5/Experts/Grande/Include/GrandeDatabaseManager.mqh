@@ -3,6 +3,66 @@
 //| Database management for Grande Trading System                    |
 //| Copyright 2025, Grande Tech                                     |
 //+------------------------------------------------------------------+
+//
+// PURPOSE:
+//   Manage SQLite database for storing trading data, decisions, and analysis.
+//   Provides structured storage for AI-driven analysis and performance tracking.
+//
+// RESPONSIBILITIES:
+//   - Create and manage database schema
+//   - Insert market data (OHLCV, indicators)
+//   - Insert regime detection data
+//   - Insert key level detections
+//   - Insert trade decisions and outcomes
+//   - Insert sentiment analysis data
+//   - Insert economic calendar events
+//   - Insert performance metrics
+//   - Create database indexes for performance
+//   - Backup and optimize database
+//
+// DEPENDENCIES:
+//   - None (standalone component)
+//   - Uses MT5 database functions: DatabaseOpen, DatabaseExecute, DatabasePrepare
+//
+// STATE MANAGED:
+//   - Database connection handle
+//   - Database file path
+//   - Connection status
+//   - Debug logging flag
+//
+// PUBLIC INTERFACE:
+//   bool Initialize(dbPath, showDebug) - Initialize database
+//   bool Close() - Close database connection
+//   bool CreateTables() - Create schema
+//   bool InsertMarketData(...) - Insert market data
+//   bool InsertRegimeData(...) - Insert regime data
+//   bool InsertKeyLevel(...) - Insert key level
+//   bool InsertTradeDecision(...) - Insert trade decision
+//   bool InsertSentimentData(...) - Insert sentiment data
+//   bool InsertEconomicEvent(...) - Insert economic event
+//   bool BackupDatabase(path) - Backup database
+//   bool OptimizeDatabase() - Optimize database
+//
+// DATABASE SCHEMA:
+//   - market_data: OHLCV and technical indicators
+//   - market_regimes: Regime detection history
+//   - key_levels: Support/resistance levels
+//   - trade_decisions: All trading decisions
+//   - sentiment_data: FinBERT sentiment analysis
+//   - economic_events: Economic calendar events
+//   - performance_metrics: System performance data
+//   - config_snapshots: Configuration history
+//
+// IMPLEMENTATION NOTES:
+//   - Uses SQLite via MT5 database API
+//   - Implements SQL injection protection (string escaping)
+//   - Creates indexes for query performance
+//   - Supports database backup and optimization
+//
+// THREAD SAFETY: Not thread-safe (MQL5 limitation)
+//
+// TESTING: See Testing/TestDatabaseManager.mqh
+//+------------------------------------------------------------------+
 
 #property copyright "Grande Tech"
 #property version   "1.00"
@@ -119,6 +179,17 @@ public:
     int               GetRecordCount(const string tableName);
     bool              TableExists(const string tableName);
     string            GetDatabasePath() const { return m_dbPath; }
+    
+    // Historical data backfill methods
+    bool              BackfillHistoricalData(const string symbol, const int timeframe,
+                                            const datetime startDate, const datetime endDate);
+    bool              BackfillRecentHistory(const string symbol, const int timeframe, const int days = 30);
+    bool              HasHistoricalData(const string symbol, const datetime checkDate);
+    bool              BarExists(const string symbol, const int timeframe, const datetime barTime);
+    datetime          GetOldestDataTimestamp(const string symbol);
+    datetime          GetNewestDataTimestamp(const string symbol);
+    bool              PurgeDataOlderThan(const datetime cutoffDate);
+    string            GetDataCoverageStats(const string symbol);
 };
 
 //+------------------------------------------------------------------+
@@ -702,4 +773,316 @@ bool CGrandeDatabaseManager::OptimizeDatabase()
         Print("[GrandeDB] Database optimization completed: ", result ? "SUCCESS" : "FAILED");
     
     return result;
+}
+
+//+------------------------------------------------------------------+
+//| Historical Data Backfill Methods                                 |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Backfill historical data for specified period                    |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::BackfillHistoricalData(const string symbol, 
+                                                     const int timeframe,
+                                                     const datetime startDate, 
+                                                     const datetime endDate)
+{
+    if(!m_isConnected || m_dbHandle == INVALID_HANDLE)
+    {
+        Print("[GrandeDB] ERROR: Database not connected for backfill");
+        return false;
+    }
+    
+    Print("[GrandeDB] Starting historical data backfill for ", symbol);
+    Print("[GrandeDB] Period: ", TimeToString(startDate, TIME_DATE), " to ", TimeToString(endDate, TIME_DATE));
+    Print("[GrandeDB] Timeframe: ", timeframe);
+    
+    // Fetch historical data using CopyRates
+    MqlRates rates[];
+    ArraySetAsSeries(rates, true);
+    
+    int copied = CopyRates(symbol, (ENUM_TIMEFRAMES)timeframe, startDate, endDate, rates);
+    if(copied <= 0)
+    {
+        Print("[GrandeDB] ERROR: Failed to copy historical data. Error: ", GetLastError());
+        return false;
+    }
+    
+    Print("[GrandeDB] Retrieved ", copied, " bars - starting batch insert");
+    
+    // Start database transaction for performance
+    DatabaseTransactionBegin(m_dbHandle);
+    
+    int inserted = 0;
+    int skipped = 0;
+    int batchSize = 1000;
+    
+    for(int i = 0; i < copied; i++)
+    {
+        // Check if bar already exists to avoid duplicates
+        if(BarExists(symbol, timeframe, rates[i].time))
+        {
+            skipped++;
+            continue;
+        }
+        
+        // Insert bar data (with 0 for indicators - can be calculated later if needed)
+        if(InsertMarketData(symbol, timeframe, rates[i].time,
+                           rates[i].open, rates[i].high, rates[i].low, rates[i].close,
+                           (double)rates[i].tick_volume,
+                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        {
+            inserted++;
+        }
+        
+        // Commit batch and start new transaction every 1000 bars
+        if((i + 1) % batchSize == 0)
+        {
+            DatabaseTransactionCommit(m_dbHandle);
+            Print("[GrandeDB] Progress: ", inserted, "/", copied, " bars inserted");
+            DatabaseTransactionBegin(m_dbHandle);
+        }
+    }
+    
+    // Commit final batch
+    DatabaseTransactionCommit(m_dbHandle);
+    
+    Print("[GrandeDB] Backfill complete: ", inserted, " bars inserted, ", skipped, " skipped (duplicates)");
+    
+    // Optimize database after large insert
+    if(inserted > 1000)
+    {
+        Print("[GrandeDB] Optimizing database after backfill...");
+        OptimizeDatabase();
+    }
+    
+    return inserted > 0;
+}
+
+//+------------------------------------------------------------------+
+//| Backfill recent history (last N days)                            |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::BackfillRecentHistory(const string symbol, 
+                                                    const int timeframe,
+                                                    const int days)
+{
+    datetime endDate = TimeCurrent();
+    datetime startDate = endDate - (days * 24 * 3600);
+    
+    Print("[GrandeDB] Quick backfill: last ", days, " days");
+    
+    return BackfillHistoricalData(symbol, timeframe, startDate, endDate);
+}
+
+//+------------------------------------------------------------------+
+//| Check if historical data exists for symbol on date               |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::HasHistoricalData(const string symbol, const datetime checkDate)
+{
+    if(!m_isConnected || m_dbHandle == INVALID_HANDLE)
+        return false;
+    
+    string sql = StringFormat(
+        "SELECT COUNT(*) FROM market_data WHERE symbol='%s' AND timestamp >= '%s' LIMIT 1",
+        EscapeString(symbol),
+        TimeToString(checkDate, TIME_DATE|TIME_SECONDS)
+    );
+    
+    int stmt = DatabasePrepare(m_dbHandle, sql);
+    if(stmt == INVALID_HANDLE)
+        return false;
+    
+    int count = 0;
+    if(DatabaseRead(stmt))
+    {
+        DatabaseColumnInteger(stmt, 0, count);
+    }
+    
+    DatabaseFinalize(stmt);
+    return count > 0;
+}
+
+//+------------------------------------------------------------------+
+//| Check if specific bar exists in database                         |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::BarExists(const string symbol, const int timeframe, const datetime barTime)
+{
+    if(!m_isConnected || m_dbHandle == INVALID_HANDLE)
+        return false;
+    
+    string sql = StringFormat(
+        "SELECT COUNT(*) FROM market_data WHERE symbol='%s' AND timeframe=%d AND timestamp='%s' LIMIT 1",
+        EscapeString(symbol),
+        timeframe,
+        TimeToString(barTime, TIME_DATE|TIME_SECONDS)
+    );
+    
+    int stmt = DatabasePrepare(m_dbHandle, sql);
+    if(stmt == INVALID_HANDLE)
+        return false;
+    
+    int count = 0;
+    if(DatabaseRead(stmt))
+    {
+        DatabaseColumnInteger(stmt, 0, count);
+    }
+    
+    DatabaseFinalize(stmt);
+    return count > 0;
+}
+
+//+------------------------------------------------------------------+
+//| Get oldest data timestamp for symbol                             |
+//+------------------------------------------------------------------+
+datetime CGrandeDatabaseManager::GetOldestDataTimestamp(const string symbol)
+{
+    if(!m_isConnected || m_dbHandle == INVALID_HANDLE)
+        return 0;
+    
+    string sql = StringFormat(
+        "SELECT MIN(timestamp) FROM market_data WHERE symbol='%s'",
+        EscapeString(symbol)
+    );
+    
+    int stmt = DatabasePrepare(m_dbHandle, sql);
+    if(stmt == INVALID_HANDLE)
+        return 0;
+    
+    string timeStr = "";
+    if(DatabaseRead(stmt))
+    {
+        DatabaseColumnText(stmt, 0, timeStr);
+    }
+    
+    DatabaseFinalize(stmt);
+    
+    if(timeStr == "" || timeStr == "NULL")
+        return 0;
+    
+    return StringToTime(timeStr);
+}
+
+//+------------------------------------------------------------------+
+//| Get newest data timestamp for symbol                             |
+//+------------------------------------------------------------------+
+datetime CGrandeDatabaseManager::GetNewestDataTimestamp(const string symbol)
+{
+    if(!m_isConnected || m_dbHandle == INVALID_HANDLE)
+        return 0;
+    
+    string sql = StringFormat(
+        "SELECT MAX(timestamp) FROM market_data WHERE symbol='%s'",
+        EscapeString(symbol)
+    );
+    
+    int stmt = DatabasePrepare(m_dbHandle, sql);
+    if(stmt == INVALID_HANDLE)
+        return 0;
+    
+    string timeStr = "";
+    if(DatabaseRead(stmt))
+    {
+        DatabaseColumnText(stmt, 0, timeStr);
+    }
+    
+    DatabaseFinalize(stmt);
+    
+    if(timeStr == "" || timeStr == "NULL")
+        return 0;
+    
+    return StringToTime(timeStr);
+}
+
+//+------------------------------------------------------------------+
+//| Purge data older than specified date                             |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::PurgeDataOlderThan(const datetime cutoffDate)
+{
+    if(!m_isConnected || m_dbHandle == INVALID_HANDLE)
+    {
+        Print("[GrandeDB] ERROR: Database not connected for purge");
+        return false;
+    }
+    
+    Print("[GrandeDB] Purging data older than ", TimeToString(cutoffDate, TIME_DATE));
+    
+    // Count records to be purged
+    string countSql = StringFormat(
+        "SELECT COUNT(*) FROM market_data WHERE timestamp < '%s'",
+        TimeToString(cutoffDate, TIME_DATE|TIME_SECONDS)
+    );
+    
+    int stmt = DatabasePrepare(m_dbHandle, countSql);
+    int recordsToPurge = 0;
+    if(stmt != INVALID_HANDLE)
+    {
+        if(DatabaseRead(stmt))
+        {
+            DatabaseColumnInteger(stmt, 0, recordsToPurge);
+        }
+        DatabaseFinalize(stmt);
+    }
+    
+    if(recordsToPurge == 0)
+    {
+        Print("[GrandeDB] No old data to purge");
+        return true;
+    }
+    
+    Print("[GrandeDB] Purging ", recordsToPurge, " old records...");
+    
+    // Purge market data
+    string sql = StringFormat(
+        "DELETE FROM market_data WHERE timestamp < '%s'",
+        TimeToString(cutoffDate, TIME_DATE|TIME_SECONDS)
+    );
+    
+    bool result = ExecuteSQL(sql);
+    
+    if(result)
+    {
+        Print("[GrandeDB] Purged ", recordsToPurge, " records - optimizing database...");
+        OptimizeDatabase();
+        Print("[GrandeDB] Purge completed successfully");
+    }
+    else
+    {
+        Print("[GrandeDB] ERROR: Purge failed");
+    }
+    
+    return result;
+}
+
+//+------------------------------------------------------------------+
+//| Get data coverage statistics                                     |
+//+------------------------------------------------------------------+
+string CGrandeDatabaseManager::GetDataCoverageStats(const string symbol)
+{
+    if(!m_isConnected || m_dbHandle == INVALID_HANDLE)
+        return "Database not connected";
+    
+    datetime oldest = GetOldestDataTimestamp(symbol);
+    datetime newest = GetNewestDataTimestamp(symbol);
+    int totalRecords = GetRecordCount("market_data");
+    
+    string stats = "\n=== DATA COVERAGE STATISTICS ===\n";
+    stats += StringFormat("Symbol: %s\n", symbol);
+    
+    if(oldest > 0)
+    {
+        stats += StringFormat("Oldest Data: %s\n", TimeToString(oldest, TIME_DATE|TIME_MINUTES));
+        stats += StringFormat("Newest Data: %s\n", TimeToString(newest, TIME_DATE|TIME_MINUTES));
+        
+        int daysCoverage = (int)((newest - oldest) / 86400);
+        stats += StringFormat("Coverage Period: %d days\n", daysCoverage);
+    }
+    else
+    {
+        stats += "No historical data found\n";
+    }
+    
+    stats += StringFormat("Total Records: %d\n", totalRecords);
+    stats += "===============================\n";
+    
+    return stats;
 }

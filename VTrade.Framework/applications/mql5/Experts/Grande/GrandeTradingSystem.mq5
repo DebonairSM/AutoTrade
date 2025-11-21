@@ -41,6 +41,13 @@
 #include "..\VSol\GrandeRiskManager.mqh"
 #include <Trade\Trade.mqh>
 
+// Infrastructure components
+#include "Include/GrandeStateManager.mqh"
+#include "Include/GrandeConfigManager.mqh"
+#include "Include/GrandeComponentRegistry.mqh"
+#include "Include/GrandeHealthMonitor.mqh"
+#include "Include/GrandeEventBus.mqh"
+
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
 //+------------------------------------------------------------------+
@@ -259,6 +266,13 @@ CGrandeMT5NewsReader          g_calendarReader;
 CTrade                        g_trade;
 RegimeConfig                  g_regimeConfig;
 RiskConfig                    g_riskConfig;
+
+// Infrastructure components
+CGrandeStateManager*          g_stateManager;
+CGrandeConfigManager*         g_configManager;
+CGrandeComponentRegistry*     g_componentRegistry;
+CGrandeHealthMonitor*         g_healthMonitor;
+CGrandeEventBus*              g_eventBus;
 datetime                      g_lastRegimeUpdate;
 datetime                      g_lastKeyLevelUpdate;
 datetime                      g_lastDisplayUpdate;
@@ -284,45 +298,18 @@ datetime                      g_lastBarTime = 0;
 datetime                      g_lastFinBERTAnalysisTime = 0;
 
 // Intelligent Position Scaling variables
-struct RangeInfo {
-    double upperBound;
-    double lowerBound;
-    datetime rangeStartTime;
-    bool isValid;
-    int touchCount;
-    double rangeSize;
-};
-
+// Note: RangeInfo, CoolOffInfo, CoolOffStats are now in GrandeStateManager.mqh
+// These globals kept for backward compatibility during migration
+// TODO: Migrate to State Manager
 RangeInfo                     g_currentRange;
 datetime                      g_lastRangeUpdate = 0;
 int                           g_rangeHandle15M = INVALID_HANDLE;
 
 // Cool-off period tracking
-struct CoolOffInfo
-{
-    datetime lastExitTime;
-    double lastExitPrice;
-    int lastDirection;      // 0=BUY, 1=SELL
-    int exitReason;         // 0=TP, 1=SL, 2=OTHER
-    bool isActive;
-};
-
 CoolOffInfo                   g_coolOffState;
 int                           g_lastPositionCount = 0;  // Track position count changes
 
 // Cool-off statistics tracking
-struct CoolOffStats
-{
-    int tradesBlocked;           // Total trades blocked by cool-off
-    int tradesAllowed;           // Total trades allowed after cool-off expired
-    int overridesUsed;           // Direction change overrides used
-    int blockedWouldWin;         // Blocked trades that would have won (estimated)
-    int blockedWouldLose;        // Blocked trades that would have lost (estimated)
-    int allowedWins;             // Allowed trades that won
-    int allowedLosses;           // Allowed trades that lost
-    datetime lastReportTime;     // Last statistics report time
-};
-
 CoolOffStats                  g_coolOffStats;
 
 // Cooldown storage per ticket for partial closes
@@ -420,12 +407,168 @@ int OnInit()
         else
         {
             Print("[Grande] ✅ Database Manager initialized successfully: ", InpDatabasePath);
+            
+            // Initialize historical data backfill if database is enabled
+            if(InpEnableDatabase)
+            {
+                datetime cutoff = TimeCurrent() - (30 * 86400); // 30 days
+                if(!g_databaseManager.HasHistoricalData(_Symbol, cutoff))
+                {
+                    Print("[Grande] Backfilling 30 days of historical data...");
+                    if(g_databaseManager.BackfillRecentHistory(_Symbol, PERIOD_CURRENT, 30))
+                    {
+                        Print("[Grande] ✅ Backfill complete!");
+                        if(InpLogDebugInfo)
+                            Print(g_databaseManager.GetDataCoverageStats(_Symbol));
+                    }
+                    else
+                    {
+                        Print("[Grande] WARNING: Historical data backfill failed, continuing anyway");
+                    }
+                }
+                else if(InpLogDebugInfo)
+                {
+                    Print("[Grande] Historical data up to date");
+                    Print(g_databaseManager.GetDataCoverageStats(_Symbol));
+                }
+            }
         }
     }
     else
     {
         Print("[Grande] Database logging is DISABLED (InpEnableDatabase = false)");
     }
+    
+    // Initialize Infrastructure Components
+    // Initialize State Manager
+    g_stateManager = new CGrandeStateManager();
+    if(g_stateManager == NULL)
+    {
+        Print("ERROR: Failed to create State Manager");
+        return INIT_FAILED;
+    }
+    if(!g_stateManager.Initialize(_Symbol, InpLogDebugInfo))
+    {
+        Print("ERROR: Failed to initialize State Manager");
+        delete g_stateManager;
+        g_stateManager = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ State Manager initialized");
+    
+    // Initialize Config Manager
+    g_configManager = new CGrandeConfigManager();
+    if(g_configManager == NULL)
+    {
+        Print("ERROR: Failed to create Config Manager");
+        delete g_stateManager;
+        g_stateManager = NULL;
+        return INIT_FAILED;
+    }
+    if(!g_configManager.Initialize(_Symbol, InpLogDebugInfo))
+    {
+        Print("ERROR: Failed to initialize Config Manager");
+        delete g_stateManager;
+        delete g_configManager;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Config Manager initialized");
+    
+    // Initialize Component Registry
+    g_componentRegistry = new CGrandeComponentRegistry();
+    if(g_componentRegistry == NULL)
+    {
+        Print("ERROR: Failed to create Component Registry");
+        delete g_stateManager;
+        delete g_configManager;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        return INIT_FAILED;
+    }
+    if(!g_componentRegistry.Initialize(InpLogDebugInfo))
+    {
+        Print("ERROR: Failed to initialize Component Registry");
+        delete g_stateManager;
+        delete g_configManager;
+        delete g_componentRegistry;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        g_componentRegistry = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Component Registry initialized");
+    
+    // Initialize Event Bus
+    g_eventBus = new CGrandeEventBus();
+    if(g_eventBus == NULL)
+    {
+        Print("ERROR: Failed to create Event Bus");
+        delete g_stateManager;
+        delete g_configManager;
+        delete g_componentRegistry;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        g_componentRegistry = NULL;
+        return INIT_FAILED;
+    }
+    if(!g_eventBus.Initialize(1000, InpLogDebugInfo, InpLogVerbose))
+    {
+        Print("ERROR: Failed to initialize Event Bus");
+        delete g_stateManager;
+        delete g_configManager;
+        delete g_componentRegistry;
+        delete g_eventBus;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        g_componentRegistry = NULL;
+        g_eventBus = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Event Bus initialized");
+    
+    // Initialize Health Monitor
+    g_healthMonitor = new CGrandeHealthMonitor();
+    if(g_healthMonitor == NULL)
+    {
+        Print("ERROR: Failed to create Health Monitor");
+        delete g_stateManager;
+        delete g_configManager;
+        delete g_componentRegistry;
+        delete g_eventBus;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        g_componentRegistry = NULL;
+        g_eventBus = NULL;
+        return INIT_FAILED;
+    }
+    if(!g_healthMonitor.Initialize(g_componentRegistry, InpLogDebugInfo))
+    {
+        Print("ERROR: Failed to initialize Health Monitor");
+        delete g_stateManager;
+        delete g_configManager;
+        delete g_componentRegistry;
+        delete g_eventBus;
+        delete g_healthMonitor;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        g_componentRegistry = NULL;
+        g_eventBus = NULL;
+        g_healthMonitor = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Health Monitor initialized");
+    
+    // Publish initialization event
+    if(g_eventBus != NULL)
+        g_eventBus.PublishEvent(EVENT_SYSTEM_INIT, "GrandeTradingSystem", 
+                               "EA initialization started", 0.0, 0);
     
     // Configure risk management settings
     g_riskConfig.risk_percent_trend = InpRiskPctTrend;
@@ -751,6 +894,31 @@ int OnInit()
     g_coolOffStats.allowedLosses = 0;
     g_coolOffStats.lastReportTime = 0;
     
+    // Register components in Component Registry
+    // Note: Component registration requires components to implement IMarketAnalyzer interface
+    // Currently components don't implement this interface, so registration is skipped
+    // TODO: Refactor components to implement IMarketAnalyzer interface for full registry support
+    if(g_componentRegistry != NULL && InpLogDebugInfo)
+    {
+        Print("[Grande] Component Registry initialized (component registration pending interface implementation)");
+    }
+    
+    // Perform initial system health check
+    if(g_healthMonitor != NULL)
+    {
+        g_healthMonitor.CheckSystemHealth();
+        if(InpLogDebugInfo)
+        {
+            string healthReport = g_healthMonitor.GetHealthReport();
+            Print("[Grande] System Health Report:\n", healthReport);
+        }
+    }
+    
+    // Publish initialization complete event
+    if(g_eventBus != NULL)
+        g_eventBus.PublishEvent(EVENT_SYSTEM_INIT, "GrandeTradingSystem", 
+                               "EA initialization complete", 1.0, 0);
+    
     if(InpLogCooloffDecisions && InpEnableCooloffPeriod)
     {
         Print(StringFormat("[COOL-OFF] Initialized - TP: %dm, SL: %dm, Direction Override: %s",
@@ -776,8 +944,49 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+    // Publish deinitialization event
+    if(g_eventBus != NULL)
+        g_eventBus.PublishEvent(EVENT_SYSTEM_DEINIT, "GrandeTradingSystem", 
+                               "EA deinitialization started. Reason: " + IntegerToString(reason), 0.0, 0);
+    
     if(InpLogDebugInfo)
         Print("Deinitializing Grande Trading System. Reason: ", reason);
+    
+    // Clean up Infrastructure Components
+    if(g_healthMonitor != NULL)
+    {
+        delete g_healthMonitor;
+        g_healthMonitor = NULL;
+    }
+    
+    if(g_componentRegistry != NULL)
+    {
+        // Components will be cleaned up individually below
+        // Registry cleanup is automatic when deleted
+        delete g_componentRegistry;
+        g_componentRegistry = NULL;
+    }
+    
+    if(g_eventBus != NULL)
+    {
+        // Save event log if needed
+        delete g_eventBus;
+        g_eventBus = NULL;
+    }
+    
+    if(g_configManager != NULL)
+    {
+        delete g_configManager;
+        g_configManager = NULL;
+    }
+    
+    if(g_stateManager != NULL)
+    {
+        // Save state before cleanup
+        g_stateManager.SaveState();
+        delete g_stateManager;
+        g_stateManager = NULL;
+    }
     
     // Cool-off state cleanup (persisted in GlobalVariables)
     if(reason == REASON_REMOVE)
@@ -1216,21 +1425,43 @@ void OnTimer()
     UpdateRangeInfo();
     
     // Update regime detection
+    datetime lastRegimeUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastRegimeUpdate() : g_lastRegimeUpdate;
     if(g_regimeDetector != NULL && 
-       currentTime - g_lastRegimeUpdate >= InpRegimeUpdateSeconds)
+       currentTime - lastRegimeUpdate >= InpRegimeUpdateSeconds)
     {
         RegimeSnapshot currentRegime = g_regimeDetector.DetectCurrentRegime();
-        g_lastRegimeUpdate = currentTime;
         
-        // Log regime changes if requested
-        if(InpLogDetailedInfo)
+        // Get previous regime for change detection
+        static MARKET_REGIME lastLoggedRegime = REGIME_RANGING;
+        
+        // Store in State Manager if available (SetCurrentRegime automatically updates timestamp)
+        if(g_stateManager != NULL)
         {
-            static MARKET_REGIME lastLoggedRegime = REGIME_RANGING;
-            if(currentRegime.regime != lastLoggedRegime)
-            {
+            RegimeSnapshot previousRegime = g_stateManager.GetCurrentRegime();
+            lastLoggedRegime = previousRegime.regime;
+            g_stateManager.SetCurrentRegime(currentRegime);
+        }
+        else
+        {
+            g_lastRegimeUpdate = currentTime; // Fallback to global
+        }
+        
+        // Log regime changes and publish events
+        if(currentRegime.regime != lastLoggedRegime)
+        {
+            if(InpLogDetailedInfo)
                 LogRegimeChange(currentRegime);
-                lastLoggedRegime = currentRegime.regime;
+            
+            // Publish regime change event
+            if(g_eventBus != NULL)
+            {
+                string regimeName = EnumToString(currentRegime.regime);
+                g_eventBus.PublishEvent(EVENT_REGIME_CHANGED, "RegimeDetector",
+                                      StringFormat("Regime changed to %s (confidence: %.2f)", regimeName, currentRegime.confidence),
+                                      currentRegime.confidence, 0);
             }
+            
+            lastLoggedRegime = currentRegime.regime;
         }
 
         // Execute trading logic periodically based on current regime (no tick-level execution)
@@ -1240,8 +1471,9 @@ void OnTimer()
     }
     
     // Update key level detection
+    datetime lastKeyLevelUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastKeyLevelUpdate() : g_lastKeyLevelUpdate;
     if(g_keyLevelDetector != NULL && 
-       currentTime - g_lastKeyLevelUpdate >= InpKeyLevelUpdateSeconds)
+       currentTime - lastKeyLevelUpdate >= InpKeyLevelUpdateSeconds)
     {
         if(g_keyLevelDetector.DetectKeyLevels())
         {
@@ -1250,8 +1482,33 @@ void OnTimer()
                 
             if(InpLogDetailedInfo)
                 g_keyLevelDetector.PrintKeyLevelsReport();
+            
+            // Find and store nearest key levels in State Manager
+            // Note: SetNearestSupport/SetNearestResistance automatically update timestamp
+            if(g_stateManager != NULL)
+            {
+                double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                SKeyLevel support, resistance;
+                if(FindNearestKeyLevels(currentPrice, support, resistance))
+                {
+                    g_stateManager.SetNearestSupport(support);
+                    g_stateManager.SetNearestResistance(resistance);
+                    
+                    // Publish key level update event
+                    if(g_eventBus != NULL)
+                    {
+                        g_eventBus.PublishEvent(EVENT_KEY_LEVEL_UPDATED, "KeyLevelDetector",
+                                              StringFormat("Key levels updated - Support: %.5f, Resistance: %.5f", 
+                                                          support.price, resistance.price),
+                                              0.0, 0);
+                    }
+                }
+            }
         }
-        g_lastKeyLevelUpdate = currentTime;
+        
+        // Update timestamp (SetNearestSupport/SetNearestResistance already do this)
+        if(g_stateManager == NULL)
+            g_lastKeyLevelUpdate = currentTime; // Fallback only
     }
     
     // Update trend follower
@@ -1324,10 +1581,16 @@ void OnTimer()
     }
     
     // Update display elements
-    if(currentTime - g_lastDisplayUpdate >= 10) // Update display every 10 seconds
+    datetime lastDisplayUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastDisplayUpdate() : g_lastDisplayUpdate;
+    if(currentTime - lastDisplayUpdate >= 10) // Update display every 10 seconds
     {
         UpdateDisplayElements();
-        g_lastDisplayUpdate = currentTime;
+        
+        // Update timestamp in State Manager
+        if(g_stateManager != NULL)
+            g_stateManager.SetLastDisplayUpdate(currentTime);
+        else
+            g_lastDisplayUpdate = currentTime; // Fallback
     }
 
     // Auto-hide startup panel after expiry
@@ -1365,10 +1628,26 @@ void PerformInitialAnalysis()
     if(g_regimeDetector != NULL)
     {
         RegimeSnapshot initialRegime = g_regimeDetector.DetectCurrentRegime();
+        
+        // Store in State Manager if available (SetCurrentRegime automatically updates timestamp)
+        if(g_stateManager != NULL)
+        {
+            g_stateManager.SetCurrentRegime(initialRegime);
+        }
+        
         if(InpLogDetailedInfo)
         {
             Print("[Grande] Current Market Regime: ", g_regimeDetector.RegimeToString(initialRegime.regime));
             Print("[Grande] Regime Confidence: ", DoubleToString(initialRegime.confidence, 3));
+        }
+        
+        // Publish initial regime event
+        if(g_eventBus != NULL)
+        {
+            string regimeName = EnumToString(initialRegime.regime);
+            g_eventBus.PublishEvent(EVENT_REGIME_CHANGED, "Initialization",
+                                  StringFormat("Initial regime: %s (confidence: %.2f)", regimeName, initialRegime.confidence),
+                                  initialRegime.confidence, 0);
         }
     }
     
@@ -1382,6 +1661,27 @@ void PerformInitialAnalysis()
             
             if(InpShowKeyLevels)
                 g_keyLevelDetector.UpdateChartDisplay();
+            
+            // Store initial key levels in State Manager
+            // Note: SetNearestSupport/SetNearestResistance automatically update timestamp
+            if(g_stateManager != NULL)
+            {
+                double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                SKeyLevel support, resistance;
+                if(FindNearestKeyLevels(currentPrice, support, resistance))
+                {
+                    g_stateManager.SetNearestSupport(support);
+                    g_stateManager.SetNearestResistance(resistance);
+                }
+            }
+            
+            // Publish key level detection event
+            if(g_eventBus != NULL && g_keyLevelDetector.GetKeyLevelCount() > 0)
+            {
+                g_eventBus.PublishEvent(EVENT_KEY_LEVEL_DETECTED, "Initialization",
+                                      StringFormat("Detected %d key levels", g_keyLevelDetector.GetKeyLevelCount()),
+                                      g_keyLevelDetector.GetKeyLevelCount(), 0);
+            }
         }
         else if(InpLogDetailedInfo)
         {
@@ -1430,7 +1730,19 @@ void UpdateDisplayElements()
     if(g_regimeDetector == NULL) 
         return;
     
-    RegimeSnapshot currentRegime = g_regimeDetector.GetLastSnapshot();
+    // Get regime from State Manager if available, otherwise from detector
+    RegimeSnapshot currentRegime;
+    if(g_stateManager != NULL)
+    {
+        currentRegime = g_stateManager.GetCurrentRegime();
+        // If State Manager doesn't have a valid regime yet (timestamp is 0), get from detector
+        if(currentRegime.timestamp == 0)
+            currentRegime = g_regimeDetector.GetLastSnapshot();
+    }
+    else
+    {
+        currentRegime = g_regimeDetector.GetLastSnapshot();
+    }
     
     // Update regime background
     if(InpShowRegimeBackground)

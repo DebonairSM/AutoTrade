@@ -9,6 +9,37 @@
 //| calculates standard Fibonacci ratios (23.6%, 38.2%, 50%, etc.)  |
 //| for use in confluence-based entry point detection.              |
 //+------------------------------------------------------------------+
+//
+// RESPONSIBILITIES:
+//   - Identify swing high and swing low points
+//   - Calculate Fibonacci retracement levels (23.6%, 38.2%, 50%, 61.8%, 78.6%)
+//   - Calculate Fibonacci extension levels (127.2%, 161.8%, 200%)
+//   - Check price proximity to Fibonacci levels
+//   - Determine if price is at golden ratio (61.8%)
+//
+// DEPENDENCIES:
+//   - None (standalone component)
+//   - Uses MT5 price data: iHigh, iLow
+//
+// STATE MANAGED:
+//   - Symbol and timeframe
+//   - Lookback period for swing detection
+//   - Minimum bars between swing points
+//
+// PUBLIC INTERFACE:
+//   bool Initialize(symbol, timeframe)
+//   FibLevels CalculateFibLevels(lookback) - Calculate Fib levels
+//   bool IsAtFibLevel(price, levels, proximity) - Check proximity to Fib
+//   bool IsAtGoldenRatio(price, levels, proximity) - Check if at 61.8%
+//   string GetNearestFibLevel(price, levels, proximity) - Find nearest level
+//   void SetDefaultLookback(bars) - Set default lookback
+//   void SetMinSwingBars(bars) - Set minimum swing separation
+//
+// THREAD SAFETY: Not thread-safe (MQL5 limitation)
+//
+// TESTING: See Testing/TestFibonacciCalculator.mqh
+//+------------------------------------------------------------------+
+
 #property copyright "Grande Trading System"
 #property link      ""
 #property version   "1.00"

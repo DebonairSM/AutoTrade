@@ -3,6 +3,41 @@
 //|                                    Copyright 2025, Grande Trading System |
 //|                                             https://www.grande.com |
 //+------------------------------------------------------------------+
+// STATUS: PARTIALLY IMPLEMENTED - CURRENTLY DISABLED IN PRODUCTION
+//
+// PURPOSE:
+//   Analyze market conditions across multiple timeframes to provide consensus signals.
+//   Helps avoid false signals by requiring alignment across timeframes.
+//
+// RESPONSIBILITIES:
+//   - Analyze regime on H4, H1, and M15 timeframes
+//   - Calculate consensus score weighted by timeframe importance
+//   - Provide detailed multi-timeframe analysis reports
+//   - Detect timeframe conflicts
+//
+// DEPENDENCIES:
+//   - GrandeMarketRegimeDetector.mqh (for RegimeSnapshot)
+//
+// STATE MANAGED:
+//   - Consensus data for each analyzed timeframe
+//   - Weighted consensus scores
+//   - Timeframe conflict detection
+//
+// IMPLEMENTATION STATUS:
+//   ℹ️ This implementation is PARTIALLY COMPLETE but currently DISABLED in the main EA.
+//   The class has basic functionality but needs:
+//   - Better error handling
+//   - Performance optimization
+//   - Integration testing with main EA
+//   - Validation of consensus algorithms
+//
+// ENABLED: To enable, uncomment initialization in GrandeTradingSystem.mq5 OnInit()
+//
+// THREAD SAFETY: Not thread-safe (MQL5 limitation)
+//
+// TESTING: Basic testing needed before production use
+//+------------------------------------------------------------------+
+
 #property copyright "Copyright 2025, Grande Trading System"
 #property link      "https://www.grande.com"
 #property version   "1.00"

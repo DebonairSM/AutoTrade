@@ -3,6 +3,42 @@
 //| Copyright 2024, Grande Tech                                      |
 //| Triangle Pattern Detection and Analysis                         |
 //+------------------------------------------------------------------+
+// STATUS: STUB IMPLEMENTATION - NOT FOR PRODUCTION USE
+//
+// PURPOSE:
+//   Detect and analyze triangle chart patterns (ascending, descending, symmetrical).
+//   This is a placeholder implementation for future development.
+//
+// RESPONSIBILITIES:
+//   - Detect triangle patterns in price action
+//   - Calculate pattern confidence
+//   - Predict breakout direction
+//   - Monitor pattern validity
+//
+// DEPENDENCIES:
+//   - None (standalone)
+//
+// STATE MANAGED:
+//   - Current detected pattern type
+//   - Pattern confidence level
+//   - Breakout probability
+//   - Pattern boundaries
+//
+// IMPLEMENTATION STATUS:
+//   ⚠️ This is a STUB implementation with no actual pattern detection logic.
+//   The class exists to maintain interface compatibility but returns no patterns.
+//   Future implementation should include:
+//   - Actual swing high/low detection
+//   - Trendline calculation
+//   - Apex projection
+//   - Volume confirmation
+//   - Breakout prediction algorithms
+//
+// THREAD SAFETY: Not thread-safe (MQL5 limitation)
+//
+// TESTING: Not yet implemented
+//+------------------------------------------------------------------+
+
 #property copyright "Copyright 2024, Grande Tech"
 #property link      "https://www.grandetech.com.br"
 #property version   "1.00"

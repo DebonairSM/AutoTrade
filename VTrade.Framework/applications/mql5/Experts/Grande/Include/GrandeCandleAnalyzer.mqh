@@ -12,6 +12,36 @@
 //| patterns to validate entry conditions. It identifies rejection   |
 //| wicks, momentum candles, and consolidation patterns.             |
 //+------------------------------------------------------------------+
+//
+// RESPONSIBILITIES:
+//   - Analyze individual candle structure (body, wicks, ratios)
+//   - Identify candlestick patterns (pin bars, hammers, doji, engulfing)
+//   - Validate entry conditions based on candle quality
+//   - Detect rejection wicks and momentum candles
+//   - Calculate wick-to-body ratios
+//
+// DEPENDENCIES:
+//   - None (standalone component)
+//   - Uses MT5 price data: iOpen, iHigh, iLow, iClose
+//
+// STATE MANAGED:
+//   - Symbol and timeframe
+//   - Analysis configuration (min body %, wick ratio threshold)
+//
+// PUBLIC INTERFACE:
+//   bool Initialize(symbol, timeframe)
+//   CandleStructure AnalyzeCandle(index) - Analyze specific candle
+//   bool IsValidEntry(isBullish, index) - Validate entry candle
+//   bool HasExcessiveWick(index) - Check for excessive wicks
+//   bool IsDoji(index) - Check if candle is doji
+//   void SetMinBodyPercentage(percent) - Configure minimum body size
+//   void SetWickRatioThreshold(ratio) - Configure wick threshold
+//
+// THREAD SAFETY: Not thread-safe (MQL5 limitation)
+//
+// TESTING: See Testing/TestCandleAnalyzer.mqh
+//+------------------------------------------------------------------+
+
 #property copyright "Grande Trading System"
 #property link      ""
 #property version   "1.00"

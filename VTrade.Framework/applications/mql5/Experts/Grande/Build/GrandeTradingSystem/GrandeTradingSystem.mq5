@@ -41,6 +41,13 @@
 #include "..\VSol\GrandeRiskManager.mqh"
 #include <Trade\Trade.mqh>
 
+// Infrastructure components
+#include "Include/GrandeStateManager.mqh"
+#include "Include/GrandeConfigManager.mqh"
+#include "Include/GrandeComponentRegistry.mqh"
+#include "Include/GrandeHealthMonitor.mqh"
+#include "Include/GrandeEventBus.mqh"
+
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
 //+------------------------------------------------------------------+
@@ -71,6 +78,16 @@ input double InpMaxRiskPerTrade = 5.0;           // Maximum Risk % per Trade
 input double InpMaxDrawdownPct = 30.0;           // Maximum Account Drawdown %
 input double InpEquityPeakReset = 5.0;           // Reset Peak after X% Recovery
 input int    InpMaxPositions = 7;                // Maximum Concurrent Positions
+
+input group "=== Emergency Margin Protection ==="
+input bool   InpEnableMarginProtection = true;   // Enable Emergency Margin Protection
+input double InpMinMarginLevelToTrade = 150.0;   // Minimum Margin Level to Open New Trades (%)
+input double InpMarginWarningLevel = 150.0;      // Margin Level Warning Threshold (%)
+input double InpMarginCriticalLevel = 120.0;     // Margin Level Critical Threshold (%)
+input double InpMarginEmergencyLevel = 110.0;    // Margin Level Emergency Threshold (%)
+input int    InpMarginCheckIntervalSeconds = 5;  // Margin Check Interval (seconds)
+input bool   InpCloseWorstPositionsFirst = true; // Close worst-performing positions first
+input int    InpMaxPositionsToClose = 2;         // Max positions to close per emergency cycle
 
 input group "=== Stop Loss & Take Profit ==="
 input double InpSLATRMultiplier = 1.8;           // Stop Loss ATR Multiplier (wider for H4)
@@ -249,6 +266,13 @@ CGrandeMT5NewsReader          g_calendarReader;
 CTrade                        g_trade;
 RegimeConfig                  g_regimeConfig;
 RiskConfig                    g_riskConfig;
+
+// Infrastructure components
+CGrandeStateManager*          g_stateManager;
+CGrandeConfigManager*         g_configManager;
+CGrandeComponentRegistry*     g_componentRegistry;
+CGrandeHealthMonitor*         g_healthMonitor;
+CGrandeEventBus*              g_eventBus;
 datetime                      g_lastRegimeUpdate;
 datetime                      g_lastKeyLevelUpdate;
 datetime                      g_lastDisplayUpdate;
@@ -274,45 +298,18 @@ datetime                      g_lastBarTime = 0;
 datetime                      g_lastFinBERTAnalysisTime = 0;
 
 // Intelligent Position Scaling variables
-struct RangeInfo {
-    double upperBound;
-    double lowerBound;
-    datetime rangeStartTime;
-    bool isValid;
-    int touchCount;
-    double rangeSize;
-};
-
+// Note: RangeInfo, CoolOffInfo, CoolOffStats are now in GrandeStateManager.mqh
+// These globals kept for backward compatibility during migration
+// TODO: Migrate to State Manager
 RangeInfo                     g_currentRange;
 datetime                      g_lastRangeUpdate = 0;
 int                           g_rangeHandle15M = INVALID_HANDLE;
 
 // Cool-off period tracking
-struct CoolOffInfo
-{
-    datetime lastExitTime;
-    double lastExitPrice;
-    int lastDirection;      // 0=BUY, 1=SELL
-    int exitReason;         // 0=TP, 1=SL, 2=OTHER
-    bool isActive;
-};
-
 CoolOffInfo                   g_coolOffState;
 int                           g_lastPositionCount = 0;  // Track position count changes
 
 // Cool-off statistics tracking
-struct CoolOffStats
-{
-    int tradesBlocked;           // Total trades blocked by cool-off
-    int tradesAllowed;           // Total trades allowed after cool-off expired
-    int overridesUsed;           // Direction change overrides used
-    int blockedWouldWin;         // Blocked trades that would have won (estimated)
-    int blockedWouldLose;        // Blocked trades that would have lost (estimated)
-    int allowedWins;             // Allowed trades that won
-    int allowedLosses;           // Allowed trades that lost
-    datetime lastReportTime;     // Last statistics report time
-};
-
 CoolOffStats                  g_coolOffStats;
 
 // Cooldown storage per ticket for partial closes
@@ -410,12 +407,168 @@ int OnInit()
         else
         {
             Print("[Grande] ✅ Database Manager initialized successfully: ", InpDatabasePath);
+            
+            // Initialize historical data backfill if database is enabled
+            if(InpEnableDatabase)
+            {
+                datetime cutoff = TimeCurrent() - (30 * 86400); // 30 days
+                if(!g_databaseManager.HasHistoricalData(_Symbol, cutoff))
+                {
+                    Print("[Grande] Backfilling 30 days of historical data...");
+                    if(g_databaseManager.BackfillRecentHistory(_Symbol, PERIOD_CURRENT, 30))
+                    {
+                        Print("[Grande] ✅ Backfill complete!");
+                        if(InpLogDebugInfo)
+                            Print(g_databaseManager.GetDataCoverageStats(_Symbol));
+                    }
+                    else
+                    {
+                        Print("[Grande] WARNING: Historical data backfill failed, continuing anyway");
+                    }
+                }
+                else if(InpLogDebugInfo)
+                {
+                    Print("[Grande] Historical data up to date");
+                    Print(g_databaseManager.GetDataCoverageStats(_Symbol));
+                }
+            }
         }
     }
     else
     {
         Print("[Grande] Database logging is DISABLED (InpEnableDatabase = false)");
     }
+    
+    // Initialize Infrastructure Components
+    // Initialize State Manager
+    g_stateManager = new CGrandeStateManager();
+    if(g_stateManager == NULL)
+    {
+        Print("ERROR: Failed to create State Manager");
+        return INIT_FAILED;
+    }
+    if(!g_stateManager.Initialize(_Symbol, InpLogDebugInfo))
+    {
+        Print("ERROR: Failed to initialize State Manager");
+        delete g_stateManager;
+        g_stateManager = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ State Manager initialized");
+    
+    // Initialize Config Manager
+    g_configManager = new CGrandeConfigManager();
+    if(g_configManager == NULL)
+    {
+        Print("ERROR: Failed to create Config Manager");
+        delete g_stateManager;
+        g_stateManager = NULL;
+        return INIT_FAILED;
+    }
+    if(!g_configManager.Initialize(_Symbol, InpLogDebugInfo))
+    {
+        Print("ERROR: Failed to initialize Config Manager");
+        delete g_stateManager;
+        delete g_configManager;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Config Manager initialized");
+    
+    // Initialize Component Registry
+    g_componentRegistry = new CGrandeComponentRegistry();
+    if(g_componentRegistry == NULL)
+    {
+        Print("ERROR: Failed to create Component Registry");
+        delete g_stateManager;
+        delete g_configManager;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        return INIT_FAILED;
+    }
+    if(!g_componentRegistry.Initialize(InpLogDebugInfo))
+    {
+        Print("ERROR: Failed to initialize Component Registry");
+        delete g_stateManager;
+        delete g_configManager;
+        delete g_componentRegistry;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        g_componentRegistry = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Component Registry initialized");
+    
+    // Initialize Event Bus
+    g_eventBus = new CGrandeEventBus();
+    if(g_eventBus == NULL)
+    {
+        Print("ERROR: Failed to create Event Bus");
+        delete g_stateManager;
+        delete g_configManager;
+        delete g_componentRegistry;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        g_componentRegistry = NULL;
+        return INIT_FAILED;
+    }
+    if(!g_eventBus.Initialize(1000, InpLogDebugInfo, InpLogVerbose))
+    {
+        Print("ERROR: Failed to initialize Event Bus");
+        delete g_stateManager;
+        delete g_configManager;
+        delete g_componentRegistry;
+        delete g_eventBus;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        g_componentRegistry = NULL;
+        g_eventBus = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Event Bus initialized");
+    
+    // Initialize Health Monitor
+    g_healthMonitor = new CGrandeHealthMonitor();
+    if(g_healthMonitor == NULL)
+    {
+        Print("ERROR: Failed to create Health Monitor");
+        delete g_stateManager;
+        delete g_configManager;
+        delete g_componentRegistry;
+        delete g_eventBus;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        g_componentRegistry = NULL;
+        g_eventBus = NULL;
+        return INIT_FAILED;
+    }
+    if(!g_healthMonitor.Initialize(g_componentRegistry, InpLogDebugInfo))
+    {
+        Print("ERROR: Failed to initialize Health Monitor");
+        delete g_stateManager;
+        delete g_configManager;
+        delete g_componentRegistry;
+        delete g_eventBus;
+        delete g_healthMonitor;
+        g_stateManager = NULL;
+        g_configManager = NULL;
+        g_componentRegistry = NULL;
+        g_eventBus = NULL;
+        g_healthMonitor = NULL;
+        return INIT_FAILED;
+    }
+    if(InpLogDebugInfo)
+        Print("[Grande] ✅ Health Monitor initialized");
+    
+    // Publish initialization event
+    if(g_eventBus != NULL)
+        g_eventBus.PublishEvent(EVENT_SYSTEM_INIT, "GrandeTradingSystem", 
+                               "EA initialization started", 0.0, 0);
     
     // Configure risk management settings
     g_riskConfig.risk_percent_trend = InpRiskPctTrend;
@@ -741,6 +894,31 @@ int OnInit()
     g_coolOffStats.allowedLosses = 0;
     g_coolOffStats.lastReportTime = 0;
     
+    // Register components in Component Registry
+    // Note: Component registration requires components to implement IMarketAnalyzer interface
+    // Currently components don't implement this interface, so registration is skipped
+    // TODO: Refactor components to implement IMarketAnalyzer interface for full registry support
+    if(g_componentRegistry != NULL && InpLogDebugInfo)
+    {
+        Print("[Grande] Component Registry initialized (component registration pending interface implementation)");
+    }
+    
+    // Perform initial system health check
+    if(g_healthMonitor != NULL)
+    {
+        g_healthMonitor.CheckSystemHealth();
+        if(InpLogDebugInfo)
+        {
+            string healthReport = g_healthMonitor.GetHealthReport();
+            Print("[Grande] System Health Report:\n", healthReport);
+        }
+    }
+    
+    // Publish initialization complete event
+    if(g_eventBus != NULL)
+        g_eventBus.PublishEvent(EVENT_SYSTEM_INIT, "GrandeTradingSystem", 
+                               "EA initialization complete", 1.0, 0);
+    
     if(InpLogCooloffDecisions && InpEnableCooloffPeriod)
     {
         Print(StringFormat("[COOL-OFF] Initialized - TP: %dm, SL: %dm, Direction Override: %s",
@@ -766,8 +944,49 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+    // Publish deinitialization event
+    if(g_eventBus != NULL)
+        g_eventBus.PublishEvent(EVENT_SYSTEM_DEINIT, "GrandeTradingSystem", 
+                               "EA deinitialization started. Reason: " + IntegerToString(reason), 0.0, 0);
+    
     if(InpLogDebugInfo)
         Print("Deinitializing Grande Trading System. Reason: ", reason);
+    
+    // Clean up Infrastructure Components
+    if(g_healthMonitor != NULL)
+    {
+        delete g_healthMonitor;
+        g_healthMonitor = NULL;
+    }
+    
+    if(g_componentRegistry != NULL)
+    {
+        // Components will be cleaned up individually below
+        // Registry cleanup is automatic when deleted
+        delete g_componentRegistry;
+        g_componentRegistry = NULL;
+    }
+    
+    if(g_eventBus != NULL)
+    {
+        // Save event log if needed
+        delete g_eventBus;
+        g_eventBus = NULL;
+    }
+    
+    if(g_configManager != NULL)
+    {
+        delete g_configManager;
+        g_configManager = NULL;
+    }
+    
+    if(g_stateManager != NULL)
+    {
+        // Save state before cleanup
+        g_stateManager.SaveState();
+        delete g_stateManager;
+        g_stateManager = NULL;
+    }
     
     // Cool-off state cleanup (persisted in GlobalVariables)
     if(reason == REASON_REMOVE)
@@ -963,6 +1182,14 @@ void OnTimer()
     
     // Report cool-off statistics periodically
     ReportCooloffStatistics();
+    
+    // Emergency margin protection - check margin level and close positions if critical
+    static datetime g_lastMarginCheck = 0;
+    if(InpEnableMarginProtection && (currentTime - g_lastMarginCheck >= InpMarginCheckIntervalSeconds))
+    {
+        CheckEmergencyMarginProtection();
+        g_lastMarginCheck = currentTime;
+    }
     
     // Periodic risk manager updates (trailing stop, breakeven, etc.)
     if(g_riskManager != NULL && currentTime - g_lastRiskUpdate >= InpRiskUpdateSeconds)
@@ -1198,21 +1425,43 @@ void OnTimer()
     UpdateRangeInfo();
     
     // Update regime detection
+    datetime lastRegimeUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastRegimeUpdate() : g_lastRegimeUpdate;
     if(g_regimeDetector != NULL && 
-       currentTime - g_lastRegimeUpdate >= InpRegimeUpdateSeconds)
+       currentTime - lastRegimeUpdate >= InpRegimeUpdateSeconds)
     {
         RegimeSnapshot currentRegime = g_regimeDetector.DetectCurrentRegime();
-        g_lastRegimeUpdate = currentTime;
         
-        // Log regime changes if requested
-        if(InpLogDetailedInfo)
+        // Get previous regime for change detection
+        static MARKET_REGIME lastLoggedRegime = REGIME_RANGING;
+        
+        // Store in State Manager if available (SetCurrentRegime automatically updates timestamp)
+        if(g_stateManager != NULL)
         {
-            static MARKET_REGIME lastLoggedRegime = REGIME_RANGING;
-            if(currentRegime.regime != lastLoggedRegime)
-            {
+            RegimeSnapshot previousRegime = g_stateManager.GetCurrentRegime();
+            lastLoggedRegime = previousRegime.regime;
+            g_stateManager.SetCurrentRegime(currentRegime);
+        }
+        else
+        {
+            g_lastRegimeUpdate = currentTime; // Fallback to global
+        }
+        
+        // Log regime changes and publish events
+        if(currentRegime.regime != lastLoggedRegime)
+        {
+            if(InpLogDetailedInfo)
                 LogRegimeChange(currentRegime);
-                lastLoggedRegime = currentRegime.regime;
+            
+            // Publish regime change event
+            if(g_eventBus != NULL)
+            {
+                string regimeName = EnumToString(currentRegime.regime);
+                g_eventBus.PublishEvent(EVENT_REGIME_CHANGED, "RegimeDetector",
+                                      StringFormat("Regime changed to %s (confidence: %.2f)", regimeName, currentRegime.confidence),
+                                      currentRegime.confidence, 0);
             }
+            
+            lastLoggedRegime = currentRegime.regime;
         }
 
         // Execute trading logic periodically based on current regime (no tick-level execution)
@@ -1222,8 +1471,9 @@ void OnTimer()
     }
     
     // Update key level detection
+    datetime lastKeyLevelUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastKeyLevelUpdate() : g_lastKeyLevelUpdate;
     if(g_keyLevelDetector != NULL && 
-       currentTime - g_lastKeyLevelUpdate >= InpKeyLevelUpdateSeconds)
+       currentTime - lastKeyLevelUpdate >= InpKeyLevelUpdateSeconds)
     {
         if(g_keyLevelDetector.DetectKeyLevels())
         {
@@ -1232,8 +1482,33 @@ void OnTimer()
                 
             if(InpLogDetailedInfo)
                 g_keyLevelDetector.PrintKeyLevelsReport();
+            
+            // Find and store nearest key levels in State Manager
+            // Note: SetNearestSupport/SetNearestResistance automatically update timestamp
+            if(g_stateManager != NULL)
+            {
+                double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                SKeyLevel support, resistance;
+                if(FindNearestKeyLevels(currentPrice, support, resistance))
+                {
+                    g_stateManager.SetNearestSupport(support);
+                    g_stateManager.SetNearestResistance(resistance);
+                    
+                    // Publish key level update event
+                    if(g_eventBus != NULL)
+                    {
+                        g_eventBus.PublishEvent(EVENT_KEY_LEVEL_UPDATED, "KeyLevelDetector",
+                                              StringFormat("Key levels updated - Support: %.5f, Resistance: %.5f", 
+                                                          support.price, resistance.price),
+                                              0.0, 0);
+                    }
+                }
+            }
         }
-        g_lastKeyLevelUpdate = currentTime;
+        
+        // Update timestamp (SetNearestSupport/SetNearestResistance already do this)
+        if(g_stateManager == NULL)
+            g_lastKeyLevelUpdate = currentTime; // Fallback only
     }
     
     // Update trend follower
@@ -1306,10 +1581,16 @@ void OnTimer()
     }
     
     // Update display elements
-    if(currentTime - g_lastDisplayUpdate >= 10) // Update display every 10 seconds
+    datetime lastDisplayUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastDisplayUpdate() : g_lastDisplayUpdate;
+    if(currentTime - lastDisplayUpdate >= 10) // Update display every 10 seconds
     {
         UpdateDisplayElements();
-        g_lastDisplayUpdate = currentTime;
+        
+        // Update timestamp in State Manager
+        if(g_stateManager != NULL)
+            g_stateManager.SetLastDisplayUpdate(currentTime);
+        else
+            g_lastDisplayUpdate = currentTime; // Fallback
     }
 
     // Auto-hide startup panel after expiry
@@ -1347,10 +1628,26 @@ void PerformInitialAnalysis()
     if(g_regimeDetector != NULL)
     {
         RegimeSnapshot initialRegime = g_regimeDetector.DetectCurrentRegime();
+        
+        // Store in State Manager if available (SetCurrentRegime automatically updates timestamp)
+        if(g_stateManager != NULL)
+        {
+            g_stateManager.SetCurrentRegime(initialRegime);
+        }
+        
         if(InpLogDetailedInfo)
         {
             Print("[Grande] Current Market Regime: ", g_regimeDetector.RegimeToString(initialRegime.regime));
             Print("[Grande] Regime Confidence: ", DoubleToString(initialRegime.confidence, 3));
+        }
+        
+        // Publish initial regime event
+        if(g_eventBus != NULL)
+        {
+            string regimeName = EnumToString(initialRegime.regime);
+            g_eventBus.PublishEvent(EVENT_REGIME_CHANGED, "Initialization",
+                                  StringFormat("Initial regime: %s (confidence: %.2f)", regimeName, initialRegime.confidence),
+                                  initialRegime.confidence, 0);
         }
     }
     
@@ -1364,6 +1661,27 @@ void PerformInitialAnalysis()
             
             if(InpShowKeyLevels)
                 g_keyLevelDetector.UpdateChartDisplay();
+            
+            // Store initial key levels in State Manager
+            // Note: SetNearestSupport/SetNearestResistance automatically update timestamp
+            if(g_stateManager != NULL)
+            {
+                double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                SKeyLevel support, resistance;
+                if(FindNearestKeyLevels(currentPrice, support, resistance))
+                {
+                    g_stateManager.SetNearestSupport(support);
+                    g_stateManager.SetNearestResistance(resistance);
+                }
+            }
+            
+            // Publish key level detection event
+            if(g_eventBus != NULL && g_keyLevelDetector.GetKeyLevelCount() > 0)
+            {
+                g_eventBus.PublishEvent(EVENT_KEY_LEVEL_DETECTED, "Initialization",
+                                      StringFormat("Detected %d key levels", g_keyLevelDetector.GetKeyLevelCount()),
+                                      g_keyLevelDetector.GetKeyLevelCount(), 0);
+            }
         }
         else if(InpLogDetailedInfo)
         {
@@ -1412,7 +1730,19 @@ void UpdateDisplayElements()
     if(g_regimeDetector == NULL) 
         return;
     
-    RegimeSnapshot currentRegime = g_regimeDetector.GetLastSnapshot();
+    // Get regime from State Manager if available, otherwise from detector
+    RegimeSnapshot currentRegime;
+    if(g_stateManager != NULL)
+    {
+        currentRegime = g_stateManager.GetCurrentRegime();
+        // If State Manager doesn't have a valid regime yet (timestamp is 0), get from detector
+        if(currentRegime.timestamp == 0)
+            currentRegime = g_regimeDetector.GetLastSnapshot();
+    }
+    else
+    {
+        currentRegime = g_regimeDetector.GetLastSnapshot();
+    }
     
     // Update regime background
     if(InpShowRegimeBackground)
@@ -6778,6 +7108,22 @@ bool ValidateMarginBeforeTrade(ENUM_ORDER_TYPE orderType, double lotSize, double
     double accountFreeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
     double accountMargin = AccountInfoDouble(ACCOUNT_MARGIN);
     
+    // Calculate current margin level FIRST - block all trades if current margin is too low
+    double currentMarginLevel = (accountMargin > 0) ? (accountEquity / accountMargin * 100.0) : 0.0;
+    
+    // CRITICAL: Don't open new positions if current margin level is already below minimum threshold
+    if(accountMargin > 0 && currentMarginLevel < InpMinMarginLevelToTrade)
+    {
+        Print(logPrefix + "BLOCKED: Current margin level too low to open new positions");
+        Print(logPrefix + "  Current margin level: ", DoubleToString(currentMarginLevel, 2), "%");
+        Print(logPrefix + "  Minimum required to trade: ", DoubleToString(InpMinMarginLevelToTrade, 2), "%");
+        Print(logPrefix + "  Balance: $", DoubleToString(accountBalance, 2));
+        Print(logPrefix + "  Equity: $", DoubleToString(accountEquity, 2));
+        Print(logPrefix + "  Margin: $", DoubleToString(accountMargin, 2));
+        Print(logPrefix + "Trade BLOCKED - Wait for margin level to recover");
+        return false;
+    }
+    
     // Calculate required margin for the trade
     double requiredMargin = 0.0;
     if(!OrderCalcMargin(orderType, _Symbol, lotSize, entryPrice, requiredMargin))
@@ -6798,15 +7144,14 @@ bool ValidateMarginBeforeTrade(ENUM_ORDER_TYPE orderType, double lotSize, double
         return false;
     }
     
-    // Calculate margin levels
-    double currentMarginLevel = (accountMargin > 0) ? (accountEquity / accountMargin * 100.0) : 0.0;
+    // Calculate margin level after this trade
     double marginLevelAfterTrade = ((accountMargin + requiredMargin) > 0) ? 
                                    (accountEquity / (accountMargin + requiredMargin) * 100.0) : 0.0;
     
     // Don't trade if margin level would drop below 200%
     if(accountMargin > 0 && marginLevelAfterTrade < 200.0)
     {
-        Print(logPrefix + "CRITICAL: Margin level too low");
+        Print(logPrefix + "CRITICAL: Margin level too low after trade");
         Print(logPrefix + "  Current margin level: ", DoubleToString(currentMarginLevel, 1), "%");
         Print(logPrefix + "  After trade would be: ", DoubleToString(marginLevelAfterTrade, 1), "%");
         Print(logPrefix + "  Minimum required: 200.0%");
@@ -6823,6 +7168,266 @@ bool ValidateMarginBeforeTrade(ENUM_ORDER_TYPE orderType, double lotSize, double
     }
     
     return true;
+}
+
+//+------------------------------------------------------------------+
+//| Emergency Margin Protection                                      |
+//| Monitors margin level and takes protective action when critical  |
+//+------------------------------------------------------------------+
+void CheckEmergencyMarginProtection()
+{
+    if(!InpEnableMarginProtection)
+        return;
+    
+    // Get current margin information
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double accountFreeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+    double accountMargin = AccountInfoDouble(ACCOUNT_MARGIN);
+    
+    if(accountMargin <= 0)
+        return; // No positions open, no margin risk
+    
+    // Calculate current margin level
+    double marginLevel = (accountEquity / accountMargin) * 100.0;
+    
+    // Track last margin level for state changes
+    static double lastMarginLevel = 0.0;
+    static bool warningShown = false;
+    static bool criticalShown = false;
+    static bool emergencyShown = false;
+    
+    // Reset flags if margin recovers
+    if(marginLevel > InpMarginWarningLevel)
+    {
+        warningShown = false;
+        criticalShown = false;
+        emergencyShown = false;
+        lastMarginLevel = marginLevel;
+        return;
+    }
+    
+    // EMERGENCY LEVEL: Close positions immediately
+    if(marginLevel <= InpMarginEmergencyLevel)
+    {
+        if(!emergencyShown || marginLevel != lastMarginLevel)
+        {
+            Print("========================================");
+            Print("[MARGIN PROTECTION] EMERGENCY: Margin level at ", DoubleToString(marginLevel, 2), "%");
+            Print("[MARGIN PROTECTION] Balance: $", DoubleToString(accountBalance, 2));
+            Print("[MARGIN PROTECTION] Equity: $", DoubleToString(accountEquity, 2));
+            Print("[MARGIN PROTECTION] Margin: $", DoubleToString(accountMargin, 2));
+            Print("[MARGIN PROTECTION] Free Margin: $", DoubleToString(accountFreeMargin, 2));
+            Print("[MARGIN PROTECTION] Closing positions to prevent liquidation!");
+            Print("========================================");
+            emergencyShown = true;
+        }
+        
+        // Cancel all pending orders immediately
+        CancelPendingOrdersForMarginProtection();
+        
+        // Close worst-performing positions
+        int positionsClosed = CloseWorstPositionsForMargin(InpMaxPositionsToClose);
+        
+        if(positionsClosed > 0)
+        {
+            Print("[MARGIN PROTECTION] Closed ", positionsClosed, " position(s) in emergency response");
+        }
+    }
+    // CRITICAL LEVEL: Close some positions and cancel pending orders
+    else if(marginLevel <= InpMarginCriticalLevel)
+    {
+        if(!criticalShown || marginLevel != lastMarginLevel)
+        {
+            Print("========================================");
+            Print("[MARGIN PROTECTION] CRITICAL: Margin level at ", DoubleToString(marginLevel, 2), "%");
+            Print("[MARGIN PROTECTION] Balance: $", DoubleToString(accountBalance, 2));
+            Print("[MARGIN PROTECTION] Equity: $", DoubleToString(accountEquity, 2));
+            Print("[MARGIN PROTECTION] Taking protective action...");
+            Print("========================================");
+            criticalShown = true;
+        }
+        
+        // Cancel pending orders to prevent further margin usage
+        CancelPendingOrdersForMarginProtection();
+        
+        // Close worst-performing positions (fewer than emergency)
+        int positionsToClose = MathMax(1, InpMaxPositionsToClose / 2);
+        int positionsClosed = CloseWorstPositionsForMargin(positionsToClose);
+        
+        if(positionsClosed > 0)
+        {
+            Print("[MARGIN PROTECTION] Closed ", positionsClosed, " position(s) in critical response");
+        }
+    }
+    // WARNING LEVEL: Log warning and cancel pending orders
+    else if(marginLevel <= InpMarginWarningLevel)
+    {
+        if(!warningShown || marginLevel != lastMarginLevel)
+        {
+            Print("[MARGIN PROTECTION] WARNING: Margin level at ", DoubleToString(marginLevel, 2), "%");
+            Print("[MARGIN PROTECTION] Balance: $", DoubleToString(accountBalance, 2));
+            Print("[MARGIN PROTECTION] Equity: $", DoubleToString(accountEquity, 2));
+            Print("[MARGIN PROTECTION] Free Margin: $", DoubleToString(accountFreeMargin, 2));
+            Print("[MARGIN PROTECTION] Cancelling pending orders to preserve margin");
+            warningShown = true;
+        }
+        
+        // Cancel pending orders to prevent further margin usage
+        CancelPendingOrdersForMarginProtection();
+    }
+    
+    lastMarginLevel = marginLevel;
+}
+
+//+------------------------------------------------------------------+
+//| Cancel Pending Orders for Margin Protection                      |
+//| Cancels all pending orders to free up margin                    |
+//+------------------------------------------------------------------+
+void CancelPendingOrdersForMarginProtection()
+{
+    int ordersCancelled = 0;
+    
+    for(int i = OrdersTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(ticket == 0) continue;
+        
+        // Check if order is ours
+        if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+        if((int)OrderGetInteger(ORDER_MAGIC) != InpMagicNumber) continue;
+        
+        // Cancel the order
+        if(g_trade.OrderDelete(ticket))
+        {
+            ordersCancelled++;
+            Print("[MARGIN PROTECTION] Cancelled pending order #", ticket, " to preserve margin");
+        }
+        else
+        {
+            Print("[MARGIN PROTECTION] Failed to cancel order #", ticket, " (error: ", GetLastError(), ")");
+        }
+    }
+    
+    if(ordersCancelled > 0)
+    {
+        Print("[MARGIN PROTECTION] Cancelled ", ordersCancelled, " pending order(s)");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Close Worst Positions for Margin                                 |
+//| Closes worst-performing positions to free up margin             |
+//+------------------------------------------------------------------+
+int CloseWorstPositionsForMargin(int maxPositionsToClose)
+{
+    if(maxPositionsToClose <= 0)
+        return 0;
+    
+    // Collect all positions with their profit/loss
+    struct PositionInfo
+    {
+        ulong ticket;
+        double profit;
+        double margin;
+        string symbol;
+    };
+    
+    PositionInfo positions[];
+    ArrayResize(positions, 0);
+    
+    // Collect position information
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        if(!PositionSelectByTicket(ticket)) continue;
+        
+        // Check if position is ours
+        if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+        if((int)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+        
+        PositionInfo pos;
+        pos.ticket = ticket;
+        pos.profit = PositionGetDouble(POSITION_PROFIT);
+        pos.symbol = PositionGetString(POSITION_SYMBOL);
+        
+        // Calculate margin used by this position
+        double volume = PositionGetDouble(POSITION_VOLUME);
+        double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        ENUM_ORDER_TYPE orderType = (ENUM_ORDER_TYPE)PositionGetInteger(POSITION_TYPE);
+        ENUM_ORDER_TYPE calcType = (orderType == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+        
+        if(OrderCalcMargin(calcType, pos.symbol, volume, openPrice, pos.margin))
+        {
+            int size = ArraySize(positions);
+            ArrayResize(positions, size + 1);
+            positions[size] = pos;
+        }
+    }
+    
+    if(ArraySize(positions) == 0)
+        return 0;
+    
+    // Sort positions by profit (worst first if InpCloseWorstPositionsFirst, otherwise by margin)
+    if(InpCloseWorstPositionsFirst)
+    {
+        // Sort by profit ascending (worst losses first)
+        for(int i = 0; i < ArraySize(positions) - 1; i++)
+        {
+            for(int j = i + 1; j < ArraySize(positions); j++)
+            {
+                if(positions[i].profit > positions[j].profit)
+                {
+                    PositionInfo temp = positions[i];
+                    positions[i] = positions[j];
+                    positions[j] = temp;
+                }
+            }
+        }
+    }
+    else
+    {
+        // Sort by margin descending (largest margin first)
+        for(int i = 0; i < ArraySize(positions) - 1; i++)
+        {
+            for(int j = i + 1; j < ArraySize(positions); j++)
+            {
+                if(positions[i].margin < positions[j].margin)
+                {
+                    PositionInfo temp = positions[i];
+                    positions[i] = positions[j];
+                    positions[j] = temp;
+                }
+            }
+        }
+    }
+    
+    // Close the worst positions
+    int positionsClosed = 0;
+    int toClose = MathMin(maxPositionsToClose, ArraySize(positions));
+    
+    for(int i = 0; i < toClose; i++)
+    {
+        ulong ticket = positions[i].ticket;
+        double profit = positions[i].profit;
+        double margin = positions[i].margin;
+        
+        if(g_trade.PositionClose(ticket))
+        {
+            positionsClosed++;
+            Print("[MARGIN PROTECTION] Closed position #", ticket, 
+                  " (Profit: $", DoubleToString(profit, 2), 
+                  ", Margin: $", DoubleToString(margin, 2), ")");
+        }
+        else
+        {
+            Print("[MARGIN PROTECTION] Failed to close position #", ticket, 
+                  " (error: ", GetLastError(), ")");
+        }
+    }
+    
+    return positionsClosed;
 }
 
 //+------------------------------------------------------------------+

@@ -5,6 +5,53 @@
 //+------------------------------------------------------------------+
 // Pattern from: MetaTrader 5 MQL5 Documentation + V-2-EA-Breakouts Enhancements
 // Reference: Advanced object-oriented programming and enterprise chart management
+//
+// PURPOSE:
+//   Detect and track key support/resistance levels with visual chart display.
+//   Provides comprehensive level analysis with touch count, strength, and quality metrics.
+//
+// RESPONSIBILITIES:
+//   - Detect swing highs and lows as potential key levels
+//   - Count and validate touches at each level
+//   - Calculate level strength based on multiple factors
+//   - Track chronological detection order
+//   - Persist level detection data across restarts
+//   - Display levels on chart with color-coded strength
+//   - Provide detailed level reports and diagnostics
+//
+// DEPENDENCIES:
+//   - None (standalone component)
+//   - Uses MT5 price data: CopyHigh, CopyLow, CopyClose, CopyTime, CopyTickVolume
+//
+// STATE MANAGED:
+//   - Array of detected key levels (SKeyLevel structures)
+//   - Persistent detection times and order tracking
+//   - Chart line objects for visual display
+//   - Performance metrics and diagnostics
+//   - Log throttling state
+//
+// PUBLIC INTERFACE:
+//   bool Initialize(lookback, minStrength, touchZone, minTouches, debug, advanced)
+//   bool DetectKeyLevels() - Main detection method
+//   void UpdateChartDisplay() - Refresh chart visuals
+//   int GetKeyLevelCount() - Get number of detected levels
+//   bool GetKeyLevel(index, SKeyLevel &level) - Get specific level
+//   bool GetStrongestLevel(SKeyLevel &level) - Get strongest level
+//   void PrintKeyLevelsReport() - Print detailed report
+//   void ResetDetectionHistory() - Clear persistent data
+//
+// IMPLEMENTATION NOTES:
+//   - Uses enhanced swing detection with fallback to simple detection
+//   - Implements volume confirmation for stronger levels
+//   - Reclassifies levels as support/resistance based on current price
+//   - Persistent storage maintains detection order across restarts
+//   - Touch zone auto-adjusts for different symbols and timeframes
+//   - Chart display uses strength-based color coding and line width
+//
+// THREAD SAFETY: Not thread-safe (MQL5 limitation)
+//
+// TESTING: See Testing/TestKeyLevelDetection.mqh
+//+------------------------------------------------------------------+
 
 #property copyright "Copyright 2024, Grande Tech"
 #property link      "https://www.grandetech.com.br"

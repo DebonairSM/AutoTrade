@@ -12,6 +12,46 @@
 //| - EMA levels (20, 50, 200)                                       |
 //| - Recent candle structure and rejection points                   |
 //+------------------------------------------------------------------+
+//
+// RESPONSIBILITIES:
+//   - Identify confluence zones (multiple technical factors at same price)
+//   - Score zones based on number of factors present
+//   - Find optimal limit order placement prices
+//   - Integrate key levels, Fibonacci levels, EMAs, and round numbers
+//   - Rank confluence zones by score and proximity
+//
+// DEPENDENCIES:
+//   - GrandeFibonacciCalculator.mqh (for Fibonacci level detection)
+//   - GrandeCandleAnalyzer.mqh (for candle rejection detection)
+//
+// STATE MANAGED:
+//   - Symbol and timeframe
+//   - Proximity tolerance (pips for grouping factors)
+//   - Minimum confluence score required
+//   - Maximum number of zones to analyze
+//   - Detected confluence zones
+//
+// PUBLIC INTERFACE:
+//   bool Initialize(symbol, timeframe)
+//   void AddKeyLevelsToAnalysis(resistance[], support[])
+//   ConfluenceZone GetBestConfluenceZone(isBuy, price, maxDistancePips)
+//   double GetBestLimitOrderPrice(isBuy, price, maxDistancePips)
+//   int GetConfluenceZonesCount() - Get number of detected zones
+//   void SetProximityPips(pips) - Set grouping tolerance
+//   void SetMinConfluenceScore(score) - Set minimum score
+//   void SetMaxZones(count) - Set max zones to analyze
+//
+// IMPLEMENTATION NOTES:
+//   - Groups factors within proximity tolerance into zones
+//   - Scores zones by count of factors present
+//   - Considers distance from current price in ranking
+//   - Validates limit order placement within broker requirements
+//
+// THREAD SAFETY: Not thread-safe (MQL5 limitation)
+//
+// TESTING: See Testing/TestConfluenceDetector.mqh
+//+------------------------------------------------------------------+
+
 #property copyright "Grande Trading System"
 #property link      ""
 #property version   "1.00"

@@ -5,6 +5,48 @@
 //+------------------------------------------------------------------+
 // Pattern from: MetaTrader 5 MQL5 Documentation
 // Reference: Expert Advisor event handlers and indicator patterns
+//
+// PURPOSE:
+//   Detect and classify current market regime to guide trading decisions.
+//   Provides multi-timeframe regime analysis using ADX and ATR indicators.
+//
+// RESPONSIBILITIES:
+//   - Detect market regime (trending, ranging, breakout, high volatility)
+//   - Calculate regime confidence level
+//   - Monitor ADX across multiple timeframes (H1, H4, D1)
+//   - Monitor ATR for volatility analysis
+//   - Provide regime classification queries
+//
+// DEPENDENCIES:
+//   - None (standalone component)
+//   - Uses MT5 built-in indicators: iADX, iATR
+//
+// STATE MANAGED:
+//   - Current regime snapshot (RegimeSnapshot structure)
+//   - ADX indicator handles for multiple timeframes
+//   - ATR indicator handle
+//   - Last update timestamp
+//   - Internal indicator buffers
+//
+// PUBLIC INTERFACE:
+//   bool Initialize(string symbol, RegimeConfig config, bool debug)
+//   RegimeSnapshot DetectCurrentRegime() - Main analysis method
+//   void UpdateRegime() - Lightweight update
+//   RegimeSnapshot GetLastSnapshot() - Get cached result
+//   bool IsTrending(), IsTrendingBull(), IsTrendingBear() - Regime queries
+//   bool IsRanging(), IsBreakoutSetup(), IsHighVolatility() - More queries
+//   string RegimeToString(MARKET_REGIME) - Convert regime to string
+//
+// IMPLEMENTATION NOTES:
+//   - Uses adaptive thresholds based on timeframe
+//   - Implements fallback ATR calculation if indicator fails
+//   - Handles indicator initialization delays gracefully
+//   - Logs throttled to prevent spam (error 4806 expected during startup)
+//
+// THREAD SAFETY: Not thread-safe (MQL5 limitation)
+//
+// TESTING: See Testing/TestRegimeDetection.mqh
+//+------------------------------------------------------------------+
 
 #property copyright "Copyright 2024, Grande Tech"
 #property link      "https://www.grandetech.com.br"

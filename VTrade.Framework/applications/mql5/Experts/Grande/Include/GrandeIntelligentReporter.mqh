@@ -3,6 +3,49 @@
 //| Intelligent Hourly Reporting System for Grande Trading           |
 //| Tracks all trading decisions and provides detailed analysis      |
 //+------------------------------------------------------------------+
+//
+// PURPOSE:
+//   Track and report all trading decisions with comprehensive analysis.
+//   Provides hourly reports and FinBERT-compatible dataset generation.
+//
+// RESPONSIBILITIES:
+//   - Record all trading decisions (executed, rejected, blocked)
+//   - Generate hourly intelligence reports
+//   - Export data in FinBERT-compatible format
+//   - Analyze rejection patterns
+//   - Track signal success rates
+//   - Provide decision statistics
+//
+// DEPENDENCIES:
+//   - Files\FileTxt.mqh (for file operations)
+//
+// STATE MANAGED:
+//   - Array of trade decisions
+//   - Decision statistics (accepted, rejected, blocked counts)
+//   - Last report generation time
+//   - Reporting interval configuration
+//
+// PUBLIC INTERFACE:
+//   bool Initialize(symbol, intervalMinutes)
+//   void RecordDecision(STradeDecision decision) - Record decision
+//   void GenerateHourlyReport() - Generate report
+//   void GenerateFinBERTDataset() - Export for FinBERT analysis
+//   bool IsReportDue() - Check if report should be generated
+//   string GetDecisionStatistics() - Get statistics
+//
+// DATA STRUCTURES:
+//   STradeDecision - Comprehensive decision tracking structure
+//
+// IMPLEMENTATION NOTES:
+//   - Maintains in-memory decision history
+//   - Generates timestamped report files
+//   - Exports CSV format for FinBERT integration
+//   - Provides detailed rejection reason analysis
+//
+// THREAD SAFETY: Not thread-safe (MQL5 limitation)
+//
+// TESTING: See Testing/TestIntelligentReporter.mqh
+//+------------------------------------------------------------------+
 
 #property copyright "Grande Tech"
 #property version   "1.00"

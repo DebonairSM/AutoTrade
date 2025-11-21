@@ -3,6 +3,49 @@
 //| Copyright 2024, Grande Tech                                      |
 //| Free News Reading from MT5 Built-in Sources                     |
 //+------------------------------------------------------------------+
+//
+// PURPOSE:
+//   Read economic calendar events from MT5's built-in calendar.
+//   Provides free news data without requiring paid external APIs.
+//
+// RESPONSIBILITIES:
+//   - Fetch economic calendar events from MT5
+//   - Filter events by currency and impact level
+//   - Export events to JSON for FinBERT analysis
+//   - Check calendar availability
+//   - Parse and format event data
+//
+// DEPENDENCIES:
+//   - None (standalone component)
+//   - Uses MT5 built-in: CalendarValueHistory, CalendarEventById, CalendarCountryById
+//
+// STATE MANAGED:
+//   - Symbol being analyzed
+//   - Array of news events
+//   - Calendar availability status
+//   - Last update timestamp
+//
+// PUBLIC INTERFACE:
+//   bool Initialize(symbol) - Initialize reader
+//   bool GetEconomicCalendarEvents(lookaheadHours) - Fetch events
+//   bool CheckCalendarAvailability() - Check if calendar enabled
+//   bool IsCalendarAvailable() - Get availability status
+//   int GetEventCount() - Get number of events fetched
+//
+// DATA STRUCTURES:
+//   NewsEvent - Event structure with time, currency, values, impact
+//   NEWS_IMPACT - Impact level enumeration
+//
+// IMPLEMENTATION NOTES:
+//   - Requires MT5 calendar to be enabled in terminal settings
+//   - Exports to Common\Files for cross-platform access
+//   - Filters by relevant currencies for the symbol
+//   - Converts MT5 calendar structures to simplified format
+//
+// THREAD SAFETY: Not thread-safe (MQL5 limitation)
+//
+// TESTING: See Testing/TestMT5CalendarReader.mqh
+//+------------------------------------------------------------------+
 
 #property copyright "Copyright 2024, Grande Tech"
 #property link      "https://www.grandetech.com.br"
