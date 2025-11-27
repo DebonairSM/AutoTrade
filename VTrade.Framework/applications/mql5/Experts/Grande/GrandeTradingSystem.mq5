@@ -9738,7 +9738,7 @@ double GetRegimeAdjustment()
         return 1.0;
     
     // Get cached regime data from last analysis
-    MARKET_REGIME regime = g_lastAnalysisRegime;
+    MARKET_REGIME regime = (g_stateManager != NULL) ? g_stateManager.GetLastAnalysisRegime() : REGIME_RANGING;
     double adx = 0;
     
     // Try to get ADX from regime detector

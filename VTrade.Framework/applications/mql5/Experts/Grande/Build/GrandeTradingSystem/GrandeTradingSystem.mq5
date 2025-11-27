@@ -1678,8 +1678,7 @@ void OnTimer()
         }
         
         // Update timestamp (SetNearestSupport/SetNearestResistance already do this)
-        if(g_stateManager == NULL)
-            // State Manager handles key level update timestamp automatically in SetNearestSupport/SetNearestResistance()
+        // State Manager handles key level update timestamp automatically in SetNearestSupport/SetNearestResistance()
     }
     
     // Update trend follower
@@ -1696,7 +1695,6 @@ void OnTimer()
     datetime lastCalendarUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastCalendarUpdate() : 0;
     int updateInterval = (lastCalendarUpdate == 0) ? 10 : (InpCalendarUpdateMinutes * 60); // First run after 10 seconds
     
-    datetime lastCalendarUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastCalendarUpdate() : 0;
     if(calendarShouldRun && currentTime - lastCalendarUpdate >= updateInterval)
     {
         if(InpLogDetailedInfo)
@@ -3217,7 +3215,13 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "
     // Score signal quality before execution
     if(g_signalQualityAnalyzer != NULL)
     {
-        int confluenceScore = (g_confluenceDetector != NULL) ? g_confluenceDetector.GetConfluenceScore() : 0;
+        int confluenceScore = 0;
+        if(g_confluenceDetector != NULL)
+        {
+            double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            ConfluenceZone zone = g_confluenceDetector.GetBestConfluenceZone(bullish, currentPrice, 50.0);
+            confluenceScore = zone.score;
+        }
         double rsi = execution.rsi_current;
         double adx = rs.adx_h1;
         string signalType = execution.signal_type;
@@ -3813,7 +3817,15 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
     // Score signal quality before execution
     if(g_signalQualityAnalyzer != NULL)
     {
-        int confluenceScore = (g_confluenceDetector != NULL) ? g_confluenceDetector.GetConfluenceScore() : 0;
+        int confluenceScore = 0;
+        if(g_confluenceDetector != NULL)
+        {
+            double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            // Get confluence for both directions and use the maximum score
+            ConfluenceZone zoneBuy = g_confluenceDetector.GetBestConfluenceZone(true, currentPrice, 50.0);
+            ConfluenceZone zoneSell = g_confluenceDetector.GetBestConfluenceZone(false, currentPrice, 50.0);
+            confluenceScore = MathMax(zoneBuy.score, zoneSell.score);
+        }
         double rsi = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
         if(rsi < 0) rsi = 0.0;
         double adx = rs.adx_h1;
@@ -4222,7 +4234,15 @@ void RangeTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", doub
     // Score signal quality before execution
     if(g_signalQualityAnalyzer != NULL)
     {
-        int confluenceScore = (g_confluenceDetector != NULL) ? g_confluenceDetector.GetConfluenceScore() : 0;
+        int confluenceScore = 0;
+        if(g_confluenceDetector != NULL)
+        {
+            double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            // Get confluence for both directions and use the maximum score
+            ConfluenceZone zoneBuy = g_confluenceDetector.GetBestConfluenceZone(true, currentPrice, 50.0);
+            ConfluenceZone zoneSell = g_confluenceDetector.GetBestConfluenceZone(false, currentPrice, 50.0);
+            confluenceScore = MathMax(zoneBuy.score, zoneSell.score);
+        }
         double rsi = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
         if(rsi < 0) rsi = 0.0;
         double adx = rs.adx_h1;
@@ -6470,6 +6490,8 @@ void ApplyRSIExitRules()
             double sl = PositionGetDouble(POSITION_SL);
             if(sl > 0)
             {
+                double pip = GetPipSize();
+                if(pip <= 0) pip = _Point;
                 double riskPips = MathAbs(open - sl) / pip;
                 if(riskPips > 0 && profitPips < riskPips)
                     continue;
@@ -6886,7 +6908,7 @@ void CacheRsiForCycle()
     double rsiD1  = InpUseD1RSI ? GetRSIValue(_Symbol, PERIOD_D1, InpTFRsiPeriod, 0) : EMPTY_VALUE;
     // Store RSI cache in State Manager
     if(g_stateManager != NULL)
-        g_stateManager.SetRsiCache(TimeCurrent(), rsiCTF, rsiH4, rsiD1);
+        g_stateManager.SetRsiCache(rsiCTF, rsiH4, rsiD1);
 }
 
 //+------------------------------------------------------------------+
@@ -9508,18 +9530,30 @@ bool IsInCooloffPeriod(bool isBuySignal)
     // Load state from global variables
     if(!LoadCooloffState())
     {
-        g_coolOffState.isActive = false;
+        if(g_stateManager != NULL)
+        {
+            CoolOffInfo coolOff;
+            coolOff.isActive = false;
+            g_stateManager.SetCoolOffInfo(coolOff);
+        }
         return false;
     }
     
+    if(g_stateManager == NULL)
+        return false;
+    
+    CoolOffInfo coolOffState = g_stateManager.GetCoolOffInfo();
+    if(!coolOffState.isActive)
+        return false;
+    
     datetime currentTime = TimeCurrent();
-    int secondsSinceExit = (int)(currentTime - g_coolOffState.lastExitTime);
+    int secondsSinceExit = (int)(currentTime - coolOffState.lastExitTime);
     
     // Determine BASE cool-off duration based on exit reason
     int baseCooloffMinutes = 0;
-    if(g_coolOffState.exitReason == 0) // TP
+    if(coolOffState.exitReason == 0) // TP
         baseCooloffMinutes = InpTPCooloffMinutes;
-    else if(g_coolOffState.exitReason == 1) // SL
+    else if(coolOffState.exitReason == 1) // SL
         baseCooloffMinutes = InpSLCooloffMinutes;
     else
         return false; // No cool-off for manual or other exits
@@ -9569,7 +9603,10 @@ bool IsInCooloffPeriod(bool isBuySignal)
     // Check if cool-off period has expired
     if(secondsSinceExit >= cooloffSeconds)
     {
-        g_coolOffState.isActive = false;
+        CoolOffInfo expiredCoolOff = coolOffState;
+        expiredCoolOff.isActive = false;
+        if(g_stateManager != NULL)
+            g_stateManager.SetCoolOffInfo(expiredCoolOff);
         
         // TECHNICAL VALIDATION GATE - even after cooloff expires, check technical conditions
         if(InpEnableTechnicalValidation)
@@ -9603,19 +9640,21 @@ bool IsInCooloffPeriod(bool isBuySignal)
     if(InpAllowDirectionChangeOverride)
     {
         int currentDirection = isBuySignal ? 0 : 1;
-        if(currentDirection != g_coolOffState.lastDirection)
+        if(currentDirection != coolOffState.lastDirection)
         {
         if(InpLogCooloffDecisions)
         {
             Print(StringFormat("[COOL-OFF] OVERRIDE - Direction changed from %s to %s",
-                  g_coolOffState.lastDirection == 0 ? "BUY" : "SELL",
+                  coolOffState.lastDirection == 0 ? "BUY" : "SELL",
                   currentDirection == 0 ? "BUY" : "SELL"));
         }
         
         // Track override statistics
-        if(InpEnableCooloffStatistics)
+        if(InpEnableCooloffStatistics && g_stateManager != NULL)
         {
-            g_coolOffStats.overridesUsed++;
+            CoolOffStats stats = g_stateManager.GetCoolOffStats();
+            stats.overridesUsed++;
+            g_stateManager.SetCoolOffStats(stats);
         }
         
         return false; // Allow trade - direction changed
@@ -9632,14 +9671,16 @@ bool IsInCooloffPeriod(bool isBuySignal)
               isBuySignal ? "BUY" : "SELL",
               minutesRemaining,
               secondsRemaining,
-              TimeToString(g_coolOffState.lastExitTime),
-              g_coolOffState.exitReason == 0 ? "TP" : "SL"));
+              TimeToString(coolOffState.lastExitTime),
+              coolOffState.exitReason == 0 ? "TP" : "SL"));
     }
     
     // Track blocked trade statistics
-    if(InpEnableCooloffStatistics)
+    if(InpEnableCooloffStatistics && g_stateManager != NULL)
     {
-        g_coolOffStats.tradesBlocked++;
+        CoolOffStats stats = g_stateManager.GetCoolOffStats();
+        stats.tradesBlocked++;
+        g_stateManager.SetCoolOffStats(stats);
     }
     
     return true;
@@ -9697,7 +9738,7 @@ double GetRegimeAdjustment()
         return 1.0;
     
     // Get cached regime data from last analysis
-    MARKET_REGIME regime = g_lastAnalysisRegime;
+    MARKET_REGIME regime = (g_stateManager != NULL) ? g_stateManager.GetLastAnalysisRegime() : REGIME_RANGING;
     double adx = 0;
     
     // Try to get ADX from regime detector
@@ -9742,16 +9783,19 @@ double GetRegimeAdjustment()
 //+------------------------------------------------------------------+
 void UpdateCooloffStatistics(bool tradeWon)
 {
-    if(!InpEnableCooloffStatistics)
+    if(!InpEnableCooloffStatistics || g_stateManager == NULL)
         return;
     
     // Track allowed trades (those that executed after cool-off expired)
-    g_coolOffStats.tradesAllowed++;
+    CoolOffStats stats = g_stateManager.GetCoolOffStats();
+    stats.tradesAllowed++;
     
     if(tradeWon)
-        g_coolOffStats.allowedWins++;
+        stats.allowedWins++;
     else
-        g_coolOffStats.allowedLosses++;
+        stats.allowedLosses++;
+    
+    g_stateManager.SetCoolOffStats(stats);
 }
 
 //+------------------------------------------------------------------+
@@ -9759,19 +9803,21 @@ void UpdateCooloffStatistics(bool tradeWon)
 //+------------------------------------------------------------------+
 void ReportCooloffStatistics()
 {
-    if(!InpEnableCooloffStatistics)
+    if(!InpEnableCooloffStatistics || g_stateManager == NULL)
         return;
     
     datetime currentTime = TimeCurrent();
+    CoolOffStats stats = g_stateManager.GetCoolOffStats();
     
     // Check if it's time for a report
-    if(g_coolOffStats.lastReportTime == 0)
+    if(stats.lastReportTime == 0)
     {
-        g_coolOffStats.lastReportTime = currentTime;
+        stats.lastReportTime = currentTime;
+        g_stateManager.SetCoolOffStats(stats);
         return;
     }
     
-    int minutesSinceReport = (int)((currentTime - g_coolOffStats.lastReportTime) / 60);
+    int minutesSinceReport = (int)((currentTime - stats.lastReportTime) / 60);
     if(minutesSinceReport < InpStatisticsReportMinutes)
         return;
     
@@ -9780,9 +9826,9 @@ void ReportCooloffStatistics()
     Print("║           COOL-OFF PERIOD STATISTICS REPORT                  ║");
     Print("╠═══════════════════════════════════════════════════════════════╣");
     
-    int totalBlocked = g_coolOffStats.tradesBlocked;
-    int totalAllowed = g_coolOffStats.tradesAllowed;
-    int totalOverrides = g_coolOffStats.overridesUsed;
+    int totalBlocked = stats.tradesBlocked;
+    int totalAllowed = stats.tradesAllowed;
+    int totalOverrides = stats.overridesUsed;
     
     Print(StringFormat("║ Trades Blocked by Cool-Off: %4d                             ║", totalBlocked));
     Print(StringFormat("║ Trades Allowed After Cool-Off: %4d                          ║", totalAllowed));
@@ -9791,8 +9837,8 @@ void ReportCooloffStatistics()
     
     if(totalAllowed > 0)
     {
-        int wins = g_coolOffStats.allowedWins;
-        int losses = g_coolOffStats.allowedLosses;
+        int wins = stats.allowedWins;
+        int losses = stats.allowedLosses;
         double winRate = (double)wins / totalAllowed * 100;
         
         Print(StringFormat("║ Post-Cool-Off Wins: %4d (%.1f%%)                            ║", wins, winRate));
@@ -9810,7 +9856,8 @@ void ReportCooloffStatistics()
     Print("╚═══════════════════════════════════════════════════════════════╝");
     
     // Update last report time
-    g_coolOffStats.lastReportTime = currentTime;
+    stats.lastReportTime = currentTime;
+    g_stateManager.SetCoolOffStats(stats);
 }
 
 //+------------------------------------------------------------------+
@@ -9824,7 +9871,12 @@ void ClearCooloffState()
     GlobalVariableDel(key + "_DIR");
     GlobalVariableDel(key + "_REASON");
     
-    g_coolOffState.isActive = false;
+    if(g_stateManager != NULL)
+    {
+        CoolOffInfo coolOff;
+        coolOff.isActive = false;
+        g_stateManager.SetCoolOffInfo(coolOff);
+    }
     
     if(InpLogCooloffDecisions)
         Print("[COOL-OFF] State cleared for ", _Symbol);
