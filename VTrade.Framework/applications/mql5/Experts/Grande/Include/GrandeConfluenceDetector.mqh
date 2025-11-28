@@ -59,6 +59,7 @@
 
 #include "GrandeFibonacciCalculator.mqh"
 #include "GrandeCandleAnalyzer.mqh"
+#include "GrandeMarketRegimeDetector.mqh"  // Phase 2: For regime-aware filtering
 
 //+------------------------------------------------------------------+
 //| Structure for a single confluence zone                           |
@@ -119,10 +120,20 @@ public:
     // Main analysis functions
     void FindConfluenceZones(bool isBuy, double currentPrice, 
                              double maxDistancePips, ConfluenceZone &zones[]);
+    // Phase 2: Overload with regime filtering
+    void FindConfluenceZones(bool isBuy, double currentPrice, 
+                             double maxDistancePips, ConfluenceZone &zones[],
+                             RegimeSnapshot &regime);
     ConfluenceZone GetBestConfluenceZone(bool isBuy, double currentPrice, 
                                          double maxDistancePips);
     double GetBestLimitOrderPrice(bool isBuy, double currentPrice, 
                                   double maxDistancePips);
+    
+    // Phase 2: Regime-aware zone validation
+    bool IsZoneValidForRegime(ConfluenceZone &zone, bool isBuy, double currentPrice, RegimeSnapshot &regime);
+    int CountConfluenceFactors(ConfluenceZone &zone);
+    double CalculateEnhancedZoneStrength(ConfluenceZone &zone, RegimeSnapshot &regime,
+                                        double regimeConfidence, double signalQualityScore);
     
     // Key level integration (requires external key level array)
     void AddKeyLevelsToAnalysis(double &resistanceLevels[], double &supportLevels[]);
@@ -710,6 +721,105 @@ void CGrandeConfluenceDetector::PrintZoneDetails(ConfluenceZone &zone)
     Print("EMA: ", zone.hasEMA ? "YES (" + zone.emaLevel + ")" : "NO");
     Print("Rejection: ", zone.hasCandleRejection ? "YES" : "NO");
     Print("===================================");
+}
+
+//+------------------------------------------------------------------+
+//| Phase 2: Find Confluence Zones with Regime Filtering            |
+//+------------------------------------------------------------------+
+void CGrandeConfluenceDetector::FindConfluenceZones(bool isBuy, double currentPrice, 
+                                                     double maxDistancePips, ConfluenceZone &zones[],
+                                                     RegimeSnapshot &regime)
+{
+    // First, find all zones using original method
+    FindConfluenceZones(isBuy, currentPrice, maxDistancePips, zones);
+    
+    // Filter zones by regime alignment
+    ConfluenceZone filteredZones[];
+    int filteredCount = 0;
+    
+    for(int i = 0; i < ArraySize(zones); i++)
+    {
+        if(IsZoneValidForRegime(zones[i], isBuy, currentPrice, regime))
+        {
+            ArrayResize(filteredZones, filteredCount + 1);
+            filteredZones[filteredCount++] = zones[i];
+        }
+    }
+    
+    // Replace zones array with filtered results
+    ArrayResize(zones, filteredCount);
+    for(int i = 0; i < filteredCount; i++)
+    {
+        zones[i] = filteredZones[i];
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Phase 2: Check if zone is valid for regime                      |
+//+------------------------------------------------------------------+
+bool CGrandeConfluenceDetector::IsZoneValidForRegime(ConfluenceZone &zone, bool isBuy, 
+                                                      double currentPrice, RegimeSnapshot &regime)
+{
+    if(regime.regime == REGIME_TREND_BULL)
+    {
+        // For buys, zone must be below current (pullback)
+        if(isBuy && zone.price >= currentPrice)
+            return false;
+        // For sells, reject (trending up)
+        if(!isBuy)
+            return false;
+    }
+    else if(regime.regime == REGIME_TREND_BEAR)
+    {
+        // For sells, zone must be above current (pullback)
+        if(!isBuy && zone.price <= currentPrice)
+            return false;
+        // For buys, reject (trending down)
+        if(isBuy)
+            return false;
+    }
+    else if(regime.regime == REGIME_HIGH_VOLATILITY)
+    {
+        // Avoid limit orders in high volatility
+        return false;
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Phase 2: Count confluence factors in zone                        |
+//+------------------------------------------------------------------+
+int CGrandeConfluenceDetector::CountConfluenceFactors(ConfluenceZone &zone)
+{
+    int count = 0;
+    if(zone.hasKeyLevel) count++;
+    if(zone.hasFibLevel) count++;
+    if(zone.hasRoundNumber) count++;
+    if(zone.hasEMA) count++;
+    if(zone.hasCandleRejection) count++;
+    return count;
+}
+
+//+------------------------------------------------------------------+
+//| Phase 2: Calculate enhanced zone strength with regime weighting |
+//+------------------------------------------------------------------+
+double CGrandeConfluenceDetector::CalculateEnhancedZoneStrength(ConfluenceZone &zone, RegimeSnapshot &regime,
+                                                                double regimeConfidence, double signalQualityScore)
+{
+    double baseScore = CalculateZoneStrength(zone); // Existing method
+    
+    // Apply regime multiplier
+    double regimeMultiplier = 1.0;
+    if(regime.regime == REGIME_TREND_BULL || regime.regime == REGIME_TREND_BEAR)
+        regimeMultiplier = 1.2 * regimeConfidence; // Boost for trending regimes
+    else if(regime.regime == REGIME_RANGING)
+        regimeMultiplier = 0.9 * regimeConfidence; // Slight reduction for ranging
+    
+    // Apply signal quality multiplier
+    double qualityMultiplier = signalQualityScore / 100.0;
+    
+    return baseScore * regimeMultiplier * qualityMultiplier;
 }
 //+------------------------------------------------------------------+
 

@@ -145,6 +145,9 @@ public:
     bool IsInsideBar(int shift);
     bool HasRejectionWick(int shift, bool checkUpper);
     
+    // Phase 3: Price-level rejection check for limit orders
+    bool HasRecentRejectionAtPrice(double price, bool checkUpperWick, int lookbackBars = 10);
+    
     // Momentum analysis
     double GetMomentumStrength(int shift, double atr);
     bool IsMomentumCandle(int shift, double atr, double threshold);
@@ -700,6 +703,34 @@ bool CGrandeCandleAnalyzer::HasRecentRejection(bool atResistance, int lookback)
         
         if(!atResistance && candle.hasLongLowerWick && !candle.hasLongUpperWick)
             return true; // Rejection at support (bounce)
+    }
+    
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Phase 3: Check for recent rejection at specific price level      |
+//+------------------------------------------------------------------+
+bool CGrandeCandleAnalyzer::HasRecentRejectionAtPrice(double price, bool checkUpperWick, int lookbackBars)
+{
+    double tolerance = GetPipSize() * 2; // Within 2 pips
+    
+    for(int i = 0; i < lookbackBars; i++)
+    {
+        CandleStructure candle = AnalyzeCandleStructure(i);
+        
+        if(checkUpperWick && candle.hasLongUpperWick)
+        {
+            double candleHigh = iHigh(m_symbol, m_timeframe, i);
+            if(MathAbs(candleHigh - price) <= tolerance)
+                return true; // Recent bearish rejection at this level
+        }
+        else if(!checkUpperWick && candle.hasLongLowerWick)
+        {
+            double candleLow = iLow(m_symbol, m_timeframe, i);
+            if(MathAbs(candleLow - price) <= tolerance)
+                return true; // Recent bullish rejection at this level
+        }
     }
     
     return false;

@@ -721,7 +721,8 @@ int OnInit()
                                         g_confluenceDetector, 
                                         g_keyLevelDetector, 
                                         GetPointer(g_trade),
-                                        limitConfig))
+                                        limitConfig,
+                                        g_databaseManager))  // Phase 1: Add database manager for tracking
     {
         Print("ERROR: Failed to initialize Limit Order Manager");
         delete g_regimeDetector;
@@ -1075,6 +1076,58 @@ int OnInit()
 
 //+------------------------------------------------------------------+
 //| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| OnTradeTransaction handler - Phase 1: Limit Order Fill Tracking |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Detects when limit orders are filled and logs the fill for tracking.
+//   This enables data collection for fill rate analysis.
+//
+// BEHAVIOR:
+//   - Monitors TRADE_TRANSACTION_DEAL_ADD events
+//   - Checks if deal is from a limit order (ORDER_TYPE_BUY_LIMIT or ORDER_TYPE_SELL_LIMIT)
+//   - Calls LogLimitOrderFill() to record the fill in database
+//
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                       const MqlTradeRequest &request,
+                       const MqlTradeResult &result)
+{
+    // Only process deal additions (order fills)
+    if(trans.type != TRADE_TRANSACTION_DEAL_ADD)
+        return;
+    
+    // Check if this is our order (by magic number)
+    if(trans.order != 0)
+    {
+        if(!OrderSelect(trans.order))
+            return;
+        
+        if((int)OrderGetInteger(ORDER_MAGIC) != InpMagicNumber)
+            return;
+        
+        // Check if this was a limit order that just filled
+        ENUM_ORDER_TYPE orderType = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+        if(orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_SELL_LIMIT)
+        {
+            // Get deal information
+            if(HistoryDealSelect(trans.deal))
+            {
+                double fillPrice = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
+                
+                // Log the fill
+                if(g_limitOrderManager != NULL)
+                {
+                    g_limitOrderManager.LogLimitOrderFill(trans.order, fillPrice);
+                }
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| OnDeinit handler                                                  |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
@@ -3647,19 +3700,59 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "
     // Use limit orders if enabled
     if(InpUseLimitOrders && g_limitOrderManager != NULL)
     {
-        // Prepare limit order request
-        LimitOrderRequest request;
-        request.isBuy = bullish;
-        request.lotSize = lot;
-        request.basePrice = price;
-        request.stopLoss = sl;
-        request.takeProfit = tp;
-        request.comment = comment;
-        request.tradeContext = "TREND";
-        request.logPrefix = logPrefix;
+        // Phase 7: Build enhanced limit order request with full context
+        EnhancedLimitOrderRequest enhancedRequest;
+        enhancedRequest.isBuy = bullish;
+        enhancedRequest.lotSize = lot;
+        enhancedRequest.basePrice = price;
+        enhancedRequest.stopLoss = sl;
+        enhancedRequest.takeProfit = tp;
+        enhancedRequest.comment = comment;
+        enhancedRequest.tradeContext = "TREND";
+        enhancedRequest.logPrefix = logPrefix;
         
-        // Place limit order using manager
-        LimitOrderResult result = g_limitOrderManager.PlaceLimitOrder(request);
+        // Populate enhanced fields
+        enhancedRequest.regimeSnapshot = rs;
+        enhancedRequest.regimeConfidence = rs.confidence;
+        
+        // Calculate signal quality score (0-100)
+        double signalQualityScore = 75.0; // Default
+        if(g_signalQualityAnalyzer != NULL)
+        {
+            int confluenceScore = 0;
+            if(g_confluenceDetector != NULL)
+            {
+                ConfluenceZone zone = g_confluenceDetector.GetBestConfluenceZone(bullish, price, 50.0);
+                confluenceScore = zone.score;
+            }
+            double rsi = execution.rsi_current;
+            double adx = rs.adx_h1;
+            SignalQualityScore qualityScore = g_signalQualityAnalyzer.ScoreSignalQuality(
+                execution.signal_type, rs.confidence, confluenceScore, rsi, adx, finbertConfidence);
+            signalQualityScore = qualityScore.overallScore * 100.0; // Convert 0-1 to 0-100
+        }
+        enhancedRequest.signalQualityScore = signalQualityScore;
+        
+        // ATR values
+        enhancedRequest.currentATR = rs.atr_current;
+        // Get average ATR from state manager if available, otherwise estimate
+        if(g_stateManager != NULL)
+        {
+            // Try to get average ATR (20-period)
+            enhancedRequest.averageATR = GetATRAverage(20);
+        }
+        else
+        {
+            // Fallback: use current ATR as estimate
+            enhancedRequest.averageATR = rs.atr_current;
+        }
+        
+        // News event (placeholder - would need news reader integration)
+        enhancedRequest.newsEventTime = 0;
+        enhancedRequest.newsImpactLevel = 0;
+        
+        // Place limit order using enhanced manager
+        LimitOrderResult result = g_limitOrderManager.PlaceLimitOrder(enhancedRequest);
         
         if(result.success)
         {
@@ -4052,19 +4145,61 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
     // Use limit orders if enabled and not a strong momentum surge
     if(InpUseLimitOrders && g_limitOrderManager != NULL && !strongMomentumSurge)
     {
-        // Prepare limit order request
-        LimitOrderRequest request;
-        request.isBuy = isBuyDirection;
-        request.lotSize = lot;
-        request.basePrice = currentPrice;
-        request.stopLoss = breakoutSL;
-        request.takeProfit = breakoutTP;
-        request.comment = comment;
-        request.tradeContext = "BREAKOUT";
-        request.logPrefix = "[BREAKOUT]";
+        // Phase 7: Build enhanced limit order request with full context
+        EnhancedLimitOrderRequest enhancedRequest;
+        enhancedRequest.isBuy = isBuyDirection;
+        enhancedRequest.lotSize = lot;
+        // CRITICAL FIX: Use breakout level, not current price (Issue #11 from analysis)
+        enhancedRequest.basePrice = breakoutLevel;
+        enhancedRequest.stopLoss = breakoutSL;
+        enhancedRequest.takeProfit = breakoutTP;
+        enhancedRequest.comment = comment;
+        enhancedRequest.tradeContext = "BREAKOUT";
+        enhancedRequest.logPrefix = "[BREAKOUT]";
         
-        // Place limit order using manager
-        LimitOrderResult result = g_limitOrderManager.PlaceLimitOrder(request);
+        // Populate enhanced fields
+        enhancedRequest.regimeSnapshot = rs;
+        enhancedRequest.regimeConfidence = rs.confidence;
+        
+        // Calculate signal quality score (0-100)
+        double signalQualityScore = 75.0; // Default
+        if(g_signalQualityAnalyzer != NULL)
+        {
+            int confluenceScore = 0;
+            if(g_confluenceDetector != NULL)
+            {
+                ConfluenceZone zone = g_confluenceDetector.GetBestConfluenceZone(isBuyDirection, breakoutLevel, 50.0);
+                confluenceScore = zone.score;
+            }
+            double rsi = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+            if(rsi < 0) rsi = 50.0; // Default if unavailable
+            double adx = rs.adx_h1;
+            SignalQualityScore qualityScore = g_signalQualityAnalyzer.ScoreSignalQuality(
+                "BREAKOUT", rs.confidence, confluenceScore, rsi, adx, 0.0); // No FinBERT for breakout
+            signalQualityScore = qualityScore.overallScore * 100.0; // Convert 0-1 to 0-100
+        }
+        enhancedRequest.signalQualityScore = signalQualityScore;
+        
+        // ATR values
+        enhancedRequest.currentATR = rs.atr_current;
+        // Get average ATR from state manager if available, otherwise estimate
+        if(g_stateManager != NULL)
+        {
+            // Try to get average ATR (20-period)
+            enhancedRequest.averageATR = GetATRAverage(20);
+        }
+        else
+        {
+            // Fallback: use current ATR as estimate
+            enhancedRequest.averageATR = rs.atr_current;
+        }
+        
+        // News event (placeholder - would need news reader integration)
+        enhancedRequest.newsEventTime = 0;
+        enhancedRequest.newsImpactLevel = 0;
+        
+        // Place limit order using enhanced manager
+        LimitOrderResult result = g_limitOrderManager.PlaceLimitOrder(enhancedRequest);
         
         if(result.success)
         {

@@ -180,6 +180,69 @@ struct TradingConfig
 };
 
 //+------------------------------------------------------------------+
+//| Enhanced Limit Order Configuration                                 |
+//+------------------------------------------------------------------+
+// Extended configuration for professional-grade limit order management
+// All new parameters have defaults matching current behavior for backward compatibility
+struct EnhancedLimitOrderConfig
+{
+    // Existing fields from LimitOrderConfig (matching TradingConfig)
+    bool useLimitOrders;                           // Enable/disable limit orders
+    int maxLimitDistancePips;                      // Maximum distance for limit order placement
+    int expirationHours;                           // Limit order expiration time
+    bool cancelStaleOrders;                        // Enable stale order cancellation
+    double staleOrderDistancePips;                 // Distance to consider order stale
+    int duplicateTolerancePoints;                   // Tolerance for duplicate detection (in points)
+    
+    // New fields for enhanced validation and management
+    double minRegimeConfidence;                    // Minimum regime confidence for limit orders (default: 0.65)
+    double minSignalQualityScore;                  // Minimum signal quality for limit orders (default: 75.0)
+    double minConfluenceScore;                     // Minimum confluence score (default: 6.0)
+    int minConfluenceFactors;                      // Minimum confluence factors required (default: 3)
+    bool useATRScaling;                            // Enable ATR-based distance scaling (default: true)
+    double baseMaxDistancePips;                    // Base max distance (default: 30)
+    bool enableDynamicAdjustment;                  // Enable dynamic limit price adjustment (default: false)
+    double adjustmentTriggerPips;                  // Distance to trigger adjustment (default: 5.0)
+    int maxAdjustmentsPerOrder;                    // Maximum adjustments (default: 2)
+    bool requireMultiTimeframeAlignment;           // Require H1/H4/D1 alignment (default: true)
+    int maxPendingOrdersPerSymbol;                 // Maximum pending orders (default: 5)
+    double maxPendingOrderExposureMultiplier;      // Max pending exposure vs positions (default: 2.0)
+    bool cancelOrdersBeforeNews;                   // Cancel before high-impact news (default: true)
+    int newsCancelMinutesBefore;                   // Minutes before news to cancel (default: 30)
+    bool trackFillMetrics;                          // Enable fill rate tracking (default: true)
+    double minFillProbability;                     // Minimum fill probability to place order (default: 0.4)
+    
+    void SetDefaults()
+    {
+        // Existing defaults (matching current behavior)
+        useLimitOrders = true;
+        maxLimitDistancePips = 30;
+        expirationHours = 4;
+        cancelStaleOrders = true;
+        staleOrderDistancePips = 50.0;
+        duplicateTolerancePoints = 3;
+        
+        // New defaults (matching current behavior initially, can be enabled via feature flags)
+        minRegimeConfidence = 0.65;
+        minSignalQualityScore = 75.0;
+        minConfluenceScore = 6.0;
+        minConfluenceFactors = 3;
+        useATRScaling = true;
+        baseMaxDistancePips = 30.0;
+        enableDynamicAdjustment = false;           // Opt-in feature
+        adjustmentTriggerPips = 5.0;
+        maxAdjustmentsPerOrder = 2;
+        requireMultiTimeframeAlignment = true;
+        maxPendingOrdersPerSymbol = 5;
+        maxPendingOrderExposureMultiplier = 2.0;
+        cancelOrdersBeforeNews = true;
+        newsCancelMinutesBefore = 30;
+        trackFillMetrics = true;                   // Enabled by default for data collection
+        minFillProbability = 0.4;
+    }
+};
+
+//+------------------------------------------------------------------+
 //| Technical Validation Configuration                                 |
 //+------------------------------------------------------------------+
 struct TechnicalValidationConfig

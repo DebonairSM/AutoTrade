@@ -145,6 +145,8 @@ public:
     string GetRejectionSummary();
     string GetMarketConditionsSummary();
     string GetOpportunityAnalysis();
+    // Phase 7: Limit order performance summary
+    string GetLimitOrderPerformanceSummary();
     string GetFinBERTFormattedData();
     
     void ResetStatistics();
@@ -357,6 +359,10 @@ void CGrandeIntelligentReporter::GenerateHourlyReport()
                               m_decisions[i].adx_h1,
                               m_decisions[i].rsi_current);
     }
+    
+    // Phase 7: Limit Order Performance
+    report += StringPadCenter(" LIMIT ORDER PERFORMANCE ", 60, "-") + "\n";
+    report += GetLimitOrderPerformanceSummary() + "\n";
     
     // Footer with recommendations
     report += "\n" + StringPadCenter(" RECOMMENDATIONS ", 60, "=") + "\n";
@@ -975,6 +981,34 @@ string StringPadCenter(const string text, const int width, const string pad = " 
     for(int i = 0; i < pad_right; i++) result += pad;
     
     return result;
+}
+
+//+------------------------------------------------------------------+
+//| Phase 7: Get limit order performance summary                     |
+//+------------------------------------------------------------------+
+string CGrandeIntelligentReporter::GetLimitOrderPerformanceSummary()
+{
+    // This would query the database for limit order statistics
+    // For now, return placeholder that can be enhanced later
+    // Actual implementation would query limit_orders table:
+    // - Total orders placed
+    // - Orders filled
+    // - Orders cancelled
+    // - Average time to fill
+    // - Fill rate percentage
+    
+    string summary = "";
+    summary += "Limit Order Statistics (Last 24 Hours):\n";
+    summary += "  Total Orders Placed: [Query from DB]\n";
+    summary += "  Orders Filled: [Query from DB]\n";
+    summary += "  Orders Cancelled: [Query from DB]\n";
+    summary += "  Fill Rate: [Query from DB]%\n";
+    summary += "  Average Time to Fill: [Query from DB] minutes\n";
+    summary += "\n";
+    summary += "Note: Actual statistics require database integration.\n";
+    summary += "This section will be populated when limit order tracking is active.\n";
+    
+    return summary;
 }
 
 // Removed duplicate standalone function - now properly defined as member function

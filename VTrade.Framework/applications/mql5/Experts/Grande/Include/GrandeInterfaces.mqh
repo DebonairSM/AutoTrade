@@ -427,6 +427,86 @@ interface IPositionOptimizer
 };
 
 //+------------------------------------------------------------------+
+//| Limit Order Fill Metrics Structure                                |
+//+------------------------------------------------------------------+
+// Tracks limit order fill performance for analysis and optimization
+struct LimitOrderFillMetrics
+{
+    ulong ticket;                           // Order ticket
+    datetime placedTime;                    // When order was placed
+    datetime filledTime;                    // When order was filled (0 if not filled)
+    double placedPrice;                     // Price at placement (limit price)
+    double filledPrice;                     // Price at fill (0 if not filled)
+    double slippagePips;                    // Slippage in pips
+    bool wasFilled;                         // Whether order was filled
+    string cancelReason;                    // Reason for cancellation (if not filled)
+    double fillProbabilityAtPlacement;      // Estimated fill probability when placed
+    double fillProbabilityAtCancel;         // Estimated fill probability when cancelled
+    
+    void LimitOrderFillMetrics()
+    {
+        ticket = 0;
+        placedTime = 0;
+        filledTime = 0;
+        placedPrice = 0.0;
+        filledPrice = 0.0;
+        slippagePips = 0.0;
+        wasFilled = false;
+        cancelReason = "";
+        fillProbabilityAtPlacement = 0.0;
+        fillProbabilityAtCancel = 0.0;
+    }
+};
+
+//+------------------------------------------------------------------+
+//| Enhanced Limit Order Request Structure                            |
+//+------------------------------------------------------------------+
+// Extended limit order request with full context for professional-grade validation
+// Note: Requires RegimeSnapshot from GrandeMarketRegimeDetector.mqh
+// Forward declaration - actual struct defined in GrandeLimitOrderManager.mqh
+// This is a placeholder for the interface definition
+struct EnhancedLimitOrderRequest
+{
+    // Existing fields from LimitOrderRequest
+    bool isBuy;                             // Trade direction: true for buy, false for sell
+    double lotSize;                         // Position size in lots
+    double basePrice;                       // Current market price
+    double stopLoss;                       // Stop loss level (relative to basePrice)
+    double takeProfit;                     // Take profit level (relative to basePrice)
+    string comment;                        // Order comment
+    string tradeContext;                   // "TREND" or "BREAKOUT" for logging
+    string logPrefix;                      // Log prefix for context-specific logging
+    
+    // New fields for enhanced validation
+    // Note: RegimeSnapshot is defined in GrandeMarketRegimeDetector.mqh
+    // This struct will be fully defined in GrandeLimitOrderManager.mqh where dependencies are available
+    double regimeConfidence;                // Regime confidence (0.0-1.0)
+    double signalQualityScore;             // Signal quality score (0-100)
+    double currentATR;                     // Current ATR for distance scaling
+    double averageATR;                     // Average ATR for distance scaling
+    datetime newsEventTime;                 // Upcoming news event (0 if none)
+    int newsImpactLevel;                    // News impact level (0-3, 0=none)
+    
+    void EnhancedLimitOrderRequest()
+    {
+        isBuy = false;
+        lotSize = 0.0;
+        basePrice = 0.0;
+        stopLoss = 0.0;
+        takeProfit = 0.0;
+        comment = "";
+        tradeContext = "";
+        logPrefix = "";
+        regimeConfidence = 0.0;
+        signalQualityScore = 0.0;
+        currentATR = 0.0;
+        averageATR = 0.0;
+        newsEventTime = 0;
+        newsImpactLevel = 0;
+    }
+};
+
+//+------------------------------------------------------------------+
 //| Helper Functions                                                  |
 //+------------------------------------------------------------------+
 

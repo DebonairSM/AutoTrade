@@ -43,6 +43,7 @@
 #property version   "1.00"
 
 #include "GrandeMarketRegimeDetector.mqh"
+#include "GrandeKeyLevelDetector.mqh"  // Phase 3: For limit price validation
 
 //+------------------------------------------------------------------+
 //| Multi-Timeframe Consensus Structure                              |
@@ -86,6 +87,19 @@ public:
     bool IsConsensusStrong();
     double GetConsensusStrength();
     void Reset();
+    
+    // Phase 3: Limit price validation across timeframes
+    bool ValidateLimitPriceMultiTimeframe(double limitPrice, bool isBuy, 
+                                          CGrandeKeyLevelDetector* keyLevelH1,
+                                          CGrandeKeyLevelDetector* keyLevelH4,
+                                          CGrandeKeyLevelDetector* keyLevelD1);
+    bool ValidateLimitPriceOnTimeframe(double limitPrice, bool isBuy, 
+                                       ENUM_TIMEFRAMES timeframe,
+                                       CGrandeKeyLevelDetector* keyLevelDetector);
+    double GetMultiTimeframeConfluenceScore(double limitPrice, bool isBuy,
+                                            CGrandeKeyLevelDetector* keyLevelH1,
+                                            CGrandeKeyLevelDetector* keyLevelH4,
+                                            CGrandeKeyLevelDetector* keyLevelD1);
 };
 
 //+------------------------------------------------------------------+
@@ -309,4 +323,159 @@ void CMultiTimeframeAnalyzer::Reset() {
     m_consensus_count = 0;
     ArrayFree(m_consensus);
     ArrayResize(m_consensus, 3);
+}
+
+//+------------------------------------------------------------------+
+//| Phase 3: Validate limit price across multiple timeframes        |
+//+------------------------------------------------------------------+
+bool CMultiTimeframeAnalyzer::ValidateLimitPriceMultiTimeframe(double limitPrice, bool isBuy,
+                                                               CGrandeKeyLevelDetector* keyLevelH1,
+                                                               CGrandeKeyLevelDetector* keyLevelH4,
+                                                               CGrandeKeyLevelDetector* keyLevelD1)
+{
+    // Check H1, H4, D1 for conflicts
+    bool h1Valid = ValidateLimitPriceOnTimeframe(limitPrice, isBuy, PERIOD_H1, keyLevelH1);
+    bool h4Valid = ValidateLimitPriceOnTimeframe(limitPrice, isBuy, PERIOD_H4, keyLevelH4);
+    bool d1Valid = ValidateLimitPriceOnTimeframe(limitPrice, isBuy, PERIOD_D1, keyLevelD1);
+    
+    // Require at least H1 and H4 alignment (D1 is preferred but not required)
+    return h1Valid && h4Valid;
+}
+
+//+------------------------------------------------------------------+
+//| Phase 3: Validate limit price on specific timeframe             |
+//+------------------------------------------------------------------+
+bool CMultiTimeframeAnalyzer::ValidateLimitPriceOnTimeframe(double limitPrice, bool isBuy,
+                                                            ENUM_TIMEFRAMES timeframe,
+                                                            CGrandeKeyLevelDetector* keyLevelDetector)
+{
+    if(keyLevelDetector == NULL)
+    {
+        // Fallback: basic direction check
+        double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+        if(isBuy)
+            return limitPrice <= currentPrice; // Buy limits below current
+        else
+            return limitPrice >= currentPrice; // Sell limits above current
+    }
+    
+    // Check if limit price aligns with key levels on this timeframe
+    // For buys: price should be at or near support
+    // For sells: price should be at or near resistance
+    double proximityPips = 5.0; // 5 pip tolerance
+    double pipSize = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
+    if(SymbolInfoInteger(m_symbol, SYMBOL_DIGITS) >= 5)
+        pipSize *= 10.0;
+    double proximity = proximityPips * pipSize;
+    
+    int levelCount = keyLevelDetector.GetKeyLevelCount();
+    for(int i = 0; i < levelCount; i++)
+    {
+        SKeyLevel level;
+        if(keyLevelDetector.GetKeyLevel(i, level))
+        {
+            if(MathAbs(limitPrice - level.price) <= proximity)
+            {
+                // Check alignment
+                if(isBuy && !level.isResistance) // Buy at support
+                    return true;
+                if(!isBuy && level.isResistance) // Sell at resistance
+                    return true;
+            }
+        }
+    }
+    
+    // If no key level found nearby, use basic direction check
+    double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+    if(isBuy)
+        return limitPrice <= currentPrice;
+    else
+        return limitPrice >= currentPrice;
+}
+
+//+------------------------------------------------------------------+
+//| Phase 3: Get multi-timeframe confluence score for price level   |
+//+------------------------------------------------------------------+
+double CMultiTimeframeAnalyzer::GetMultiTimeframeConfluenceScore(double limitPrice, bool isBuy,
+                                                                 CGrandeKeyLevelDetector* keyLevelH1,
+                                                                 CGrandeKeyLevelDetector* keyLevelH4,
+                                                                 CGrandeKeyLevelDetector* keyLevelD1)
+{
+    double score = 0.0;
+    double proximityPips = 5.0;
+    double pipSize = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
+    if(SymbolInfoInteger(m_symbol, SYMBOL_DIGITS) >= 5)
+        pipSize *= 10.0;
+    double proximity = proximityPips * pipSize;
+    
+    // Check if price appears as key level on multiple timeframes
+    // Weight: D1 = 0.5, H4 = 0.3, H1 = 0.2
+    bool foundH1 = false, foundH4 = false, foundD1 = false;
+    
+    if(keyLevelH1 != NULL)
+    {
+        int count = keyLevelH1.GetKeyLevelCount();
+        for(int i = 0; i < count; i++)
+        {
+            SKeyLevel level;
+            if(keyLevelH1.GetKeyLevel(i, level))
+            {
+                if(MathAbs(limitPrice - level.price) <= proximity)
+                {
+                    if((isBuy && !level.isResistance) || (!isBuy && level.isResistance))
+                    {
+                        foundH1 = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    if(keyLevelH4 != NULL)
+    {
+        int count = keyLevelH4.GetKeyLevelCount();
+        for(int i = 0; i < count; i++)
+        {
+            SKeyLevel level;
+            if(keyLevelH4.GetKeyLevel(i, level))
+            {
+                if(MathAbs(limitPrice - level.price) <= proximity)
+                {
+                    if((isBuy && !level.isResistance) || (!isBuy && level.isResistance))
+                    {
+                        foundH4 = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    if(keyLevelD1 != NULL)
+    {
+        int count = keyLevelD1.GetKeyLevelCount();
+        for(int i = 0; i < count; i++)
+        {
+            SKeyLevel level;
+            if(keyLevelD1.GetKeyLevel(i, level))
+            {
+                if(MathAbs(limitPrice - level.price) <= proximity)
+                {
+                    if((isBuy && !level.isResistance) || (!isBuy && level.isResistance))
+                    {
+                        foundD1 = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Calculate weighted score
+    if(foundD1) score += 0.5;
+    if(foundH4) score += 0.3;
+    if(foundH1) score += 0.2;
+    
+    return score;
 }

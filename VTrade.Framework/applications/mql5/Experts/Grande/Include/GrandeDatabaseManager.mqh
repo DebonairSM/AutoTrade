@@ -155,6 +155,19 @@ public:
                                          const string impact_level, const double surprise_score,
                                          const string finbert_signal, const double finbert_confidence);
     
+    // Limit order tracking operations
+    bool              InsertLimitOrder(const string symbol, const ulong ticket, const datetime placedTime,
+                                      const double basePrice, const double limitPrice, const double stopLoss,
+                                      const double takeProfit, const double lotSize, const string orderType,
+                                      const string regimeAtPlacement, const double regimeConfidence,
+                                      const double signalQualityScore, const double confluenceScore,
+                                      const double fillProbabilityAtPlacement, const double atrAtPlacement,
+                                      const double averageATR, const double distancePips);
+    
+    bool              UpdateLimitOrderFill(const ulong ticket, const datetime filledTime, const double filledPrice);
+    
+    bool              UpdateLimitOrderCancel(const ulong ticket, const datetime cancelledTime, const string cancelReason);
+    
     // Performance metrics operations
     bool              InsertPerformanceMetric(const string symbol, const datetime timestamp,
                                             const string metric_type, const double value,
@@ -483,6 +496,38 @@ bool CGrandeDatabaseManager::CreateTables()
     
     if(!ExecuteSQL(sql)) return false;
     
+    // Limit orders tracking table
+    sql = "CREATE TABLE IF NOT EXISTS limit_orders ("
+          "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+          "symbol TEXT NOT NULL, "
+          "ticket INTEGER NOT NULL UNIQUE, "
+          "placed_time DATETIME NOT NULL, "
+          "filled_time DATETIME, "
+          "cancelled_time DATETIME, "
+          "base_price REAL NOT NULL, "
+          "filled_price REAL, "
+          "limit_price REAL NOT NULL, "
+          "stop_loss REAL NOT NULL, "
+          "take_profit REAL NOT NULL, "
+          "lot_size REAL NOT NULL, "
+          "order_type TEXT NOT NULL, "
+          "regime_at_placement TEXT, "
+          "regime_confidence REAL, "
+          "signal_quality_score REAL, "
+          "confluence_score REAL, "
+          "fill_probability_at_placement REAL, "
+          "fill_probability_at_cancel REAL, "
+          "atr_at_placement REAL, "
+          "average_atr REAL, "
+          "distance_pips REAL, "
+          "slippage_pips REAL, "
+          "time_to_fill_minutes INTEGER, "
+          "cancel_reason TEXT, "
+          "adjustment_count INTEGER DEFAULT 0, "
+          "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)";
+    
+    if(!ExecuteSQL(sql)) return false;
+    
     if(m_showDebugPrints)
         Print("[GrandeDB] All tables created successfully");
     
@@ -526,6 +571,12 @@ bool CGrandeDatabaseManager::CreateIndexes()
     // Performance metrics indexes
     ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_performance_symbol_time ON performance_metrics(symbol, timestamp)");
     ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_performance_type ON performance_metrics(metric_type)");
+    
+    // Limit orders indexes
+    ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_limit_orders_symbol_time ON limit_orders(symbol, placed_time)");
+    ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_limit_orders_ticket ON limit_orders(ticket)");
+    ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_limit_orders_filled ON limit_orders(filled_time) WHERE filled_time IS NOT NULL");
+    ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_limit_orders_cancelled ON limit_orders(cancelled_time) WHERE cancelled_time IS NOT NULL");
     
     if(m_showDebugPrints)
         Print("[GrandeDB] Indexes created successfully");
@@ -691,6 +742,61 @@ bool CGrandeDatabaseManager::InsertConfigSnapshot(const datetime timestamp, cons
     string sql = StringFormat("INSERT INTO config_snapshots (timestamp, config_type, config_data) VALUES ('%s', '%s', '%s')",
                               TimeToString(timestamp, TIME_DATE|TIME_SECONDS), EscapeString(config_type),
                               EscapeString(config_data));
+    
+    return ExecuteSQL(sql);
+}
+
+//+------------------------------------------------------------------+
+//| Insert limit order tracking record                              |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::InsertLimitOrder(const string symbol, const ulong ticket, const datetime placedTime,
+                                              const double basePrice, const double limitPrice, const double stopLoss,
+                                              const double takeProfit, const double lotSize, const string orderType,
+                                              const string regimeAtPlacement, const double regimeConfidence,
+                                              const double signalQualityScore, const double confluenceScore,
+                                              const double fillProbabilityAtPlacement, const double atrAtPlacement,
+                                              const double averageATR, const double distancePips)
+{
+    string regimeStr = (regimeAtPlacement != "") ? EscapeString(regimeAtPlacement) : "NULL";
+    string sql = StringFormat(
+        "INSERT INTO limit_orders (symbol, ticket, placed_time, base_price, limit_price, stop_loss, take_profit, "
+        "lot_size, order_type, regime_at_placement, regime_confidence, signal_quality_score, confluence_score, "
+        "fill_probability_at_placement, atr_at_placement, average_atr, distance_pips) "
+        "VALUES ('%s', %I64u, '%s', %.5f, %.5f, %.5f, %.5f, %.2f, '%s', %s, %.3f, %.2f, %.2f, %.3f, %.5f, %.5f, %.2f)",
+        EscapeString(symbol), ticket, TimeToString(placedTime, TIME_DATE|TIME_SECONDS),
+        basePrice, limitPrice, stopLoss, takeProfit, lotSize, EscapeString(orderType),
+        regimeStr, regimeConfidence, signalQualityScore, confluenceScore,
+        fillProbabilityAtPlacement, atrAtPlacement, averageATR, distancePips);
+    
+    return ExecuteSQL(sql);
+}
+
+//+------------------------------------------------------------------+
+//| Update limit order when filled                                   |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::UpdateLimitOrderFill(const ulong ticket, const datetime filledTime, const double filledPrice)
+{
+    // Calculate time to fill and slippage from stored data
+    string sql = StringFormat(
+        "UPDATE limit_orders SET filled_time = '%s', filled_price = %.5f, "
+        "time_to_fill_minutes = CAST((julianday('%s') - julianday(placed_time)) * 1440 AS INTEGER), "
+        "slippage_pips = ABS(%.5f - limit_price) * 10000 "
+        "WHERE ticket = %I64u AND filled_time IS NULL",
+        TimeToString(filledTime, TIME_DATE|TIME_SECONDS), filledPrice,
+        TimeToString(filledTime, TIME_DATE|TIME_SECONDS), filledPrice, ticket);
+    
+    return ExecuteSQL(sql);
+}
+
+//+------------------------------------------------------------------+
+//| Update limit order when cancelled                                |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::UpdateLimitOrderCancel(const ulong ticket, const datetime cancelledTime, const string cancelReason)
+{
+    string sql = StringFormat(
+        "UPDATE limit_orders SET cancelled_time = '%s', cancel_reason = '%s' "
+        "WHERE ticket = %I64u AND filled_time IS NULL AND cancelled_time IS NULL",
+        TimeToString(cancelledTime, TIME_DATE|TIME_SECONDS), EscapeString(cancelReason), ticket);
     
     return ExecuteSQL(sql);
 }

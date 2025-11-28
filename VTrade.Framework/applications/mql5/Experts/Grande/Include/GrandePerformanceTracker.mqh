@@ -54,6 +54,7 @@
 
 #include "GrandeDatabaseManager.mqh"
 #include "GrandeProfitCalculator.mqh"
+#include "GrandeInterfaces.mqh"  // Phase 7: For LimitOrderFillMetrics
 
 //+------------------------------------------------------------------+
 //| Trade Outcome Structure                                           |
@@ -167,6 +168,10 @@ public:
     // Trade Outcome Recording
     void RecordTradeOutcome(ulong ticket, string outcome, double closePrice);
     void RecordTradeOutcome(const TradeOutcome &outcome);
+    
+    // Phase 7: Limit order fill tracking
+    void RecordLimitOrderFill(const LimitOrderFillMetrics &metrics);
+    double GetLimitOrderFillRate(string signalType = "", int days = 30);
     
     // Performance Calculations
     double CalculateWinRate(string signalType = "", string symbol = "", string regime = "");
@@ -619,6 +624,41 @@ double CGrandePerformanceTracker::GetTotalLossPips(string signalType = "", strin
     // This would query database
     // Placeholder - return 0.0 for now
     return 0.0;
+}
+
+//+------------------------------------------------------------------+
+//| Phase 7: Record limit order fill for performance tracking        |
+//+------------------------------------------------------------------+
+void CGrandePerformanceTracker::RecordLimitOrderFill(const LimitOrderFillMetrics &metrics)
+{
+    if(!m_isInitialized || m_dbManager == NULL)
+        return;
+    
+    // The fill is already logged in the database by GrandeLimitOrderManager
+    // This method can be used for additional performance analysis if needed
+    // For now, it's a placeholder that can be extended later
+}
+
+//+------------------------------------------------------------------+
+//| Phase 7: Get limit order fill rate statistics                    |
+//+------------------------------------------------------------------+
+double CGrandePerformanceTracker::GetLimitOrderFillRate(string signalType, int days)
+{
+    if(!m_isInitialized || m_dbManager == NULL)
+        return 0.0;
+    
+    // Query database for fill rate
+    // This would require SQL query to count filled vs total orders
+    // For now, return placeholder
+    // Actual implementation would query limit_orders table:
+    // SELECT 
+    //   COUNT(*) as total,
+    //   SUM(CASE WHEN filled_time IS NOT NULL THEN 1 ELSE 0 END) as filled
+    // FROM limit_orders
+    // WHERE placed_time >= datetime('now', '-' || days || ' days')
+    //   AND (signalType = '' OR trade_context = signalType)
+    
+    return 0.0; // Placeholder - will be implemented with database query
 }
 
 //+------------------------------------------------------------------+

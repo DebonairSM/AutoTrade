@@ -53,6 +53,9 @@
 
 #include "GrandeConfluenceDetector.mqh"
 #include "GrandeKeyLevelDetector.mqh"
+#include "GrandeDatabaseManager.mqh"
+#include "GrandeInterfaces.mqh"
+#include "GrandeMarketRegimeDetector.mqh"  // Phase 2: For regime-aware filtering
 #include <Trade\Trade.mqh>
 
 //+------------------------------------------------------------------+
@@ -79,6 +82,54 @@ struct LimitOrderRequest
         comment = "";
         tradeContext = "";
         logPrefix = "";
+    }
+};
+
+//+------------------------------------------------------------------+
+//| Phase 7: Enhanced Limit Order Request Structure                 |
+//+------------------------------------------------------------------+
+// Extended request with full context for professional-grade validation
+struct EnhancedLimitOrderRequest
+{
+    // Existing fields from LimitOrderRequest
+    bool isBuy;                             // Trade direction: true for buy, false for sell
+    double lotSize;                         // Position size in lots
+    double basePrice;                       // Current market price
+    double stopLoss;                       // Stop loss level (relative to basePrice)
+    double takeProfit;                     // Take profit level (relative to basePrice)
+    string comment;                        // Order comment
+    string tradeContext;                   // "TREND" or "BREAKOUT" for logging
+    string logPrefix;                      // Log prefix for context-specific logging
+    
+    // New fields for enhanced validation
+    RegimeSnapshot regimeSnapshot;          // Current regime for filtering
+    double regimeConfidence;                // Regime confidence (0.0-1.0)
+    double signalQualityScore;             // Signal quality score (0-100)
+    double currentATR;                     // Current ATR for distance scaling
+    double averageATR;                     // Average ATR for distance scaling
+    datetime newsEventTime;                 // Upcoming news event (0 if none)
+    int newsImpactLevel;                    // News impact level (0-3, 0=none)
+    
+    void EnhancedLimitOrderRequest()
+    {
+        isBuy = false;
+        lotSize = 0.0;
+        basePrice = 0.0;
+        stopLoss = 0.0;
+        takeProfit = 0.0;
+        comment = "";
+        tradeContext = "";
+        logPrefix = "";
+        regimeConfidence = 0.0;
+        signalQualityScore = 0.0;
+        currentATR = 0.0;
+        averageATR = 0.0;
+        newsEventTime = 0;
+        newsImpactLevel = 0;
+        // Initialize regime snapshot
+        regimeSnapshot.regime = REGIME_RANGING;
+        regimeSnapshot.confidence = 0.0;
+        regimeSnapshot.timestamp = 0;
     }
 };
 
@@ -178,6 +229,7 @@ private:
     CGrandeConfluenceDetector*  m_confluenceDetector;
     CGrandeKeyLevelDetector*    m_keyLevelDetector;
     CTrade*                     m_trade;
+    CGrandeDatabaseManager*     m_dbManager;         // For fill tracking (optional)
     
     // Helper functions
     double GetPipSize();
@@ -196,19 +248,62 @@ public:
                     CGrandeConfluenceDetector* confluenceDetector,
                     CGrandeKeyLevelDetector* keyLevelDetector,
                     CTrade* trade,
-                    const LimitOrderConfig &config);
+                    const LimitOrderConfig &config,
+                    CGrandeDatabaseManager* dbManager = NULL);  // Optional for tracking
+    
+    // Fill tracking methods (Phase 1: Data Collection)
+    void LogLimitOrderPlacement(const LimitOrderRequest &request, const LimitOrderResult &result,
+                                double regimeConfidence = 0.0, double signalQualityScore = 0.0,
+                                double confluenceScore = 0.0, double fillProbability = 0.0,
+                                double atrAtPlacement = 0.0, double averageATR = 0.0);
+    void LogLimitOrderFill(ulong ticket, double fillPrice);
+    void LogLimitOrderCancel(ulong ticket, string cancelReason);
     
     // Main placement method
     LimitOrderResult PlaceLimitOrder(const LimitOrderRequest &request);
+    // Phase 7: Enhanced placement method with full context
+    LimitOrderResult PlaceLimitOrder(const EnhancedLimitOrderRequest &request);
     
     // Price calculation
     double FindOptimalLimitPrice(bool isBuy, double currentPrice, int maxDistancePips);
+    // Phase 2: Overload with regime filtering
+    double FindOptimalLimitPrice(bool isBuy, double currentPrice, int maxDistancePips,
+                                 RegimeSnapshot &regime);
+    // Phase 4: Overload with ATR scaling
+    double FindOptimalLimitPrice(bool isBuy, double currentPrice, int maxDistancePips,
+                                 double currentATR, double averageATR);
+    
+    // Phase 4: ATR-based distance scaling
+    double CalculateATRScaledMaxDistance(double baseMaxDistancePips, double currentATR, double averageATR);
+    
+    // Phase 5: Fill probability estimation
+    double EstimateFillProbability(double limitPrice, bool isBuy, double currentPrice,
+                                  RegimeSnapshot &regime, double regimeConfidence,
+                                  double confluenceScore, double signalQualityScore);
+    
+    // Phase 5: Risk aggregation
+    double CalculatePendingOrderExposure();
+    bool ValidatePendingOrderExposure(double newOrderLotSize, double newOrderPrice, double newOrderSL);
+    
+    // Phase 5: Order slot management
+    int GetPendingOrderCount();
+    bool CanPlaceNewOrder();
+    void CancelLowestPriorityOrder();  // Placeholder for future implementation
+    
+    // Phase 6: Dynamic adjustment
+    void AdjustLimitOrderPrice(ulong ticket);
+    
+    // Phase 6: News event checking
+    bool HasUpcomingHighImpactNews(datetime newsEventTime, int newsCancelMinutesBefore);
+    void CancelOrdersBeforeNews(datetime newsEventTime, int newsCancelMinutesBefore);
     
     // Duplicate detection
     bool HasSimilarOrder(bool isBuyLimit, double levelPrice, int tolerancePoints = -1);
     
     // Stale order management
     void ManageStaleOrders();
+    // Phase 4: Overload with ATR scaling
+    void ManageStaleOrders(double currentATR, double averageATR);
     
     // Configuration
     void SetConfig(const LimitOrderConfig &config) { m_config = config; }
@@ -225,6 +320,7 @@ CGrandeLimitOrderManager::CGrandeLimitOrderManager()
     m_confluenceDetector = NULL;
     m_keyLevelDetector = NULL;
     m_trade = NULL;
+    m_dbManager = NULL;
 }
 
 //+------------------------------------------------------------------+
@@ -242,7 +338,8 @@ bool CGrandeLimitOrderManager::Initialize(string symbol, int magicNumber,
                                           CGrandeConfluenceDetector* confluenceDetector,
                                           CGrandeKeyLevelDetector* keyLevelDetector,
                                           CTrade* trade,
-                                          const LimitOrderConfig &config)
+                                          const LimitOrderConfig &config,
+                                          CGrandeDatabaseManager* dbManager)
 {
     if(symbol == "" || magicNumber <= 0)
         return false;
@@ -256,6 +353,7 @@ bool CGrandeLimitOrderManager::Initialize(string symbol, int magicNumber,
     m_confluenceDetector = confluenceDetector;
     m_keyLevelDetector = keyLevelDetector;
     m_trade = trade;
+    m_dbManager = dbManager;  // Optional - can be NULL
     
     return true;
 }
@@ -328,6 +426,200 @@ double CGrandeLimitOrderManager::FindOptimalLimitPrice(bool isBuy, double curren
     
     // Find best limit order price
     return m_confluenceDetector.GetBestLimitOrderPrice(isBuy, currentPrice, maxDistancePips);
+}
+
+//+------------------------------------------------------------------+
+//| Phase 2: Find optimal limit order price with regime filtering    |
+//+------------------------------------------------------------------+
+double CGrandeLimitOrderManager::FindOptimalLimitPrice(bool isBuy, double currentPrice, int maxDistancePips,
+                                                       RegimeSnapshot &regime)
+{
+    if(m_confluenceDetector == NULL)
+        return 0;
+    
+    // Prepare key levels
+    double resistanceLevels[];
+    double supportLevels[];
+    PrepareKeyLevelsForConfluence(resistanceLevels, supportLevels);
+    
+    // Find confluence zones with regime filtering
+    ConfluenceZone zones[];
+    m_confluenceDetector.FindConfluenceZones(isBuy, currentPrice, maxDistancePips, zones, regime);
+    
+    // Return best zone price
+    if(ArraySize(zones) > 0)
+        return zones[0].price;
+    
+    return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Phase 4: Find optimal limit order price with ATR scaling        |
+//+------------------------------------------------------------------+
+double CGrandeLimitOrderManager::FindOptimalLimitPrice(bool isBuy, double currentPrice, int maxDistancePips,
+                                                       double currentATR, double averageATR)
+{
+    if(m_confluenceDetector == NULL)
+        return 0;
+    
+    // Apply ATR scaling
+    double scaledMaxDistance = CalculateATRScaledMaxDistance(maxDistancePips, currentATR, averageATR);
+    
+    // Prepare key levels
+    double resistanceLevels[];
+    double supportLevels[];
+    PrepareKeyLevelsForConfluence(resistanceLevels, supportLevels);
+    
+    // Use scaled distance for confluence analysis
+    return m_confluenceDetector.GetBestLimitOrderPrice(isBuy, currentPrice, (int)scaledMaxDistance);
+}
+
+//+------------------------------------------------------------------+
+//| Phase 4: Calculate ATR-scaled maximum distance                  |
+//+------------------------------------------------------------------+
+double CGrandeLimitOrderManager::CalculateATRScaledMaxDistance(double baseMaxDistancePips, double currentATR, double averageATR)
+{
+    // Note: useATRScaling config will be added in EnhancedLimitOrderConfig
+    // For now, always apply scaling if ATR values are provided
+    if(averageATR <= 0 || currentATR <= 0)
+        return baseMaxDistancePips;
+    
+    double atrRatio = currentATR / averageATR;
+    double scaledDistance = baseMaxDistancePips * atrRatio;
+    
+    // Clamp to reasonable bounds (0.5x to 2.0x)
+    scaledDistance = MathMax(baseMaxDistancePips * 0.5, MathMin(scaledDistance, baseMaxDistancePips * 2.0));
+    
+    return scaledDistance;
+}
+
+//+------------------------------------------------------------------+
+//| Phase 5: Estimate fill probability for limit order               |
+//+------------------------------------------------------------------+
+double CGrandeLimitOrderManager::EstimateFillProbability(double limitPrice, bool isBuy, double currentPrice,
+                                                         RegimeSnapshot &regime, double regimeConfidence,
+                                                         double confluenceScore, double signalQualityScore)
+{
+    double baseProbability = 0.5; // 50% baseline
+    
+    // Regime factor
+    double regimeFactor = 1.0;
+    if(regime.regime == REGIME_TREND_BULL && isBuy && limitPrice < currentPrice)
+        regimeFactor = 1.2 * regimeConfidence;
+    else if(regime.regime == REGIME_TREND_BEAR && !isBuy && limitPrice > currentPrice)
+        regimeFactor = 1.2 * regimeConfidence;
+    else if(regime.regime == REGIME_RANGING)
+        regimeFactor = 0.9 * regimeConfidence;
+    else
+        regimeFactor = 0.6; // Low probability if regime doesn't support
+    
+    // Confluence factor
+    double confluenceFactor = MathMin(1.0, confluenceScore / 10.0);
+    
+    // Signal quality factor
+    double qualityFactor = signalQualityScore / 100.0;
+    
+    // Distance factor (closer = higher probability)
+    double pipSize = GetPipSize();
+    double distancePips = MathAbs(limitPrice - currentPrice) / pipSize;
+    double maxDistancePips = m_config.maxLimitDistancePips;
+    double distanceFactor = 1.0 - (distancePips / (maxDistancePips * 2.0)); // Linear decay
+    distanceFactor = MathMax(0.3, distanceFactor); // Minimum 30%
+    
+    double fillProbability = baseProbability * regimeFactor * confluenceFactor * qualityFactor * distanceFactor;
+    
+    // Clamp to 0.0 - 1.0
+    return MathMax(0.0, MathMin(1.0, fillProbability));
+}
+
+//+------------------------------------------------------------------+
+//| Phase 5: Calculate total pending order exposure                 |
+//+------------------------------------------------------------------+
+double CGrandeLimitOrderManager::CalculatePendingOrderExposure()
+{
+    double totalExposure = 0.0;
+    int total = OrdersTotal();
+    
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(ticket == 0) continue;
+        if(!OrderSelect(ticket)) continue;
+        if(OrderGetString(ORDER_SYMBOL) != m_symbol) continue;
+        if((int)OrderGetInteger(ORDER_MAGIC) != m_magicNumber) continue;
+        
+        ENUM_ORDER_TYPE orderType = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+        if(orderType != ORDER_TYPE_BUY_LIMIT && orderType != ORDER_TYPE_SELL_LIMIT)
+            continue;
+        
+        double lotSize = OrderGetDouble(ORDER_VOLUME_CURRENT);
+        double orderPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+        double sl = OrderGetDouble(ORDER_SL);
+        
+        // Calculate risk per order
+        double riskPerOrder = 0.0;
+        if(sl > 0)
+        {
+            double pipSize = GetPipSize();
+            double riskPips = MathAbs(orderPrice - sl) / pipSize;
+            double tickValue = SymbolInfoDouble(m_symbol, SYMBOL_TRADE_TICK_VALUE);
+            double tickSize = SymbolInfoDouble(m_symbol, SYMBOL_TRADE_TICK_SIZE);
+            if(tickSize > 0)
+                riskPerOrder = (riskPips * pipSize / tickSize) * tickValue * lotSize;
+        }
+        else
+        {
+            // If no SL, estimate based on lot size (conservative)
+            double contractSize = SymbolInfoDouble(m_symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+            double tickValue = SymbolInfoDouble(m_symbol, SYMBOL_TRADE_TICK_VALUE);
+            riskPerOrder = lotSize * contractSize * tickValue * 0.01; // 1% estimate
+        }
+        
+        totalExposure += riskPerOrder;
+    }
+    
+    return totalExposure;
+}
+
+//+------------------------------------------------------------------+
+//| Phase 5: Validate pending order exposure limit                   |
+//+------------------------------------------------------------------+
+bool CGrandeLimitOrderManager::ValidatePendingOrderExposure(double newOrderLotSize, double newOrderPrice, double newOrderSL)
+{
+    // Calculate current pending exposure
+    double currentExposure = CalculatePendingOrderExposure();
+    
+    // Calculate new order exposure
+    double newOrderExposure = 0.0;
+    if(newOrderSL > 0)
+    {
+        double pipSize = GetPipSize();
+        double riskPips = MathAbs(newOrderPrice - newOrderSL) / pipSize;
+        double tickValue = SymbolInfoDouble(m_symbol, SYMBOL_TRADE_TICK_VALUE);
+        double tickSize = SymbolInfoDouble(m_symbol, SYMBOL_TRADE_TICK_SIZE);
+        if(tickSize > 0)
+            newOrderExposure = (riskPips * pipSize / tickSize) * tickValue * newOrderLotSize;
+    }
+    else
+    {
+        // Estimate if no SL
+        double contractSize = SymbolInfoDouble(m_symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+        double tickValue = SymbolInfoDouble(m_symbol, SYMBOL_TRADE_TICK_VALUE);
+        newOrderExposure = newOrderLotSize * contractSize * tickValue * 0.01; // 1% estimate
+    }
+    
+    // Get current open positions exposure (approximate from account equity)
+    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double positionsExposure = accountEquity * 0.02; // Estimate 2% of equity in positions
+    
+    // Note: maxPendingOrderExposureMultiplier will be in EnhancedLimitOrderConfig
+    // For now, use default of 2.0x
+    double maxPendingExposure = positionsExposure * 2.0;
+    
+    if((currentExposure + newOrderExposure) > maxPendingExposure)
+        return false;
+    
+    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -409,7 +701,33 @@ void CGrandeLimitOrderManager::AdjustStopsForLimitPrice(bool isBuy, double baseP
 //+------------------------------------------------------------------+
 datetime CGrandeLimitOrderManager::CalculateExpiration()
 {
-    return TimeCurrent() + (m_config.expirationHours * 3600);
+    return CalculateExpiration(0, 0.0); // Call overloaded version
+}
+
+//+------------------------------------------------------------------+
+//| Phase 6: Calculate expiration with volatility and news adjustment |
+//+------------------------------------------------------------------+
+datetime CGrandeLimitOrderManager::CalculateExpiration(datetime newsEventTime, double currentATR)
+{
+    datetime baseExpiration = TimeCurrent() + (m_config.expirationHours * 3600);
+    
+    // Adjust for upcoming news events
+    if(newsEventTime > 0)
+    {
+        // Expire before news if news is within expiration window
+        int newsCancelMinutesBefore = 30; // Default, will be in EnhancedLimitOrderConfig
+        datetime newsCancelTime = newsEventTime - (newsCancelMinutesBefore * 60);
+        if(newsCancelTime < baseExpiration && newsCancelTime > TimeCurrent())
+        {
+            return newsCancelTime;
+        }
+    }
+    
+    // Adjust for volatility (high vol = shorter expiration, low vol = longer)
+    // This is a placeholder - actual implementation would use ATR ratio
+    // For now, return base expiration
+    
+    return baseExpiration;
 }
 
 //+------------------------------------------------------------------+
@@ -547,7 +865,15 @@ LimitOrderResult CGrandeLimitOrderManager::PlaceLimitOrder(const LimitOrderReque
     {
         ulong orderTicket = m_trade.ResultOrder();
         Print(StringFormat(logPrefix + " LIMIT ORDER PLACED OK ticket=%I64u", orderTicket));
-        return LimitOrderResult::Success(orderTicket, "LIMIT", limitPrice, adjustedSL, adjustedTP);
+        
+        LimitOrderResult result = LimitOrderResult::Success(orderTicket, "LIMIT", limitPrice, adjustedSL, adjustedTP);
+        
+        // Phase 1: Log placement for tracking (non-breaking, only if tracking enabled)
+        // Note: regimeConfidence, signalQualityScore, confluenceScore, fillProbability will be added in later phases
+        // For now, pass default values (0.0) - tracking will work but metrics will be incomplete until Phase 2+
+        LogLimitOrderPlacement(request, result, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        
+        return result;
     }
     else
     {
@@ -560,16 +886,155 @@ LimitOrderResult CGrandeLimitOrderManager::PlaceLimitOrder(const LimitOrderReque
 }
 
 //+------------------------------------------------------------------+
+//| Phase 7: Place limit order with enhanced validation              |
+//+------------------------------------------------------------------+
+LimitOrderResult CGrandeLimitOrderManager::PlaceLimitOrder(const EnhancedLimitOrderRequest &request)
+{
+    // Extract basic fields from enhanced request
+    LimitOrderRequest basicRequest;
+    basicRequest.isBuy = request.isBuy;
+    basicRequest.lotSize = request.lotSize;
+    basicRequest.basePrice = request.basePrice;
+    basicRequest.stopLoss = request.stopLoss;
+    basicRequest.takeProfit = request.takeProfit;
+    basicRequest.comment = request.comment;
+    basicRequest.tradeContext = request.tradeContext;
+    basicRequest.logPrefix = request.logPrefix;
+    
+    // Note: minRegimeConfidence, minSignalQualityScore, etc. will be in EnhancedLimitOrderConfig
+    // For now, use default thresholds
+    double minRegimeConfidence = 0.65;
+    double minSignalQualityScore = 75.0;
+    int newsCancelMinutesBefore = 30;
+    bool cancelOrdersBeforeNews = true;
+    
+    // Validate regime confidence
+    if(request.regimeConfidence < minRegimeConfidence)
+    {
+        return LimitOrderResult::Failure("LOW_REGIME_CONFIDENCE",
+            StringFormat("Regime confidence %.2f below minimum %.2f",
+            request.regimeConfidence, minRegimeConfidence));
+    }
+    
+    // Validate signal quality
+    if(request.signalQualityScore < minSignalQualityScore)
+    {
+        return LimitOrderResult::Failure("LOW_SIGNAL_QUALITY",
+            StringFormat("Signal quality %.1f below minimum %.1f",
+            request.signalQualityScore, minSignalQualityScore));
+    }
+    
+    // Check pending order exposure
+    if(!ValidatePendingOrderExposure(request.lotSize, request.basePrice, request.stopLoss))
+    {
+        return LimitOrderResult::Failure("EXCEEDS_PENDING_EXPOSURE",
+            "Pending order exposure limit exceeded");
+    }
+    
+    // Check for upcoming news events
+    if(cancelOrdersBeforeNews && request.newsEventTime > 0)
+    {
+        datetime timeToNews = request.newsEventTime - TimeCurrent();
+        if(timeToNews > 0 && timeToNews < (newsCancelMinutesBefore * 60))
+        {
+            return LimitOrderResult::Failure("NEWS_EVENT_NEAR",
+                "High-impact news event too close");
+        }
+    }
+    
+    // Check order slot availability
+    if(!CanPlaceNewOrder())
+    {
+        return LimitOrderResult::Failure("MAX_ORDERS_REACHED",
+            "Maximum pending orders limit reached");
+    }
+    
+    // Find optimal limit price with regime filtering and ATR scaling
+    double limitPrice = 0.0;
+    if(request.currentATR > 0 && request.averageATR > 0)
+    {
+        // Use ATR-scaled version
+        limitPrice = FindOptimalLimitPrice(request.isBuy, request.basePrice, 
+                                          m_config.maxLimitDistancePips,
+                                          request.currentATR, request.averageATR);
+    }
+    else
+    {
+        // Use regime-filtered version if available
+        limitPrice = FindOptimalLimitPrice(request.isBuy, request.basePrice, 
+                                          m_config.maxLimitDistancePips,
+                                          request.regimeSnapshot);
+    }
+    
+    if(limitPrice <= 0)
+    {
+        return LimitOrderResult::Failure("NO_CONFLUENCE",
+            "No valid confluence zone for limit order");
+    }
+    
+    // Estimate fill probability
+    double fillProbability = EstimateFillProbability(limitPrice, request.isBuy, request.basePrice,
+                                                     request.regimeSnapshot, request.regimeConfidence,
+                                                     0.0, request.signalQualityScore); // Confluence score not available here
+    
+    // Note: minFillProbability will be in EnhancedLimitOrderConfig
+    double minFillProbability = 0.4;
+    if(fillProbability < minFillProbability)
+    {
+        return LimitOrderResult::Failure("LOW_FILL_PROBABILITY",
+            StringFormat("Fill probability %.2f below minimum %.2f",
+            fillProbability, minFillProbability));
+    }
+    
+    // Continue with existing placement logic using basic request
+    LimitOrderResult result = PlaceLimitOrder(basicRequest);
+    
+    // If successful, log with enhanced metrics
+    if(result.success)
+    {
+        // Get confluence score (would need to query confluence detector)
+        double confluenceScore = 0.0; // Placeholder
+        
+        LogLimitOrderPlacement(basicRequest, result, request.regimeConfidence, 
+                              request.signalQualityScore, confluenceScore, fillProbability,
+                              request.currentATR, request.averageATR);
+    }
+    
+    return result;
+}
+
+//+------------------------------------------------------------------+
 //| Manage stale limit orders                                         |
 //+------------------------------------------------------------------+
 void CGrandeLimitOrderManager::ManageStaleOrders()
+{
+    // Call overloaded version without ATR (backward compatibility)
+    ManageStaleOrders(0.0, 0.0);
+}
+
+//+------------------------------------------------------------------+
+//| Phase 4: Manage stale limit orders with ATR scaling              |
+//+------------------------------------------------------------------+
+void CGrandeLimitOrderManager::ManageStaleOrders(double currentATR, double averageATR)
 {
     if(!m_config.cancelStaleOrders)
         return;
     
     double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
     double pipSize = GetPipSize();
-    double maxStaleDistance = m_config.staleOrderDistancePips * pipSize;
+    
+    // Use ATR-scaled stale distance if available
+    double maxStaleDistance = m_config.staleOrderDistancePips;
+    if(averageATR > 0 && currentATR > 0)
+    {
+        double atrRatio = currentATR / averageATR;
+        maxStaleDistance = m_config.staleOrderDistancePips * atrRatio;
+        // Clamp to reasonable bounds (0.5x to 2.0x)
+        maxStaleDistance = MathMax(m_config.staleOrderDistancePips * 0.5, 
+                                   MathMin(maxStaleDistance, m_config.staleOrderDistancePips * 2.0));
+    }
+    
+    double maxStaleDistancePoints = maxStaleDistance * pipSize;
     
     for(int i = OrdersTotal() - 1; i >= 0; i--)
     {
@@ -614,11 +1079,184 @@ void CGrandeLimitOrderManager::ManageStaleOrders()
             if(m_trade.OrderDelete(ticket))
             {
                 Print(StringFormat("[LIMIT-ORDER] Cancelled limit order #%I64u: %s", ticket, cancelReason));
+                
+                // Phase 1: Log cancellation for tracking
+                LogLimitOrderCancel(ticket, cancelReason);
             }
             else
             {
                 Print(StringFormat("[LIMIT-ORDER] Failed to cancel order #%I64u: %s (error: %d)", 
                      ticket, cancelReason, GetLastError()));
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Log limit order placement for tracking                            |
+//+------------------------------------------------------------------+
+void CGrandeLimitOrderManager::LogLimitOrderPlacement(const LimitOrderRequest &request, const LimitOrderResult &result,
+                                                      double regimeConfidence, double signalQualityScore,
+                                                      double confluenceScore, double fillProbability,
+                                                      double atrAtPlacement, double averageATR)
+{
+    // Only track if database manager is available and tracking is enabled
+    // Note: For Phase 1, we check if m_dbManager is set, but actual tracking config
+    // will be added in EnhancedLimitOrderConfig in later phases
+    if(m_dbManager == NULL)
+        return;
+    
+    if(!result.success || result.ticket == 0)
+        return;
+    
+    // Calculate distance in pips
+    double pipSize = GetPipSize();
+    double distancePips = MathAbs(result.limitPrice - request.basePrice) / pipSize;
+    
+    // Get order type string
+    string orderType = request.isBuy ? "BUY" : "SELL";
+    
+    // Insert into database
+    // Note: regimeAtPlacement will be added in Phase 2 when we have regime context
+    m_dbManager.InsertLimitOrder(
+        m_symbol,
+        result.ticket,
+        TimeCurrent(),
+        request.basePrice,
+        result.limitPrice,
+        result.adjustedSL,
+        result.adjustedTP,
+        request.lotSize,
+        orderType,
+        "",  // regimeAtPlacement - will be populated in Phase 2
+        regimeConfidence,
+        signalQualityScore,
+        confluenceScore,
+        fillProbability,
+        atrAtPlacement,
+        averageATR,
+        distancePips
+    );
+}
+
+//+------------------------------------------------------------------+
+//| Log limit order fill for tracking                                |
+//+------------------------------------------------------------------+
+void CGrandeLimitOrderManager::LogLimitOrderFill(ulong ticket, double fillPrice)
+{
+    if(m_dbManager == NULL)
+        return;
+    
+    // Update database with fill information
+    m_dbManager.UpdateLimitOrderFill(ticket, TimeCurrent(), fillPrice);
+    
+    Print(StringFormat("[LIMIT-ORDER] Order #%I64u filled at %.5f", ticket, fillPrice));
+}
+
+//+------------------------------------------------------------------+
+//| Log limit order cancellation for tracking                        |
+//+------------------------------------------------------------------+
+void CGrandeLimitOrderManager::LogLimitOrderCancel(ulong ticket, string cancelReason)
+{
+    if(m_dbManager == NULL)
+        return;
+    
+    // Update database with cancellation information
+    m_dbManager.UpdateLimitOrderCancel(ticket, TimeCurrent(), cancelReason);
+}
+
+//+------------------------------------------------------------------+
+//| Phase 6: Adjust limit order price dynamically                    |
+//+------------------------------------------------------------------+
+void CGrandeLimitOrderManager::AdjustLimitOrderPrice(ulong ticket)
+{
+    // Note: enableDynamicAdjustment and maxAdjustmentsPerOrder will be in EnhancedLimitOrderConfig
+    // For now, this is a placeholder that can be enabled later
+    // Dynamic adjustment is an opt-in feature (default: false)
+    
+    if(!OrderSelect(ticket)) return;
+    if(OrderGetString(ORDER_SYMBOL) != m_symbol) return;
+    if((int)OrderGetInteger(ORDER_MAGIC) != m_magicNumber) return;
+    
+    ENUM_ORDER_TYPE orderType = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+    if(orderType != ORDER_TYPE_BUY_LIMIT && orderType != ORDER_TYPE_SELL_LIMIT)
+        return;
+    
+    double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+    double orderPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+    double pipSize = GetPipSize();
+    double distance = MathAbs(currentPrice - orderPrice) / pipSize;
+    
+    // Default adjustment trigger: 5 pips
+    double adjustmentTriggerPips = 5.0;
+    
+    // Check if price is approaching
+    if(distance <= adjustmentTriggerPips && distance > 2.0)
+    {
+        // Move limit price closer (within 2 pips)
+        bool isBuy = (orderType == ORDER_TYPE_BUY_LIMIT);
+        double newLimitPrice = 0.0;
+        
+        if(isBuy)
+            newLimitPrice = currentPrice - (2.0 * pipSize); // 2 pips below current
+        else
+            newLimitPrice = currentPrice + (2.0 * pipSize); // 2 pips above current
+        
+        // Normalize price
+        int digits = (int)SymbolInfoInteger(m_symbol, SYMBOL_DIGITS);
+        newLimitPrice = NormalizeDouble(newLimitPrice, digits);
+        
+        // Modify order
+        if(m_trade.OrderModify(ticket, newLimitPrice, OrderGetDouble(ORDER_SL), 
+                              OrderGetDouble(ORDER_TP), OrderGetInteger(ORDER_TIME_EXPIRATION)))
+        {
+            Print(StringFormat("[LIMIT-ORDER] Adjusted order #%I64u from %.5f to %.5f",
+                  ticket, orderPrice, newLimitPrice));
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Phase 6: Check if high-impact news is upcoming                  |
+//+------------------------------------------------------------------+
+bool CGrandeLimitOrderManager::HasUpcomingHighImpactNews(datetime newsEventTime, int newsCancelMinutesBefore)
+{
+    if(newsEventTime <= 0)
+        return false;
+    
+    datetime timeToNews = newsEventTime - TimeCurrent();
+    return (timeToNews > 0 && timeToNews < (newsCancelMinutesBefore * 60));
+}
+
+//+------------------------------------------------------------------+
+//| Phase 6: Cancel orders before high-impact news                  |
+//+------------------------------------------------------------------+
+void CGrandeLimitOrderManager::CancelOrdersBeforeNews(datetime newsEventTime, int newsCancelMinutesBefore)
+{
+    if(newsEventTime <= 0)
+        return;
+    
+    if(!HasUpcomingHighImpactNews(newsEventTime, newsCancelMinutesBefore))
+        return;
+    
+    // Cancel all pending limit orders
+    int total = OrdersTotal();
+    for(int i = total - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(ticket == 0) continue;
+        if(!OrderSelect(ticket)) continue;
+        if(OrderGetString(ORDER_SYMBOL) != m_symbol) continue;
+        if((int)OrderGetInteger(ORDER_MAGIC) != m_magicNumber) continue;
+        
+        ENUM_ORDER_TYPE orderType = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+        if(orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_SELL_LIMIT)
+        {
+            if(m_trade.OrderDelete(ticket))
+            {
+                Print(StringFormat("[LIMIT-ORDER] Cancelled order #%I64u before news event at %s",
+                      ticket, TimeToString(newsEventTime)));
+                LogLimitOrderCancel(ticket, "Cancelled before high-impact news");
             }
         }
     }
