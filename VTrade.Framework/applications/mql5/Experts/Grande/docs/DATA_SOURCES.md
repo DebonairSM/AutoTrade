@@ -194,3 +194,4 @@ bool BackfillFromExternalAPI(string symbol, datetime startDate, datetime endDate
 ---
 
 **Related:** [BACKTESTING.md](BACKTESTING.md)
+

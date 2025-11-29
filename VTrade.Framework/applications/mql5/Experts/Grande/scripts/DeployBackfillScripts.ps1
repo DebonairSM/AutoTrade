@@ -77,3 +77,4 @@ Write-Host "Scripts are now available in MT5 Navigator:" -ForegroundColor Yellow
 Write-Host "  Navigator → Scripts → Grande → BackfillHistoricalData" -ForegroundColor White
 Write-Host "  Navigator → Scripts → Grande → TestDatabaseBackfill" -ForegroundColor White
 Write-Host "`nIf scripts don't appear, refresh MT5 Navigator (F5)" -ForegroundColor Yellow
+

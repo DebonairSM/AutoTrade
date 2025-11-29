@@ -331,9 +331,96 @@ void CGrandePerformanceTracker::RecordTradeOutcome(const TradeOutcome &outcome)
     if(!m_isInitialized || m_dbManager == NULL)
         return;
     
-    // Record in database
-    // Note: This would require database schema for trade outcomes
-    // For now, this is a placeholder for future implementation
+    // Try to get additional position info if position still exists
+    double lotSize = 0.0;
+    double accountEquityAtClose = 0.0;
+    
+    if(PositionSelectByTicket(outcome.ticket))
+    {
+        lotSize = PositionGetDouble(POSITION_VOLUME);
+    }
+    else if(PositionSelect(outcome.symbol))
+    {
+        // Position might be closed, try to select by symbol
+        lotSize = PositionGetDouble(POSITION_VOLUME);
+    }
+    
+    // Get account equity at close
+    accountEquityAtClose = AccountInfoDouble(ACCOUNT_EQUITY);
+    
+    // Calculate risk/reward ratio if we have SL and TP
+    double riskRewardRatio = 0.0;
+    if(outcome.stopLoss > 0.0 && outcome.takeProfit > 0.0)
+    {
+        if(outcome.direction == "BUY")
+        {
+            double risk = outcome.entryPrice - outcome.stopLoss;
+            double reward = outcome.takeProfit - outcome.entryPrice;
+            if(risk > 0.0)
+                riskRewardRatio = reward / risk;
+        }
+        else // SELL
+        {
+            double risk = outcome.stopLoss - outcome.entryPrice;
+            double reward = outcome.entryPrice - outcome.takeProfit;
+            if(risk > 0.0)
+                riskRewardRatio = reward / risk;
+        }
+    }
+    
+    // Update or insert trade in database
+    // First try to update existing trade
+    bool updated = m_dbManager.UpdateTradeOutcomeByTicket(
+        outcome.ticket,
+        outcome.outcome,
+        outcome.closePrice,
+        outcome.closeTime,
+        outcome.profitCurrency,
+        outcome.profitPips,
+        outcome.durationMinutes,
+        accountEquityAtClose
+    );
+    
+    // If update didn't affect any rows, the trade wasn't inserted when opened
+    // Insert it now with available data
+    if(!updated)
+    {
+        // Calculate account equity at open (if we can't get it, use 0)
+        double accountEquityAtOpen = 0.0;
+        
+        // Insert the trade - use defaults for missing fields
+        m_dbManager.InsertTrade(
+            outcome.ticket,
+            outcome.entryTime,
+            outcome.symbol,
+            outcome.signalType != "" ? outcome.signalType : "UNKNOWN",
+            outcome.direction,
+            outcome.entryPrice,
+            outcome.stopLoss,
+            outcome.takeProfit,
+            lotSize > 0.0 ? lotSize : 0.01, // Default to minimum lot if unknown
+            riskRewardRatio,
+            0.0, // risk_percent - unknown at this point
+            0.0, // execution_slippage - unknown
+            accountEquityAtOpen,
+            1.0, // finbert_multiplier - default
+            false, // finbert_rejected - default
+            0.0, // lot_size_base - unknown
+            0.0 // lot_size_adjusted - unknown
+        );
+        
+        // Now update with outcome
+        m_dbManager.UpdateTradeOutcomeByTicket(
+            outcome.ticket,
+            outcome.outcome,
+            outcome.closePrice,
+            outcome.closeTime,
+            outcome.profitCurrency,
+            outcome.profitPips,
+            outcome.durationMinutes,
+            accountEquityAtClose
+        );
+    }
     
     // Invalidate cache
     m_lastCacheUpdate = 0;

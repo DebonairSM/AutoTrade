@@ -177,6 +177,20 @@ public:
     bool              UpdateTradeOutcome(const int decisionId, const string outcome,
                                        const double pnl, const int duration_minutes);
     
+    // Trade operations (actual executed trades)
+    bool              InsertTrade(const ulong ticket, const datetime timestamp, const string symbol,
+                                 const string signal_type, const string direction, const double entry_price,
+                                 const double stop_loss, const double take_profit, const double lot_size,
+                                 const double risk_reward_ratio, const double risk_percent = 0.0,
+                                 const double execution_slippage = 0.0, const double account_equity_at_open = 0.0,
+                                 const double finbert_multiplier = 1.0, const bool finbert_rejected = false,
+                                 const double lot_size_base = 0.0, const double lot_size_adjusted = 0.0);
+    
+    bool              UpdateTradeOutcomeByTicket(const ulong ticket, const string outcome,
+                                                const double close_price, const datetime close_timestamp,
+                                                const double profit_loss, const double pips_gained,
+                                                const int duration_minutes, const double account_equity_at_close = 0.0);
+    
     // Sentiment data operations
     bool              InsertSentimentData(const string symbol, const datetime timestamp,
                                          const string sentiment_type, const string signal,
@@ -474,6 +488,38 @@ bool CGrandeDatabaseManager::CreateTables()
     
     if(!ExecuteSQL(sql)) return false;
     
+    // Trades table (for tracking actual executed trades)
+    sql = "CREATE TABLE IF NOT EXISTS trades ("
+          "trade_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+          "ticket_number INTEGER UNIQUE, "
+          "timestamp DATETIME NOT NULL, "
+          "symbol TEXT NOT NULL, "
+          "signal_type TEXT NOT NULL, "
+          "direction TEXT NOT NULL, "
+          "entry_price REAL NOT NULL, "
+          "stop_loss REAL NOT NULL, "
+          "take_profit REAL NOT NULL, "
+          "lot_size REAL NOT NULL, "
+          "risk_reward_ratio REAL NOT NULL, "
+          "risk_percent REAL, "
+          "outcome TEXT DEFAULT 'PENDING', "
+          "close_price REAL, "
+          "close_timestamp DATETIME, "
+          "profit_loss REAL, "
+          "pips_gained REAL, "
+          "duration_minutes INTEGER, "
+          "execution_slippage REAL DEFAULT 0.0, "
+          "account_equity_at_open REAL, "
+          "account_equity_at_close REAL, "
+          "finbert_multiplier REAL DEFAULT 1.0, "
+          "finbert_rejected BOOLEAN DEFAULT 0, "
+          "lot_size_base REAL, "
+          "lot_size_adjusted REAL, "
+          "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+          "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)";
+    
+    if(!ExecuteSQL(sql)) return false;
+    
     // Sentiment analysis data table
     sql = "CREATE TABLE IF NOT EXISTS sentiment_data ("
           "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -597,6 +643,14 @@ bool CGrandeDatabaseManager::CreateIndexes()
     ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_trade_decisions_signal ON trade_decisions(signal_type)");
     ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_trade_decisions_decision ON trade_decisions(decision)");
     
+    // Trades table indexes
+    ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_trades_ticket ON trades(ticket_number)");
+    ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp)");
+    ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)");
+    ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_trades_signal_type ON trades(signal_type)");
+    ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_trades_outcome ON trades(outcome)");
+    ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_trades_finbert_rejected ON trades(finbert_rejected)");
+    
     // Sentiment indexes
     ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_sentiment_symbol_time ON sentiment_data(symbol, timestamp)");
     ExecuteSQL("CREATE INDEX IF NOT EXISTS idx_sentiment_type ON sentiment_data(sentiment_type)");
@@ -713,6 +767,42 @@ bool CGrandeDatabaseManager::UpdateTradeOutcome(const int decisionId, const stri
 {
     string sql = StringFormat("UPDATE trade_decisions SET outcome = '%s', pnl = %.2f, duration_minutes = %d WHERE id = %d",
                               EscapeString(outcome), pnl, duration_minutes, decisionId);
+    
+    return ExecuteSQL(sql);
+}
+
+//+------------------------------------------------------------------+
+//| Insert trade (actual executed trade)                             |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::InsertTrade(const ulong ticket, const datetime timestamp, const string symbol,
+                                         const string signal_type, const string direction, const double entry_price,
+                                         const double stop_loss, const double take_profit, const double lot_size,
+                                         const double risk_reward_ratio, const double risk_percent,
+                                         const double execution_slippage, const double account_equity_at_open,
+                                         const double finbert_multiplier, const bool finbert_rejected,
+                                         const double lot_size_base, const double lot_size_adjusted)
+{
+    string sql = StringFormat("INSERT OR REPLACE INTO trades (ticket_number, timestamp, symbol, signal_type, direction, entry_price, stop_loss, take_profit, lot_size, risk_reward_ratio, risk_percent, execution_slippage, account_equity_at_open, finbert_multiplier, finbert_rejected, lot_size_base, lot_size_adjusted, outcome) VALUES (%llu, '%s', '%s', '%s', '%s', %.5f, %.5f, %.5f, %.2f, %.5f, %.2f, %.5f, %.2f, %.5f, %d, %.2f, %.2f, 'PENDING')",
+                              ticket, TimeToString(timestamp, TIME_DATE|TIME_SECONDS),
+                              EscapeString(symbol), EscapeString(signal_type), EscapeString(direction),
+                              entry_price, stop_loss, take_profit, lot_size, risk_reward_ratio,
+                              risk_percent, execution_slippage, account_equity_at_open,
+                              finbert_multiplier, finbert_rejected ? 1 : 0, lot_size_base, lot_size_adjusted);
+    
+    return ExecuteSQL(sql);
+}
+
+//+------------------------------------------------------------------+
+//| Update trade outcome by ticket number                            |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::UpdateTradeOutcomeByTicket(const ulong ticket, const string outcome,
+                                                        const double close_price, const datetime close_timestamp,
+                                                        const double profit_loss, const double pips_gained,
+                                                        const int duration_minutes, const double account_equity_at_close)
+{
+    string sql = StringFormat("UPDATE trades SET outcome = '%s', close_price = %.5f, close_timestamp = '%s', profit_loss = %.2f, pips_gained = %.2f, duration_minutes = %d, account_equity_at_close = %.2f, updated_at = CURRENT_TIMESTAMP WHERE ticket_number = %llu",
+                              EscapeString(outcome), close_price, TimeToString(close_timestamp, TIME_DATE|TIME_SECONDS),
+                              profit_loss, pips_gained, duration_minutes, account_equity_at_close, ticket);
     
     return ExecuteSQL(sql);
 }

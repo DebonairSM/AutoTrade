@@ -357,3 +357,4 @@ double threshold = qualityAnalyzer.GetOptimalSignalThreshold();
 ---
 
 **Related:** [ARCHITECTURE.md](ARCHITECTURE.md) | [DEVELOPMENT.md](DEVELOPMENT.md)
+

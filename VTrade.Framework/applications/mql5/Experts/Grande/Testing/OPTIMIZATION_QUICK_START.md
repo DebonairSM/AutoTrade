@@ -126,3 +126,4 @@ Shows the best parameter combinations ranked by your selected optimization mode.
 2. **Forward Test**: Test on demo account with optimized parameters
 3. **Compare**: Run comparison script to see limit vs market order performance
 4. **Refine**: Run optimization again with narrower ranges around best result
+

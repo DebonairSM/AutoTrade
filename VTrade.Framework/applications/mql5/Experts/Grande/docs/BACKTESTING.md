@@ -279,3 +279,4 @@ WHERE ticket NOT IN (SELECT ticket FROM limit_orders);
 ---
 
 **Related:** [LIMIT_ORDERS.md](LIMIT_ORDERS.md) | [DATA_SOURCES.md](DATA_SOURCES.md)
+
