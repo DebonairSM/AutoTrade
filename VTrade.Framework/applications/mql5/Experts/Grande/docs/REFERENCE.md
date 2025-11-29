@@ -1,10 +1,10 @@
-# Function Documentation Template
+# Grande Trading System - Reference
 
-## Purpose
+## Function Documentation Template
 
-This template defines the standard format for documenting all public functions in the Grande Trading System. All functions should follow this structure to ensure consistency and LLM-friendliness.
+Standard format for documenting all public functions in the Grande Trading System.
 
-## Template Structure
+### Template Structure
 
 ```mql5
 //+------------------------------------------------------------------+
@@ -74,8 +74,6 @@ This template defines the standard format for documenting all public functions i
 //+------------------------------------------------------------------+
 ```
 
-## Documentation Standards
-
 ### Required Sections
 
 1. **PURPOSE** - One sentence describing what the function does
@@ -93,9 +91,7 @@ This template defines the standard format for documenting all public functions i
 - **NOTES** - Implementation details, performance, limitations
 - **RELATED** - Cross-references to related functions
 
-## Examples
-
-### Simple Function Example
+## Example: Simple Function
 
 ```mql5
 //+------------------------------------------------------------------+
@@ -125,7 +121,7 @@ double GetATRValue()
 }
 ```
 
-### Complex Function Example
+## Example: Complex Function
 
 ```mql5
 //+------------------------------------------------------------------+
@@ -237,3 +233,41 @@ Before marking a function as documented, verify:
 - Must document persistence behavior
 - Must document validation rules
 
+## Code Patterns
+
+### State Management Pattern
+```mql5
+// Use State Manager, not global variables
+g_stateManager.SetCurrentRegime(regime);
+RegimeSnapshot current = g_stateManager.GetCurrentRegime();
+```
+
+### Event-Driven Pattern
+```mql5
+// Publish events instead of direct calls
+g_eventBus.PublishEvent(EVENT_REGIME_CHANGED, "RegimeDetector", 
+                       "Regime changed to BULL_TREND", 0.85, 0);
+```
+
+### Error Handling Pattern
+```mql5
+// Always check return values and handle errors
+if(!g_riskManager.CheckDrawdown())
+{
+    g_eventBus.PublishEvent(EVENT_RISK_WARNING, "RiskManager",
+                           "Drawdown limit reached", drawdown, 2);
+    return false;
+}
+```
+
+### Configuration Pattern
+```mql5
+// Load inputs into Config Manager
+RegimeDetectionConfig config = g_configManager.GetRegimeConfig();
+config.adx_trend_threshold = InpADXTrendThreshold;
+g_configManager.SetRegimeConfig(config);
+```
+
+---
+
+**Related:** [DEVELOPMENT.md](DEVELOPMENT.md) | [ARCHITECTURE.md](ARCHITECTURE.md)

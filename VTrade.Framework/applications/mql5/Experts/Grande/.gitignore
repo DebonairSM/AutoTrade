@@ -65,3 +65,12 @@ coverage.xml
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+Data/
+
+# Temporary assets (Cursor-generated files)
+assets/c__Users_*

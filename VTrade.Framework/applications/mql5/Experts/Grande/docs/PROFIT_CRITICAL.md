@@ -1,8 +1,8 @@
-# Grande Trading System - Profit-Critical Code Guide
+# Grande Trading System - Profit-Critical Code
 
 ## Overview
 
-This guide documents the profit-critical modules in the Grande Trading System. These modules handle all aspects of profit calculation, risk management, performance tracking, signal quality assessment, and position optimization.
+Profit-critical modules handle profit calculation, risk management, performance tracking, signal quality assessment, and position optimization.
 
 ## Module Architecture
 
@@ -13,8 +13,8 @@ This guide documents the profit-critical modules in the Grande Trading System. T
 **Purpose:** Centralized profit calculation and performance metrics.
 
 **Key Functions:**
-- `CalculatePositionProfitPips()` - Calculate position profit in pips
-- `CalculatePositionProfitCurrency()` - Calculate position profit in currency
+- `CalculatePositionProfitPips()` - Position profit in pips
+- `CalculatePositionProfitCurrency()` - Position profit in currency
 - `CalculateAccountProfit()` - Total account profit
 - `CalculateProfitFactor()` - Win/loss ratio calculation
 - `GetPerformanceMetrics()` - Comprehensive performance summary
@@ -29,14 +29,14 @@ double profitCurrency = profitCalc.CalculatePositionProfitCurrency(ticket);
 PerformanceMetrics metrics = profitCalc.GetPerformanceMetrics();
 ```
 
-**Profit Calculation Methods:**
+**Profit Calculation:**
 - Pip calculations handle different symbol types (JPY pairs, standard pairs)
 - Currency calculations account for swap costs and commissions
 - Supports both open positions and historical trade analysis
 
 ### 2. GrandeRiskManager
 
-**Location:** `..\VSol\GrandeRiskManager.mqh` (existing)
+**Location:** `../VSol/GrandeRiskManager.mqh` (existing)
 
 **Purpose:** Risk management and position sizing.
 
@@ -48,7 +48,7 @@ PerformanceMetrics metrics = profitCalc.GetPerformanceMetrics();
 - `CalculateStopLoss()` - Stop loss calculation
 - `CalculateTakeProfit()` - Take profit calculation
 
-**Note:** This module already exists in the VSol folder and is fully integrated.
+**Note:** This module exists in VSol folder and is fully integrated.
 
 ### 3. GrandePerformanceTracker
 
@@ -113,9 +113,9 @@ if(!qualityAnalyzer.FilterLowQualitySignals(score.overallScore))
 
 ### 5. Position Optimization
 
-**Location:** `..\VSol\GrandeRiskManager.mqh` (existing)
+**Location:** `Include/GrandePositionOptimizer.mqh`
 
-**Purpose:** Position management and optimization.
+**Purpose:** Position management and optimization wrapper.
 
 **Key Functions:**
 - `UpdateTrailingStops()` - Trailing stop logic
@@ -123,7 +123,68 @@ if(!qualityAnalyzer.FilterLowQualitySignals(score.overallScore))
 - `ExecutePartialCloses()` - Partial close logic
 - `ManageAllPositions()` - Comprehensive position management
 
-**Note:** Position optimization logic is already implemented in GrandeRiskManager.
+**Note:** Wraps GrandeRiskManager position management functions and adds event publishing.
+
+## Common Patterns
+
+### 1. Always Use Profit Calculator
+
+**Pattern:** All profit calculations use GrandeProfitCalculator
+
+**Rule:** No inline profit calculations in trading logic
+
+```mql5
+// DO:
+double profit = profitCalc.CalculatePositionProfitPips(ticket);
+
+// DON'T:
+double profit = (currentPrice - entryPrice) / _Point; // Inline calculation
+```
+
+### 2. Always Validate Risk
+
+**Pattern:** All risk checks go through GrandeRiskManager
+
+**Rule:** No trading without risk validation
+
+```mql5
+// DO:
+if(!g_riskManager.CheckDrawdown() || !g_riskManager.CheckMaxPositions())
+    return;
+
+// DON'T:
+// Skip risk checks
+```
+
+### 3. Always Track Performance
+
+**Pattern:** All trade outcomes recorded via GrandePerformanceTracker
+
+**Rule:** Every trade outcome must be tracked
+
+```mql5
+// DO:
+perfTracker.RecordTradeOutcome(ticket, outcome, closePrice);
+
+// DON'T:
+// Skip performance tracking
+```
+
+### 4. Always Score Signal Quality
+
+**Pattern:** All signals scored via GrandeSignalQualityAnalyzer
+
+**Rule:** Low-quality signals rejected before execution
+
+```mql5
+// DO:
+SignalQualityScore score = qualityAnalyzer.ScoreSignalQuality(...);
+if(qualityAnalyzer.FilterLowQualitySignals(score.overallScore))
+    return; // Reject low-quality signal
+
+// DON'T:
+// Execute signals without quality scoring
+```
 
 ## Profit Calculation Patterns
 
@@ -239,72 +300,34 @@ double threshold = qualityAnalyzer.GetOptimalSignalThreshold();
 // Threshold automatically adjusts based on recent signal success rates
 ```
 
-## Common Patterns and Best Practices
+## Integration Points
 
-### 1. Always Use Profit Calculator
+### State Manager
+- Profit metrics stored in State Manager
+- Performance cache managed by State Manager
+- Signal quality history tracked in State Manager
 
-**Pattern:** All profit calculations use GrandeProfitCalculator
+### Event Bus
+- Profit milestone events published
+- Performance report events published
+- Signal quality events published
+- Risk warning events published
 
-**Rule:** No inline profit calculations in trading logic
+### Database Manager
+- Trade outcomes stored in database
+- Performance metrics persisted
+- Signal quality history recorded
 
-```mql5
-// DO:
-double profit = profitCalc.CalculatePositionProfitPips(ticket);
+### Component Registry
+- All profit-critical modules registered
+- Health monitoring enabled
+- Performance tracking integrated
 
-// DON'T:
-double profit = (currentPrice - entryPrice) / _Point; // Inline calculation
-```
-
-### 2. Always Validate Risk
-
-**Pattern:** All risk checks go through GrandeRiskManager
-
-**Rule:** No trading without risk validation
-
-```mql5
-// DO:
-if(!g_riskManager.CheckDrawdown() || !g_riskManager.CheckMaxPositions())
-    return;
-
-// DON'T:
-// Skip risk checks
-```
-
-### 3. Always Track Performance
-
-**Pattern:** All trade outcomes recorded via GrandePerformanceTracker
-
-**Rule:** Every trade outcome must be tracked
-
-```mql5
-// DO:
-perfTracker.RecordTradeOutcome(ticket, outcome, closePrice);
-
-// DON'T:
-// Skip performance tracking
-```
-
-### 4. Always Score Signal Quality
-
-**Pattern:** All signals scored via GrandeSignalQualityAnalyzer
-
-**Rule:** Low-quality signals rejected before execution
-
-```mql5
-// DO:
-SignalQualityScore score = qualityAnalyzer.ScoreSignalQuality(...);
-if(qualityAnalyzer.FilterLowQualitySignals(score.overallScore))
-    return; // Reject low-quality signal
-
-// DON'T:
-// Execute signals without quality scoring
-```
-
-## Troubleshooting Profit-Related Issues
+## Troubleshooting
 
 ### Issue: Profit calculations incorrect
 
-**Solution:** 
+**Solution:**
 - Verify symbol is correctly initialized in profit calculator
 - Check pip size calculation for symbol type
 - Ensure swap and commission are included in currency calculations
@@ -331,54 +354,6 @@ if(qualityAnalyzer.FilterLowQualitySignals(score.overallScore))
 - Review margin requirements
 - Check if risk manager is properly initialized
 
-## Integration Points
-
-### State Manager
-- Profit metrics stored in State Manager
-- Performance cache managed by State Manager
-- Signal quality history tracked in State Manager
-
-### Event Bus
-- Profit milestone events published
-- Performance report events published
-- Signal quality events published
-- Risk warning events published
-
-### Database Manager
-- Trade outcomes stored in database
-- Performance metrics persisted
-- Signal quality history recorded
-
-### Component Registry
-- All profit-critical modules registered
-- Health monitoring enabled
-- Performance tracking integrated
-
-## Future Enhancements
-
-1. **Historical Performance Analysis**
-   - Complete database integration for performance tracking
-   - Historical signal quality analysis
-   - Performance pattern recognition
-
-2. **Advanced Profit Metrics**
-   - Sharpe ratio calculation
-   - Maximum drawdown tracking
-   - Recovery factor calculation
-
-3. **Machine Learning Integration**
-   - Signal quality prediction
-   - Optimal threshold learning
-   - Performance pattern detection
-
-## Related Documentation
-
-- **LLM Implementation Plan:** `docs/LLM_IMPLEMENTATION_PLAN.md`
-- **Function Documentation Template:** `docs/FUNCTION_DOCUMENTATION_TEMPLATE.md`
-- **Refactoring Guide:** `docs/refactoring/GUIDE.md`
-
 ---
 
-**Last Updated:** 2025-11-05  
-**Version:** 1.0
-
+**Related:** [ARCHITECTURE.md](ARCHITECTURE.md) | [DEVELOPMENT.md](DEVELOPMENT.md)

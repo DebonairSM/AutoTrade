@@ -108,6 +108,7 @@ function Build-GrandeComponent {
     $mt5BaseDir = Get-MT5BaseDirectory
     $mt5ExpertsDir = Join-Path $mt5BaseDir "MQL5\Experts\Grande"
     $mt5IndicatorsDir = Join-Path $mt5BaseDir "MQL5\Indicators\Grande"
+    $mt5ScriptsDir = Join-Path $mt5BaseDir "MQL5\Scripts\Grande"
     
     Write-Host "Changing to Grande directory..." -ForegroundColor Yellow
     Set-Location $sourceDir
@@ -127,6 +128,11 @@ function Build-GrandeComponent {
     if (-not (Test-Path $mt5IndicatorsDir)) {
         New-Item -ItemType Directory -Path $mt5IndicatorsDir -Force | Out-Null
         Write-Host "Created MT5 Indicators directory: $mt5IndicatorsDir" -ForegroundColor Green
+    }
+    
+    if (-not (Test-Path $mt5ScriptsDir)) {
+        New-Item -ItemType Directory -Path $mt5ScriptsDir -Force | Out-Null
+        Write-Host "Created MT5 Scripts directory: $mt5ScriptsDir" -ForegroundColor Green
     }
     
     # Define components
@@ -168,8 +174,11 @@ function Build-GrandeComponent {
         $componentOrder = @("GrandeMarketRegimeDetector", "GrandeKeyLevelDetector", "GrandeTradingSystem", "GrandeMonitorIndicator")
         
         foreach ($comp in $componentOrder) {
-            Build-SingleComponent -Name $comp -Components $components -BuildDir $buildDir -Mt5ExpertsDir $mt5ExpertsDir -Mt5IndicatorsDir $mt5IndicatorsDir
+            Build-SingleComponent -Name $comp -Components $components -BuildDir $buildDir -Mt5ExpertsDir $mt5ExpertsDir -Mt5IndicatorsDir $mt5IndicatorsDir -Mt5ScriptsDir $mt5ScriptsDir
         }
+        
+        # Deploy testing scripts
+        Deploy-TestingScripts -SourceDir $sourceDir -Mt5ScriptsDir $mt5ScriptsDir
         
         Write-Host "All components built and deployed successfully!" -ForegroundColor Green
         
@@ -177,12 +186,58 @@ function Build-GrandeComponent {
             Run-AutomatedTests -Components $components -Mt5Dir $mt5ExpertsDir
         }
     } else {
-        Build-SingleComponent -Name $ComponentName -Components $components -BuildDir $buildDir -Mt5ExpertsDir $mt5ExpertsDir -Mt5IndicatorsDir $mt5IndicatorsDir
+        Build-SingleComponent -Name $ComponentName -Components $components -BuildDir $buildDir -Mt5ExpertsDir $mt5ExpertsDir -Mt5IndicatorsDir $mt5IndicatorsDir -Mt5ScriptsDir $mt5ScriptsDir
+        
+        # Deploy testing scripts when building main EA
+        if ($ComponentName -eq "GrandeTradingSystem") {
+            Deploy-TestingScripts -SourceDir $sourceDir -Mt5ScriptsDir $mt5ScriptsDir
+        }
         
         if ($RunTests) {
             Write-Host "Test suite removed - main EA includes validation" -ForegroundColor Yellow
         }
     }
+}
+
+function Deploy-TestingScripts {
+    param(
+        [string]$SourceDir,
+        [string]$Mt5ScriptsDir
+    )
+    
+    Write-Host "Deploying testing scripts..." -ForegroundColor Yellow
+    
+    $testingDir = Join-Path $SourceDir "Testing"
+    if (-not (Test-Path $testingDir)) {
+        Write-Host "Warning: Testing directory not found at $testingDir" -ForegroundColor Yellow
+        return
+    }
+    
+    # Ensure MT5 Scripts directory exists
+    if (-not (Test-Path $Mt5ScriptsDir)) {
+        New-Item -ItemType Directory -Path $Mt5ScriptsDir -Force | Out-Null
+        Write-Host "Created MT5 Scripts directory: $Mt5ScriptsDir" -ForegroundColor Green
+    }
+    
+    # Deploy BackfillHistoricalData.mq5 script
+    $backfillScript = Join-Path $testingDir "BackfillHistoricalData.mq5"
+    if (Test-Path $backfillScript) {
+        $mt5BackfillScript = Join-Path $Mt5ScriptsDir "BackfillHistoricalData.mq5"
+        Copy-Item -Path $backfillScript -Destination $mt5BackfillScript -Force
+        Write-Host "Deployed: BackfillHistoricalData.mq5 to MT5 Scripts" -ForegroundColor Green
+    } else {
+        Write-Host "Warning: BackfillHistoricalData.mq5 not found" -ForegroundColor Yellow
+    }
+    
+    # Deploy TestDatabaseBackfill.mq5 script
+    $testBackfillScript = Join-Path $testingDir "TestDatabaseBackfill.mq5"
+    if (Test-Path $testBackfillScript) {
+        $mt5TestBackfillScript = Join-Path $Mt5ScriptsDir "TestDatabaseBackfill.mq5"
+        Copy-Item -Path $testBackfillScript -Destination $mt5TestBackfillScript -Force
+        Write-Host "Deployed: TestDatabaseBackfill.mq5 to MT5 Scripts" -ForegroundColor Green
+    }
+    
+    Write-Host "Testing scripts deployed successfully!" -ForegroundColor Green
 }
 
 function Build-SingleComponent {
@@ -191,7 +246,8 @@ function Build-SingleComponent {
         [hashtable]$Components,
         [string]$BuildDir,
         [string]$Mt5ExpertsDir,
-        [string]$Mt5IndicatorsDir
+        [string]$Mt5IndicatorsDir,
+        [string]$Mt5ScriptsDir = ""
     )
     
     Write-Host "Building component: $Name" -ForegroundColor Yellow

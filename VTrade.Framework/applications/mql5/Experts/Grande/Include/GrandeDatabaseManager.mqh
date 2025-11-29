@@ -69,6 +69,43 @@
 #property description "Database management for Grande Trading System"
 
 //+------------------------------------------------------------------+
+//| Data structures for query results                                 |
+//+------------------------------------------------------------------+
+struct TradeDecisionRecord
+{
+    int       id;
+    string    symbol;
+    datetime  timestamp;
+    string    signal_type;
+    string    decision;
+    string    rejection_reason;
+    double    entry_price;
+    double    stop_loss;
+    double    take_profit;
+    double    lot_size;
+    double    risk_percent;
+    string    regime_at_entry;
+    double    rsi_at_entry;
+    double    adx_at_entry;
+    double    key_level_distance;
+    double    volume_ratio;
+    string    outcome;
+    double    pnl;
+    int       duration_minutes;
+};
+
+struct PerformanceMetricRecord
+{
+    int       id;
+    string    symbol;
+    datetime  timestamp;
+    string    metric_type;
+    double    value;
+    datetime  period_start;
+    datetime  period_end;
+};
+
+//+------------------------------------------------------------------+
 //| Database Manager Class                                           |
 //+------------------------------------------------------------------+
 class CGrandeDatabaseManager
@@ -177,16 +214,16 @@ public:
     bool              InsertConfigSnapshot(const datetime timestamp, const string config_type,
                                          const string config_data);
     
-    // Query operations for AI analysis
+    // Query operations for backtesting and analysis
     bool              GetMarketDataRange(const string symbol, const datetime start_time,
                                         const datetime end_time, const int timeframe,
-                                        double &data[]);
+                                        MqlRates &rates[]);
     
     bool              GetTradeDecisionsByRegime(const string regime, const datetime start_time,
-                                               const datetime end_time);
+                                               const datetime end_time, TradeDecisionRecord &decisions[]);
     
     bool              GetPerformanceMetrics(const string symbol, const datetime start_time,
-                                          const datetime end_time);
+                                          const datetime end_time, PerformanceMetricRecord &metrics[]);
     
     // Utility functions
     int               GetRecordCount(const string tableName);
@@ -962,7 +999,11 @@ bool CGrandeDatabaseManager::BackfillHistoricalData(const string symbol,
         OptimizeDatabase();
     }
     
-    return inserted > 0;
+    // Return true if data was successfully retrieved and processed
+    // Success means either: bars were inserted OR all bars were skipped (already exist)
+    bool success = (inserted > 0 || skipped > 0);
+    Print("[GrandeDB] Backfill result: copied=", copied, ", inserted=", inserted, ", skipped=", skipped, ", success=", success);
+    return success;
 }
 
 //+------------------------------------------------------------------+
@@ -1191,4 +1232,248 @@ string CGrandeDatabaseManager::GetDataCoverageStats(const string symbol)
     stats += "===============================\n";
     
     return stats;
+}
+
+//+------------------------------------------------------------------+
+//| Get market data range for backtesting                            |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::GetMarketDataRange(const string symbol, 
+                                                 const datetime start_time,
+                                                 const datetime end_time, 
+                                                 const int timeframe,
+                                                 MqlRates &rates[])
+{
+    if(!m_isConnected || m_dbHandle == INVALID_HANDLE)
+    {
+        Print("[GrandeDB] ERROR: Database not connected for GetMarketDataRange");
+        return false;
+    }
+    
+    // Build query
+    string sql = StringFormat(
+        "SELECT timestamp, open_price, high_price, low_price, close_price, volume "
+        "FROM market_data "
+        "WHERE symbol='%s' AND timeframe=%d "
+        "AND timestamp >= '%s' AND timestamp <= '%s' "
+        "ORDER BY timestamp ASC",
+        EscapeString(symbol), timeframe,
+        TimeToString(start_time, TIME_DATE|TIME_SECONDS),
+        TimeToString(end_time, TIME_DATE|TIME_SECONDS)
+    );
+    
+    int stmt = DatabasePrepare(m_dbHandle, sql);
+    if(stmt == INVALID_HANDLE)
+    {
+        Print("[GrandeDB] ERROR: Failed to prepare GetMarketDataRange query");
+        return false;
+    }
+    
+    // Count results first for array sizing
+    ArrayResize(rates, 0);
+    int count = 0;
+    int batchSize = 1000;
+    
+    while(DatabaseRead(stmt))
+    {
+        // Resize array in batches for efficiency
+        if(count >= ArraySize(rates))
+        {
+            ArrayResize(rates, count + batchSize);
+        }
+        
+        // Read timestamp
+        string timestampStr;
+        DatabaseColumnText(stmt, 0, timestampStr);
+        rates[count].time = StringToTime(timestampStr);
+        
+        // Read OHLCV
+        DatabaseColumnDouble(stmt, 1, rates[count].open);
+        DatabaseColumnDouble(stmt, 2, rates[count].high);
+        DatabaseColumnDouble(stmt, 3, rates[count].low);
+        DatabaseColumnDouble(stmt, 4, rates[count].close);
+        
+        double volume;
+        DatabaseColumnDouble(stmt, 5, volume);
+        rates[count].tick_volume = (long)volume;
+        rates[count].real_volume = 0;
+        rates[count].spread = 0;
+        
+        count++;
+    }
+    
+    DatabaseFinalize(stmt);
+    
+    // Resize to exact count
+    if(count > 0)
+    {
+        ArrayResize(rates, count);
+    }
+    
+    if(m_showDebugPrints)
+        Print("[GrandeDB] GetMarketDataRange: Retrieved ", count, " bars for ", symbol);
+    
+    return count > 0;
+}
+
+//+------------------------------------------------------------------+
+//| Get trade decisions filtered by regime                           |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::GetTradeDecisionsByRegime(const string regime, 
+                                                        const datetime start_time,
+                                                        const datetime end_time,
+                                                        TradeDecisionRecord &decisions[])
+{
+    if(!m_isConnected || m_dbHandle == INVALID_HANDLE)
+    {
+        Print("[GrandeDB] ERROR: Database not connected for GetTradeDecisionsByRegime");
+        return false;
+    }
+    
+    // Build query
+    string sql = StringFormat(
+        "SELECT id, symbol, timestamp, signal_type, decision, rejection_reason, "
+        "entry_price, stop_loss, take_profit, lot_size, risk_percent, "
+        "regime_at_entry, rsi_at_entry, adx_at_entry, key_level_distance, volume_ratio, "
+        "outcome, pnl, duration_minutes "
+        "FROM trade_decisions "
+        "WHERE regime_at_entry='%s' "
+        "AND timestamp >= '%s' AND timestamp <= '%s' "
+        "ORDER BY timestamp ASC",
+        EscapeString(regime),
+        TimeToString(start_time, TIME_DATE|TIME_SECONDS),
+        TimeToString(end_time, TIME_DATE|TIME_SECONDS)
+    );
+    
+    int stmt = DatabasePrepare(m_dbHandle, sql);
+    if(stmt == INVALID_HANDLE)
+    {
+        Print("[GrandeDB] ERROR: Failed to prepare GetTradeDecisionsByRegime query");
+        return false;
+    }
+    
+    ArrayResize(decisions, 0);
+    int count = 0;
+    int batchSize = 100;
+    
+    while(DatabaseRead(stmt))
+    {
+        if(count >= ArraySize(decisions))
+        {
+            ArrayResize(decisions, count + batchSize);
+        }
+        
+        DatabaseColumnInteger(stmt, 0, decisions[count].id);
+        DatabaseColumnText(stmt, 1, decisions[count].symbol);
+        
+        string timestampStr;
+        DatabaseColumnText(stmt, 2, timestampStr);
+        decisions[count].timestamp = StringToTime(timestampStr);
+        
+        DatabaseColumnText(stmt, 3, decisions[count].signal_type);
+        DatabaseColumnText(stmt, 4, decisions[count].decision);
+        DatabaseColumnText(stmt, 5, decisions[count].rejection_reason);
+        DatabaseColumnDouble(stmt, 6, decisions[count].entry_price);
+        DatabaseColumnDouble(stmt, 7, decisions[count].stop_loss);
+        DatabaseColumnDouble(stmt, 8, decisions[count].take_profit);
+        DatabaseColumnDouble(stmt, 9, decisions[count].lot_size);
+        DatabaseColumnDouble(stmt, 10, decisions[count].risk_percent);
+        DatabaseColumnText(stmt, 11, decisions[count].regime_at_entry);
+        DatabaseColumnDouble(stmt, 12, decisions[count].rsi_at_entry);
+        DatabaseColumnDouble(stmt, 13, decisions[count].adx_at_entry);
+        DatabaseColumnDouble(stmt, 14, decisions[count].key_level_distance);
+        DatabaseColumnDouble(stmt, 15, decisions[count].volume_ratio);
+        DatabaseColumnText(stmt, 16, decisions[count].outcome);
+        DatabaseColumnDouble(stmt, 17, decisions[count].pnl);
+        DatabaseColumnInteger(stmt, 18, decisions[count].duration_minutes);
+        
+        count++;
+    }
+    
+    DatabaseFinalize(stmt);
+    
+    if(count > 0)
+    {
+        ArrayResize(decisions, count);
+    }
+    
+    if(m_showDebugPrints)
+        Print("[GrandeDB] GetTradeDecisionsByRegime: Retrieved ", count, " decisions for regime ", regime);
+    
+    return count > 0;
+}
+
+//+------------------------------------------------------------------+
+//| Get performance metrics for symbol                               |
+//+------------------------------------------------------------------+
+bool CGrandeDatabaseManager::GetPerformanceMetrics(const string symbol, 
+                                                    const datetime start_time,
+                                                    const datetime end_time,
+                                                    PerformanceMetricRecord &metrics[])
+{
+    if(!m_isConnected || m_dbHandle == INVALID_HANDLE)
+    {
+        Print("[GrandeDB] ERROR: Database not connected for GetPerformanceMetrics");
+        return false;
+    }
+    
+    // Build query
+    string sql = StringFormat(
+        "SELECT id, symbol, timestamp, metric_type, value, period_start, period_end "
+        "FROM performance_metrics "
+        "WHERE symbol='%s' "
+        "AND timestamp >= '%s' AND timestamp <= '%s' "
+        "ORDER BY timestamp ASC",
+        EscapeString(symbol),
+        TimeToString(start_time, TIME_DATE|TIME_SECONDS),
+        TimeToString(end_time, TIME_DATE|TIME_SECONDS)
+    );
+    
+    int stmt = DatabasePrepare(m_dbHandle, sql);
+    if(stmt == INVALID_HANDLE)
+    {
+        Print("[GrandeDB] ERROR: Failed to prepare GetPerformanceMetrics query");
+        return false;
+    }
+    
+    ArrayResize(metrics, 0);
+    int count = 0;
+    int batchSize = 100;
+    
+    while(DatabaseRead(stmt))
+    {
+        if(count >= ArraySize(metrics))
+        {
+            ArrayResize(metrics, count + batchSize);
+        }
+        
+        DatabaseColumnInteger(stmt, 0, metrics[count].id);
+        DatabaseColumnText(stmt, 1, metrics[count].symbol);
+        
+        string timestampStr;
+        DatabaseColumnText(stmt, 2, timestampStr);
+        metrics[count].timestamp = StringToTime(timestampStr);
+        
+        DatabaseColumnText(stmt, 3, metrics[count].metric_type);
+        DatabaseColumnDouble(stmt, 4, metrics[count].value);
+        
+        string periodStartStr, periodEndStr;
+        DatabaseColumnText(stmt, 5, periodStartStr);
+        DatabaseColumnText(stmt, 6, periodEndStr);
+        metrics[count].period_start = StringToTime(periodStartStr);
+        metrics[count].period_end = StringToTime(periodEndStr);
+        
+        count++;
+    }
+    
+    DatabaseFinalize(stmt);
+    
+    if(count > 0)
+    {
+        ArrayResize(metrics, count);
+    }
+    
+    if(m_showDebugPrints)
+        Print("[GrandeDB] GetPerformanceMetrics: Retrieved ", count, " metrics for ", symbol);
+    
+    return count > 0;
 }

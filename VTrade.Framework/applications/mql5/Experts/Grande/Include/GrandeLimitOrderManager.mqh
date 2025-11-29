@@ -88,50 +88,8 @@ struct LimitOrderRequest
 //+------------------------------------------------------------------+
 //| Phase 7: Enhanced Limit Order Request Structure                 |
 //+------------------------------------------------------------------+
-// Extended request with full context for professional-grade validation
-struct EnhancedLimitOrderRequest
-{
-    // Existing fields from LimitOrderRequest
-    bool isBuy;                             // Trade direction: true for buy, false for sell
-    double lotSize;                         // Position size in lots
-    double basePrice;                       // Current market price
-    double stopLoss;                       // Stop loss level (relative to basePrice)
-    double takeProfit;                     // Take profit level (relative to basePrice)
-    string comment;                        // Order comment
-    string tradeContext;                   // "TREND" or "BREAKOUT" for logging
-    string logPrefix;                      // Log prefix for context-specific logging
-    
-    // New fields for enhanced validation
-    RegimeSnapshot regimeSnapshot;          // Current regime for filtering
-    double regimeConfidence;                // Regime confidence (0.0-1.0)
-    double signalQualityScore;             // Signal quality score (0-100)
-    double currentATR;                     // Current ATR for distance scaling
-    double averageATR;                     // Average ATR for distance scaling
-    datetime newsEventTime;                 // Upcoming news event (0 if none)
-    int newsImpactLevel;                    // News impact level (0-3, 0=none)
-    
-    void EnhancedLimitOrderRequest()
-    {
-        isBuy = false;
-        lotSize = 0.0;
-        basePrice = 0.0;
-        stopLoss = 0.0;
-        takeProfit = 0.0;
-        comment = "";
-        tradeContext = "";
-        logPrefix = "";
-        regimeConfidence = 0.0;
-        signalQualityScore = 0.0;
-        currentATR = 0.0;
-        averageATR = 0.0;
-        newsEventTime = 0;
-        newsImpactLevel = 0;
-        // Initialize regime snapshot
-        regimeSnapshot.regime = REGIME_RANGING;
-        regimeSnapshot.confidence = 0.0;
-        regimeSnapshot.timestamp = 0;
-    }
-};
+// Note: EnhancedLimitOrderRequest is defined in GrandeInterfaces.mqh
+// This struct is included via the #include at the top of this file
 
 //+------------------------------------------------------------------+
 //| Limit Order Result Structure                                     |
@@ -231,12 +189,22 @@ private:
     CTrade*                     m_trade;
     CGrandeDatabaseManager*     m_dbManager;         // For fill tracking (optional)
     
+    // Feature flags (Phase 1-7)
+    bool                    m_trackFillMetrics;           // Phase 1: Enable fill tracking
+    bool                    m_useRegimeFiltering;          // Phase 2: Enable regime-based filtering
+    bool                    m_requireMultiTimeframeAlignment; // Phase 3: Require MTF alignment
+    bool                    m_useATRScaling;              // Phase 4: Enable ATR scaling
+    bool                    m_useFillProbability;         // Phase 5: Enable fill probability checks
+    bool                    m_enableDynamicAdjustment;    // Phase 6: Enable dynamic price adjustment
+    bool                    m_cancelOrdersBeforeNews;      // Phase 6: Cancel before news
+    
     // Helper functions
     double GetPipSize();
     void PrepareKeyLevelsForConfluence(double &resistanceLevels[], double &supportLevels[]);
     void AdjustStopsForLimitPrice(bool isBuy, double basePrice, double limitPrice, double &sl, double &tp);
     bool ValidateLimitOrder(const LimitOrderRequest &request, double limitPrice);
     datetime CalculateExpiration();
+    datetime CalculateExpiration(datetime newsEventTime, double currentATR);
     
 public:
     // Constructor/Destructor
@@ -308,6 +276,12 @@ public:
     // Configuration
     void SetConfig(const LimitOrderConfig &config) { m_config = config; }
     LimitOrderConfig GetConfig() const { return m_config; }
+    
+    // Feature flags (Phase 1-7)
+    void SetFeatureFlags(bool trackFillMetrics, bool useRegimeFiltering, 
+                         bool requireMultiTimeframeAlignment, bool useATRScaling,
+                         bool useFillProbability, bool enableDynamicAdjustment,
+                         bool cancelOrdersBeforeNews);
 };
 
 //+------------------------------------------------------------------+
@@ -321,6 +295,15 @@ CGrandeLimitOrderManager::CGrandeLimitOrderManager()
     m_keyLevelDetector = NULL;
     m_trade = NULL;
     m_dbManager = NULL;
+    
+    // Initialize feature flags with defaults (matching plan defaults)
+    m_trackFillMetrics = true;              // Phase 1: Enabled by default
+    m_useRegimeFiltering = false;           // Phase 2: Disabled initially
+    m_requireMultiTimeframeAlignment = false; // Phase 3: Disabled initially
+    m_useATRScaling = true;                 // Phase 4: Enabled by default
+    m_useFillProbability = false;          // Phase 5: Disabled initially
+    m_enableDynamicAdjustment = false;      // Phase 6: Disabled (opt-in)
+    m_cancelOrdersBeforeNews = true;        // Phase 6: Enabled by default
 }
 
 //+------------------------------------------------------------------+
@@ -479,8 +462,10 @@ double CGrandeLimitOrderManager::FindOptimalLimitPrice(bool isBuy, double curren
 //+------------------------------------------------------------------+
 double CGrandeLimitOrderManager::CalculateATRScaledMaxDistance(double baseMaxDistancePips, double currentATR, double averageATR)
 {
-    // Note: useATRScaling config will be added in EnhancedLimitOrderConfig
-    // For now, always apply scaling if ATR values are provided
+    // Phase 4: Only apply ATR scaling if feature flag enabled
+    if(!m_useATRScaling)
+        return baseMaxDistancePips;
+    
     if(averageATR <= 0 || currentATR <= 0)
         return baseMaxDistancePips;
     
@@ -906,17 +891,16 @@ LimitOrderResult CGrandeLimitOrderManager::PlaceLimitOrder(const EnhancedLimitOr
     double minRegimeConfidence = 0.65;
     double minSignalQualityScore = 75.0;
     int newsCancelMinutesBefore = 30;
-    bool cancelOrdersBeforeNews = true;
     
-    // Validate regime confidence
-    if(request.regimeConfidence < minRegimeConfidence)
+    // Phase 2: Validate regime confidence (if regime filtering enabled)
+    if(m_useRegimeFiltering && request.regimeConfidence < minRegimeConfidence)
     {
         return LimitOrderResult::Failure("LOW_REGIME_CONFIDENCE",
             StringFormat("Regime confidence %.2f below minimum %.2f",
             request.regimeConfidence, minRegimeConfidence));
     }
     
-    // Validate signal quality
+    // Validate signal quality (always check, but only reject if filtering enabled)
     if(request.signalQualityScore < minSignalQualityScore)
     {
         return LimitOrderResult::Failure("LOW_SIGNAL_QUALITY",
@@ -931,8 +915,8 @@ LimitOrderResult CGrandeLimitOrderManager::PlaceLimitOrder(const EnhancedLimitOr
             "Pending order exposure limit exceeded");
     }
     
-    // Check for upcoming news events
-    if(cancelOrdersBeforeNews && request.newsEventTime > 0)
+    // Phase 6: Check for upcoming news events (if news cancellation enabled)
+    if(m_cancelOrdersBeforeNews && request.newsEventTime > 0)
     {
         datetime timeToNews = request.newsEventTime - TimeCurrent();
         if(timeToNews > 0 && timeToNews < (newsCancelMinutesBefore * 60))
@@ -951,19 +935,27 @@ LimitOrderResult CGrandeLimitOrderManager::PlaceLimitOrder(const EnhancedLimitOr
     
     // Find optimal limit price with regime filtering and ATR scaling
     double limitPrice = 0.0;
-    if(request.currentATR > 0 && request.averageATR > 0)
+    // Phase 4: Use ATR scaling if enabled and ATR values available
+    if(m_useATRScaling && request.currentATR > 0 && request.averageATR > 0)
     {
         // Use ATR-scaled version
         limitPrice = FindOptimalLimitPrice(request.isBuy, request.basePrice, 
                                           m_config.maxLimitDistancePips,
                                           request.currentATR, request.averageATR);
     }
-    else
+    // Phase 2: Use regime-filtered version if regime filtering enabled
+    else if(m_useRegimeFiltering && request.regimeSnapshot.timestamp > 0)
     {
-        // Use regime-filtered version if available
+        RegimeSnapshot regime = request.regimeSnapshot; // Create local copy for reference
         limitPrice = FindOptimalLimitPrice(request.isBuy, request.basePrice, 
                                           m_config.maxLimitDistancePips,
-                                          request.regimeSnapshot);
+                                          regime);
+    }
+    else
+    {
+        // Fallback to basic version
+        limitPrice = FindOptimalLimitPrice(request.isBuy, request.basePrice, 
+                                          m_config.maxLimitDistancePips);
     }
     
     if(limitPrice <= 0)
@@ -972,25 +964,30 @@ LimitOrderResult CGrandeLimitOrderManager::PlaceLimitOrder(const EnhancedLimitOr
             "No valid confluence zone for limit order");
     }
     
-    // Estimate fill probability
-    double fillProbability = EstimateFillProbability(limitPrice, request.isBuy, request.basePrice,
-                                                     request.regimeSnapshot, request.regimeConfidence,
-                                                     0.0, request.signalQualityScore); // Confluence score not available here
-    
-    // Note: minFillProbability will be in EnhancedLimitOrderConfig
-    double minFillProbability = 0.4;
-    if(fillProbability < minFillProbability)
+    // Phase 5: Estimate fill probability (if enabled)
+    double fillProbability = 0.0;
+    if(m_useFillProbability)
     {
-        return LimitOrderResult::Failure("LOW_FILL_PROBABILITY",
-            StringFormat("Fill probability %.2f below minimum %.2f",
-            fillProbability, minFillProbability));
+        RegimeSnapshot regime = request.regimeSnapshot; // Create local copy for reference
+        fillProbability = EstimateFillProbability(limitPrice, request.isBuy, request.basePrice,
+                                                  regime, request.regimeConfidence,
+                                                  0.0, request.signalQualityScore); // Confluence score not available here
+        
+        // Note: minFillProbability will be in EnhancedLimitOrderConfig
+        double minFillProbability = 0.4;
+        if(fillProbability < minFillProbability)
+        {
+            return LimitOrderResult::Failure("LOW_FILL_PROBABILITY",
+                StringFormat("Fill probability %.2f below minimum %.2f",
+                fillProbability, minFillProbability));
+        }
     }
     
     // Continue with existing placement logic using basic request
     LimitOrderResult result = PlaceLimitOrder(basicRequest);
     
-    // If successful, log with enhanced metrics
-    if(result.success)
+    // Phase 1: If successful, log with enhanced metrics (if tracking enabled)
+    if(result.success && m_trackFillMetrics)
     {
         // Get confluence score (would need to query confluence detector)
         double confluenceScore = 0.0; // Placeholder
@@ -1023,9 +1020,9 @@ void CGrandeLimitOrderManager::ManageStaleOrders(double currentATR, double avera
     double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
     double pipSize = GetPipSize();
     
-    // Use ATR-scaled stale distance if available
+    // Phase 4: Use ATR-scaled stale distance if feature flag enabled and ATR available
     double maxStaleDistance = m_config.staleOrderDistancePips;
-    if(averageATR > 0 && currentATR > 0)
+    if(m_useATRScaling && averageATR > 0 && currentATR > 0)
     {
         double atrRatio = currentATR / averageATR;
         maxStaleDistance = m_config.staleOrderDistancePips * atrRatio;
@@ -1170,9 +1167,9 @@ void CGrandeLimitOrderManager::LogLimitOrderCancel(ulong ticket, string cancelRe
 //+------------------------------------------------------------------+
 void CGrandeLimitOrderManager::AdjustLimitOrderPrice(ulong ticket)
 {
-    // Note: enableDynamicAdjustment and maxAdjustmentsPerOrder will be in EnhancedLimitOrderConfig
-    // For now, this is a placeholder that can be enabled later
-    // Dynamic adjustment is an opt-in feature (default: false)
+    // Phase 6: Only adjust if dynamic adjustment feature flag enabled
+    if(!m_enableDynamicAdjustment)
+        return;
     
     if(!OrderSelect(ticket)) return;
     if(OrderGetString(ORDER_SYMBOL) != m_symbol) return;
@@ -1207,8 +1204,9 @@ void CGrandeLimitOrderManager::AdjustLimitOrderPrice(ulong ticket)
         newLimitPrice = NormalizeDouble(newLimitPrice, digits);
         
         // Modify order
+        datetime expiration = (datetime)OrderGetInteger(ORDER_TIME_EXPIRATION);
         if(m_trade.OrderModify(ticket, newLimitPrice, OrderGetDouble(ORDER_SL), 
-                              OrderGetDouble(ORDER_TP), OrderGetInteger(ORDER_TIME_EXPIRATION)))
+                              OrderGetDouble(ORDER_TP), ORDER_TIME_SPECIFIED, expiration))
         {
             Print(StringFormat("[LIMIT-ORDER] Adjusted order #%I64u from %.5f to %.5f",
                   ticket, orderPrice, newLimitPrice));
@@ -1260,6 +1258,59 @@ void CGrandeLimitOrderManager::CancelOrdersBeforeNews(datetime newsEventTime, in
             }
         }
     }
+}
+
+//+------------------------------------------------------------------+
+//| Get count of pending limit orders                                |
+//+------------------------------------------------------------------+
+int CGrandeLimitOrderManager::GetPendingOrderCount()
+{
+    int count = 0;
+    int total = OrdersTotal();
+    
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(ticket == 0) continue;
+        if(!OrderSelect(ticket)) continue;
+        if(OrderGetString(ORDER_SYMBOL) != m_symbol) continue;
+        if((int)OrderGetInteger(ORDER_MAGIC) != m_magicNumber) continue;
+        
+        ENUM_ORDER_TYPE orderType = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+        if(orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_SELL_LIMIT)
+            count++;
+    }
+    
+    return count;
+}
+
+//+------------------------------------------------------------------+
+//| Check if a new order can be placed                              |
+//+------------------------------------------------------------------+
+bool CGrandeLimitOrderManager::CanPlaceNewOrder()
+{
+    // Maximum pending orders limit (can be made configurable later)
+    const int MAX_PENDING_ORDERS = 20;
+    
+    int currentCount = GetPendingOrderCount();
+    return (currentCount < MAX_PENDING_ORDERS);
+}
+
+//+------------------------------------------------------------------+
+//| Set feature flags for enhanced limit order features             |
+//+------------------------------------------------------------------+
+void CGrandeLimitOrderManager::SetFeatureFlags(bool trackFillMetrics, bool useRegimeFiltering,
+                                                bool requireMultiTimeframeAlignment, bool useATRScaling,
+                                                bool useFillProbability, bool enableDynamicAdjustment,
+                                                bool cancelOrdersBeforeNews)
+{
+    m_trackFillMetrics = trackFillMetrics;
+    m_useRegimeFiltering = useRegimeFiltering;
+    m_requireMultiTimeframeAlignment = requireMultiTimeframeAlignment;
+    m_useATRScaling = useATRScaling;
+    m_useFillProbability = useFillProbability;
+    m_enableDynamicAdjustment = enableDynamicAdjustment;
+    m_cancelOrdersBeforeNews = cancelOrdersBeforeNews;
 }
 //+------------------------------------------------------------------+
 

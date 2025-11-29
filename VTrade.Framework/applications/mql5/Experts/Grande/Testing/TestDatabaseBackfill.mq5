@@ -8,7 +8,7 @@
 #property version   "1.00"
 #property script_show_inputs
 
-#include "../Include/GrandeDatabaseManager.mqh"
+#include "..\Include\GrandeDatabaseManager.mqh"
 
 input int InpBackfillDays = 30;  // Days to backfill
 input bool InpShowProgress = true; // Show detailed progress
@@ -62,10 +62,11 @@ void OnStart()
     if(backfillResult)
     {
         Print("[TEST] ✅ Backfill completed in ", duration, " ms");
+        Print("[TEST] Note: 0 inserts with skipped duplicates means data already exists (success)");
     }
     else
     {
-        Print("[TEST] ❌ Backfill failed");
+        Print("[TEST] ❌ Backfill failed - no data could be retrieved or processed");
     }
     
     // Get data coverage after backfill

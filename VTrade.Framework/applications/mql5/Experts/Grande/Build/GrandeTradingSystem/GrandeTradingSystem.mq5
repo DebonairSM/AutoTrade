@@ -150,6 +150,15 @@ input bool   InpCancelStaleOrders = true;        // Cancel orders if price moves
 input double InpStaleOrderDistancePips = 50.0;   // Distance to consider order "stale" (pips)
 input int    InpLimitOrderDuplicateTolerancePoints = 3; // Tolerance for duplicate order detection (points)
 
+input group "=== Enhanced Limit Order Features (Phase 1-7) ==="
+input bool   InpTrackFillMetrics = true;         // Enable fill rate tracking (Phase 1)
+input bool   InpUseRegimeFiltering = false;       // Enable regime-based zone filtering (Phase 2)
+input bool   InpRequireMultiTimeframeAlignment = false; // Require H1/H4/D1 alignment (Phase 3)
+input bool   InpUseATRScaling = true;            // Enable ATR-based distance scaling (Phase 4)
+input bool   InpUseFillProbability = false;      // Enable fill probability estimation (Phase 5)
+input bool   InpEnableDynamicAdjustment = false; // Enable dynamic price adjustment (Phase 6)
+input bool   InpCancelOrdersBeforeNews = true;   // Cancel orders before high-impact news (Phase 6)
+
 input group "=== Technical Validation Settings ==="
 input bool   InpEnableTechnicalValidation = true;  // Require technical confirmation before entry
 input double InpMaxWickToBodyRatio = 2.0;          // Max acceptable wick-to-body ratio
@@ -261,6 +270,10 @@ input ENUM_TIMEFRAMES InpCalendarRunTimeframe = PERIOD_H1; // Timeframe to run c
 //+------------------------------------------------------------------+
 CGrandeMarketRegimeDetector*  g_regimeDetector;
 CGrandeKeyLevelDetector*      g_keyLevelDetector;
+// Phase 3: Multi-timeframe key level detectors for limit price validation
+CGrandeKeyLevelDetector*      g_keyLevelDetectorH1;
+CGrandeKeyLevelDetector*      g_keyLevelDetectorH4;
+CGrandeKeyLevelDetector*      g_keyLevelDetectorD1;
 CGrandeCandleAnalyzer*        g_candleAnalyzer;
 CGrandeFibonacciCalculator*   g_fibCalculator;
 CGrandeConfluenceDetector*    g_confluenceDetector;
@@ -633,6 +646,54 @@ int OnInit()
         return INIT_FAILED;
     }
     
+    // Phase 3: Create multi-timeframe key level detectors for limit price validation
+    // Note: These instances will work with the current chart timeframe but can be used
+    // for multi-timeframe validation by the multi-timeframe analyzer
+    g_keyLevelDetectorH1 = new CGrandeKeyLevelDetector();
+    if(g_keyLevelDetectorH1 != NULL)
+    {
+        if(!g_keyLevelDetectorH1.Initialize(InpLookbackPeriod, InpMinStrength, InpTouchZone, 
+                                            InpMinTouches, false)) // Disable debug for multi-TF instances
+        {
+            delete g_keyLevelDetectorH1;
+            g_keyLevelDetectorH1 = NULL;
+        }
+        else if(InpLogDebugInfo)
+        {
+            Print("[Grande] H1 Key Level Detector initialized for multi-timeframe validation");
+        }
+    }
+    
+    g_keyLevelDetectorH4 = new CGrandeKeyLevelDetector();
+    if(g_keyLevelDetectorH4 != NULL)
+    {
+        if(!g_keyLevelDetectorH4.Initialize(InpLookbackPeriod, InpMinStrength, InpTouchZone, 
+                                            InpMinTouches, false))
+        {
+            delete g_keyLevelDetectorH4;
+            g_keyLevelDetectorH4 = NULL;
+        }
+        else if(InpLogDebugInfo)
+        {
+            Print("[Grande] H4 Key Level Detector initialized for multi-timeframe validation");
+        }
+    }
+    
+    g_keyLevelDetectorD1 = new CGrandeKeyLevelDetector();
+    if(g_keyLevelDetectorD1 != NULL)
+    {
+        if(!g_keyLevelDetectorD1.Initialize(InpLookbackPeriod, InpMinStrength, InpTouchZone, 
+                                            InpMinTouches, false))
+        {
+            delete g_keyLevelDetectorD1;
+            g_keyLevelDetectorD1 = NULL;
+        }
+        else if(InpLogDebugInfo)
+        {
+            Print("[Grande] D1 Key Level Detector initialized for multi-timeframe validation");
+        }
+    }
+    
     // Create candle analyzer
     g_candleAnalyzer = new CGrandeCandleAnalyzer(_Symbol, PERIOD_CURRENT);
     if(g_candleAnalyzer == NULL)
@@ -721,7 +782,8 @@ int OnInit()
                                         g_confluenceDetector, 
                                         g_keyLevelDetector, 
                                         GetPointer(g_trade),
-                                        limitConfig))
+                                        limitConfig,
+                                        g_databaseManager))  // Phase 1: Add database manager for tracking
     {
         Print("ERROR: Failed to initialize Limit Order Manager");
         delete g_regimeDetector;
@@ -740,6 +802,17 @@ int OnInit()
     }
     if(InpLogDebugInfo)
         Print("[Grande] Limit Order Manager initialized");
+    
+    // Phase 1-7: Set feature flags for enhanced limit order features
+    g_limitOrderManager.SetFeatureFlags(
+        InpTrackFillMetrics,                    // Phase 1: Fill tracking
+        InpUseRegimeFiltering,                  // Phase 2: Regime filtering
+        InpRequireMultiTimeframeAlignment,       // Phase 3: Multi-timeframe alignment
+        InpUseATRScaling,                       // Phase 4: ATR scaling
+        InpUseFillProbability,                  // Phase 5: Fill probability
+        InpEnableDynamicAdjustment,             // Phase 6: Dynamic adjustment
+        InpCancelOrdersBeforeNews               // Phase 6: News cancellation
+    );
     
     // Create and initialize trend follower (if enabled)
     g_trendFollower = NULL;
@@ -1076,6 +1149,58 @@ int OnInit()
 //+------------------------------------------------------------------+
 //| Expert deinitialization function                                 |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| OnTradeTransaction handler - Phase 1: Limit Order Fill Tracking |
+//+------------------------------------------------------------------+
+// PURPOSE:
+//   Detects when limit orders are filled and logs the fill for tracking.
+//   This enables data collection for fill rate analysis.
+//
+// BEHAVIOR:
+//   - Monitors TRADE_TRANSACTION_DEAL_ADD events
+//   - Checks if deal is from a limit order (ORDER_TYPE_BUY_LIMIT or ORDER_TYPE_SELL_LIMIT)
+//   - Calls LogLimitOrderFill() to record the fill in database
+//
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                       const MqlTradeRequest &request,
+                       const MqlTradeResult &result)
+{
+    // Only process deal additions (order fills)
+    if(trans.type != TRADE_TRANSACTION_DEAL_ADD)
+        return;
+    
+    // Check if this is our order (by magic number)
+    if(trans.order != 0)
+    {
+        if(!OrderSelect(trans.order))
+            return;
+        
+        if((int)OrderGetInteger(ORDER_MAGIC) != InpMagicNumber)
+            return;
+        
+        // Check if this was a limit order that just filled
+        ENUM_ORDER_TYPE orderType = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+        if(orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_SELL_LIMIT)
+        {
+            // Get deal information
+            if(HistoryDealSelect(trans.deal))
+            {
+                double fillPrice = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
+                
+                // Log the fill
+                if(g_limitOrderManager != NULL)
+                {
+                    g_limitOrderManager.LogLimitOrderFill(trans.order, fillPrice);
+                }
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| OnDeinit handler                                                  |
+//+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
     // Publish deinitialization event
@@ -1153,6 +1278,25 @@ void OnDeinit(const int reason)
     {
         delete g_keyLevelDetector;
         g_keyLevelDetector = NULL;
+    }
+    
+    // Phase 3: Clean up multi-timeframe key level detectors
+    if(g_keyLevelDetectorH1 != NULL)
+    {
+        delete g_keyLevelDetectorH1;
+        g_keyLevelDetectorH1 = NULL;
+    }
+    
+    if(g_keyLevelDetectorH4 != NULL)
+    {
+        delete g_keyLevelDetectorH4;
+        g_keyLevelDetectorH4 = NULL;
+    }
+    
+    if(g_keyLevelDetectorD1 != NULL)
+    {
+        delete g_keyLevelDetectorD1;
+        g_keyLevelDetectorD1 = NULL;
     }
     
     if(g_candleAnalyzer != NULL)
@@ -1586,21 +1730,15 @@ void OnTimer()
             g_stateManager.SetLastRiskUpdate(currentTime);
     }
     
-    // Manage pending limit orders (cancel stale, track fills)
-    if(InpUseLimitOrders && InpCancelStaleOrders && g_limitOrderManager != NULL)
-    {
-        g_limitOrderManager.ManageStaleOrders();
-    }
-    
-    // Update intelligent position scaling range information
-    UpdateRangeInfo();
-    
-    // Update regime detection
+    // Update regime detection (needed for ATR values in stale order management)
+    RegimeSnapshot currentRegime;
+    bool hasRegimeData = false;
     datetime lastRegimeUpdate = (g_stateManager != NULL) ? g_stateManager.GetLastRegimeUpdate() : 0;
     if(g_regimeDetector != NULL && 
        currentTime - lastRegimeUpdate >= InpRegimeUpdateSeconds)
     {
-        RegimeSnapshot currentRegime = g_regimeDetector.DetectCurrentRegime();
+        currentRegime = g_regimeDetector.DetectCurrentRegime();
+        hasRegimeData = true;
         
         // Get previous regime for change detection
         static MARKET_REGIME lastLoggedRegime = REGIME_RANGING;
@@ -1616,6 +1754,37 @@ void OnTimer()
         {
             // State Manager handles regime update timestamp automatically in SetCurrentRegime()
         }
+    }
+    else if(g_stateManager != NULL)
+    {
+        // Use cached regime from state manager if available
+        currentRegime = g_stateManager.GetCurrentRegime();
+        hasRegimeData = (currentRegime.timestamp > 0);
+    }
+    
+    // Manage pending limit orders (cancel stale, track fills)
+    // Phase 4.3: Pass ATR parameters for adaptive stale order management
+    if(InpUseLimitOrders && InpCancelStaleOrders && g_limitOrderManager != NULL)
+    {
+        if(hasRegimeData && currentRegime.atr_current > 0 && currentRegime.atr_avg > 0)
+        {
+            // Use ATR-scaled stale order management
+            g_limitOrderManager.ManageStaleOrders(currentRegime.atr_current, currentRegime.atr_avg);
+        }
+        else
+        {
+            // Fallback to non-ATR version (backward compatible)
+            g_limitOrderManager.ManageStaleOrders();
+        }
+    }
+    
+    // Update intelligent position scaling range information
+    UpdateRangeInfo();
+    
+    // Continue with regime change detection if regime was updated
+    if(hasRegimeData)
+    {
+        static MARKET_REGIME lastLoggedRegime = REGIME_RANGING;
         
         // Log regime changes and publish events
         if(currentRegime.regime != lastLoggedRegime)
@@ -3647,19 +3816,83 @@ void TrendTrade(bool bullish, const RegimeSnapshot &rs, string finbertSignal = "
     // Use limit orders if enabled
     if(InpUseLimitOrders && g_limitOrderManager != NULL)
     {
-        // Prepare limit order request
-        LimitOrderRequest request;
-        request.isBuy = bullish;
-        request.lotSize = lot;
-        request.basePrice = price;
-        request.stopLoss = sl;
-        request.takeProfit = tp;
-        request.comment = comment;
-        request.tradeContext = "TREND";
-        request.logPrefix = logPrefix;
+        // Phase 7: Build enhanced limit order request with full context
+        EnhancedLimitOrderRequest enhancedRequest;
+        enhancedRequest.isBuy = bullish;
+        enhancedRequest.lotSize = lot;
+        enhancedRequest.basePrice = price;
+        enhancedRequest.stopLoss = sl;
+        enhancedRequest.takeProfit = tp;
+        enhancedRequest.comment = comment;
+        enhancedRequest.tradeContext = "TREND";
+        enhancedRequest.logPrefix = logPrefix;
         
-        // Place limit order using manager
-        LimitOrderResult result = g_limitOrderManager.PlaceLimitOrder(request);
+        // Populate enhanced fields
+        enhancedRequest.regimeSnapshot = rs;
+        enhancedRequest.regimeConfidence = rs.confidence;
+        
+        // Calculate signal quality score (0-100)
+        double signalQualityScore = 75.0; // Default
+        if(g_signalQualityAnalyzer != NULL)
+        {
+            int confluenceScore = 0;
+            if(g_confluenceDetector != NULL)
+            {
+                ConfluenceZone zone = g_confluenceDetector.GetBestConfluenceZone(bullish, price, 50.0);
+                confluenceScore = zone.score;
+            }
+            double rsi = execution.rsi_current;
+            double adx = rs.adx_h1;
+            SignalQualityScore qualityScore = g_signalQualityAnalyzer.ScoreSignalQuality(
+                execution.signal_type, rs.confidence, confluenceScore, rsi, adx, finbertConfidence);
+            signalQualityScore = qualityScore.overallScore * 100.0; // Convert 0-1 to 0-100
+        }
+        enhancedRequest.signalQualityScore = signalQualityScore;
+        
+        // ATR values
+        enhancedRequest.currentATR = rs.atr_current;
+        // Get average ATR from state manager if available, otherwise estimate
+        if(g_stateManager != NULL)
+        {
+            // Try to get average ATR (20-period)
+            enhancedRequest.averageATR = GetATRAverage(20);
+        }
+        else
+        {
+            // Fallback: use current ATR as estimate
+            enhancedRequest.averageATR = rs.atr_current;
+        }
+        
+        // News event integration - Phase 6: Check for upcoming high-impact news
+        enhancedRequest.newsEventTime = 0;
+        enhancedRequest.newsImpactLevel = 0;
+        if(g_calendarReader.IsCalendarAvailable() && g_calendarReader.GetEventCount() > 0)
+        {
+            datetime currentTime = TimeCurrent();
+            datetime nextHighImpactTime = 0;
+            int nextHighImpactLevel = 0;
+            
+            // Find next upcoming high-impact news event (within 24 hours)
+            for(int i = 0; i < g_calendarReader.GetEventCount(); i++)
+            {
+                NewsEvent evt = g_calendarReader.GetEvent(i);
+                // Only consider high-impact events (HIGH or CRITICAL) that are in the future
+                if(evt.time > currentTime && evt.impact >= NEWS_IMPACT_HIGH)
+                {
+                    if(nextHighImpactTime == 0 || evt.time < nextHighImpactTime)
+                    {
+                        nextHighImpactTime = evt.time;
+                        nextHighImpactLevel = evt.impact;
+                    }
+                }
+            }
+            
+            enhancedRequest.newsEventTime = nextHighImpactTime;
+            enhancedRequest.newsImpactLevel = nextHighImpactLevel;
+        }
+        
+        // Place limit order using enhanced manager
+        LimitOrderResult result = g_limitOrderManager.PlaceLimitOrder(enhancedRequest);
         
         if(result.success)
         {
@@ -4052,19 +4285,85 @@ void BreakoutTrade(const RegimeSnapshot &rs, string finbertSignal = "NEUTRAL", d
     // Use limit orders if enabled and not a strong momentum surge
     if(InpUseLimitOrders && g_limitOrderManager != NULL && !strongMomentumSurge)
     {
-        // Prepare limit order request
-        LimitOrderRequest request;
-        request.isBuy = isBuyDirection;
-        request.lotSize = lot;
-        request.basePrice = currentPrice;
-        request.stopLoss = breakoutSL;
-        request.takeProfit = breakoutTP;
-        request.comment = comment;
-        request.tradeContext = "BREAKOUT";
-        request.logPrefix = "[BREAKOUT]";
+        // Phase 7: Build enhanced limit order request with full context
+        EnhancedLimitOrderRequest enhancedRequest;
+        enhancedRequest.isBuy = isBuyDirection;
+        enhancedRequest.lotSize = lot;
+        // CRITICAL FIX: Use breakout level, not current price (Issue #11 from analysis)
+        enhancedRequest.basePrice = breakoutLevel;
+        enhancedRequest.stopLoss = breakoutSL;
+        enhancedRequest.takeProfit = breakoutTP;
+        enhancedRequest.comment = comment;
+        enhancedRequest.tradeContext = "BREAKOUT";
+        enhancedRequest.logPrefix = "[BREAKOUT]";
         
-        // Place limit order using manager
-        LimitOrderResult result = g_limitOrderManager.PlaceLimitOrder(request);
+        // Populate enhanced fields
+        enhancedRequest.regimeSnapshot = rs;
+        enhancedRequest.regimeConfidence = rs.confidence;
+        
+        // Calculate signal quality score (0-100)
+        double signalQualityScore = 75.0; // Default
+        if(g_signalQualityAnalyzer != NULL)
+        {
+            int confluenceScore = 0;
+            if(g_confluenceDetector != NULL)
+            {
+                ConfluenceZone zone = g_confluenceDetector.GetBestConfluenceZone(isBuyDirection, breakoutLevel, 50.0);
+                confluenceScore = zone.score;
+            }
+            double rsi = GetRSIValue(_Symbol, PERIOD_CURRENT, InpRSIPeriod, 0);
+            if(rsi < 0) rsi = 50.0; // Default if unavailable
+            double adx = rs.adx_h1;
+            SignalQualityScore qualityScore = g_signalQualityAnalyzer.ScoreSignalQuality(
+                "BREAKOUT", rs.confidence, confluenceScore, rsi, adx, 0.0); // No FinBERT for breakout
+            signalQualityScore = qualityScore.overallScore * 100.0; // Convert 0-1 to 0-100
+        }
+        enhancedRequest.signalQualityScore = signalQualityScore;
+        
+        // ATR values
+        enhancedRequest.currentATR = rs.atr_current;
+        // Get average ATR from state manager if available, otherwise estimate
+        if(g_stateManager != NULL)
+        {
+            // Try to get average ATR (20-period)
+            enhancedRequest.averageATR = GetATRAverage(20);
+        }
+        else
+        {
+            // Fallback: use current ATR as estimate
+            enhancedRequest.averageATR = rs.atr_current;
+        }
+        
+        // News event integration - Phase 6: Check for upcoming high-impact news
+        enhancedRequest.newsEventTime = 0;
+        enhancedRequest.newsImpactLevel = 0;
+        if(g_calendarReader.IsCalendarAvailable() && g_calendarReader.GetEventCount() > 0)
+        {
+            datetime currentTime = TimeCurrent();
+            datetime nextHighImpactTime = 0;
+            int nextHighImpactLevel = 0;
+            
+            // Find next upcoming high-impact news event (within 24 hours)
+            for(int i = 0; i < g_calendarReader.GetEventCount(); i++)
+            {
+                NewsEvent evt = g_calendarReader.GetEvent(i);
+                // Only consider high-impact events (HIGH or CRITICAL) that are in the future
+                if(evt.time > currentTime && evt.impact >= NEWS_IMPACT_HIGH)
+                {
+                    if(nextHighImpactTime == 0 || evt.time < nextHighImpactTime)
+                    {
+                        nextHighImpactTime = evt.time;
+                        nextHighImpactLevel = evt.impact;
+                    }
+                }
+            }
+            
+            enhancedRequest.newsEventTime = nextHighImpactTime;
+            enhancedRequest.newsImpactLevel = nextHighImpactLevel;
+        }
+        
+        // Place limit order using enhanced manager
+        LimitOrderResult result = g_limitOrderManager.PlaceLimitOrder(enhancedRequest);
         
         if(result.success)
         {
@@ -6547,7 +6846,7 @@ void ApplyRSIExitRules()
         // ALWAYS LOG PARTIAL CLOSE ATTEMPTS
         if(!ok)
         {
-            int errorCode = g_trade.ResultRetcode();
+            uint errorCode = g_trade.ResultRetcode();
             // ALWAYS LOG THE ERROR
             Print(StringFormat("[RSI EXIT] ❌ PARTIAL CLOSE FAILED for position #%I64u", ticket));
             Print(StringFormat("[RSI EXIT] ❌ Error Code: %d - %s", errorCode, ErrorDescription(errorCode)));
@@ -8080,7 +8379,7 @@ int CloseWorstPositionsForMargin(int maxPositionsToClose)
         double volume = PositionGetDouble(POSITION_VOLUME);
         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
         ENUM_ORDER_TYPE orderType = (ENUM_ORDER_TYPE)PositionGetInteger(POSITION_TYPE);
-        ENUM_ORDER_TYPE calcType = (orderType == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+        ENUM_ORDER_TYPE calcType = (orderType == ORDER_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
         
         if(OrderCalcMargin(calcType, pos.symbol, volume, openPrice, pos.margin))
         {

@@ -38,6 +38,8 @@
 #property link      "https://www.grandetech.com.br"
 #property version   "1.00"
 
+// Include RegimeSnapshot definition for EnhancedLimitOrderRequest
+#include "GrandeMarketRegimeDetector.mqh"
 //+------------------------------------------------------------------+
 //| Signal Type Enumeration                                           |
 //+------------------------------------------------------------------+
@@ -478,8 +480,7 @@ struct EnhancedLimitOrderRequest
     string logPrefix;                      // Log prefix for context-specific logging
     
     // New fields for enhanced validation
-    // Note: RegimeSnapshot is defined in GrandeMarketRegimeDetector.mqh
-    // This struct will be fully defined in GrandeLimitOrderManager.mqh where dependencies are available
+    RegimeSnapshot regimeSnapshot;          // Current regime for filtering
     double regimeConfidence;                // Regime confidence (0.0-1.0)
     double signalQualityScore;             // Signal quality score (0-100)
     double currentATR;                     // Current ATR for distance scaling
@@ -499,6 +500,10 @@ struct EnhancedLimitOrderRequest
         logPrefix = "";
         regimeConfidence = 0.0;
         signalQualityScore = 0.0;
+        // Initialize RegimeSnapshot members
+        regimeSnapshot.regime = REGIME_RANGING;
+        regimeSnapshot.confidence = 0.0;
+        regimeSnapshot.timestamp = 0;
         currentATR = 0.0;
         averageATR = 0.0;
         newsEventTime = 0;

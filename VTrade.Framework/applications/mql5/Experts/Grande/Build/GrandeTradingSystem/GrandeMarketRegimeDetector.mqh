@@ -385,6 +385,78 @@ public:
         }
     }
     
+    //+------------------------------------------------------------------+
+    //| Phase 2: Regime-Aware Limit Order Validation                     |
+    //+------------------------------------------------------------------+
+    // Check if a price level aligns with current regime for limit order placement
+    // PURPOSE: Filter limit orders to only place at levels that align with regime direction
+    // PARAMETERS:
+    //   price - The limit order price level to validate
+    //   isBuy - true for buy limit orders, false for sell limit orders
+    //   currentPrice - Current market price for comparison
+    // RETURNS: true if price level is valid for regime, false otherwise
+    //+------------------------------------------------------------------+
+    bool IsPriceLevelValidForRegime(double price, bool isBuy, double currentPrice)
+    {
+        RegimeSnapshot snapshot = GetLastSnapshot();
+        
+        if(snapshot.regime == REGIME_TREND_BULL)
+        {
+            // For buys in bullish trend, price must be below current (pullback)
+            return isBuy ? (price < currentPrice) : false;
+        }
+        else if(snapshot.regime == REGIME_TREND_BEAR)
+        {
+            // For sells in bearish trend, price must be above current (pullback)
+            return isBuy ? false : (price > currentPrice);
+        }
+        else if(snapshot.regime == REGIME_RANGING)
+        {
+            // In ranging, can use both directions at range boundaries
+            return true; // Further validation by key levels
+        }
+        else if(snapshot.regime == REGIME_BREAKOUT_SETUP)
+        {
+            // For breakouts, buys above resistance, sells below support
+            // This is handled by breakout-specific logic
+            return true;
+        }
+        else if(snapshot.regime == REGIME_HIGH_VOLATILITY)
+        {
+            // Avoid limit orders in high volatility
+            return false;
+        }
+        
+        return false;
+    }
+    
+    //+------------------------------------------------------------------+
+    //| Get regime alignment score for limit order placement             |
+    //+------------------------------------------------------------------+
+    // PURPOSE: Calculate how well a limit order price aligns with current regime
+    // PARAMETERS:
+    //   isBuy - true for buy limit orders, false for sell limit orders
+    //   price - The limit order price level
+    //   currentPrice - Current market price for comparison
+    // RETURNS: Alignment score from 0.0 (no alignment) to 1.0 (perfect alignment)
+    //+------------------------------------------------------------------+
+    double GetRegimeAlignmentScore(bool isBuy, double price, double currentPrice)
+    {
+        RegimeSnapshot snapshot = GetLastSnapshot();
+        double alignment = 0.0;
+        
+        if(snapshot.regime == REGIME_TREND_BULL && isBuy && price < currentPrice)
+            alignment = snapshot.confidence;
+        else if(snapshot.regime == REGIME_TREND_BEAR && !isBuy && price > currentPrice)
+            alignment = snapshot.confidence;
+        else if(snapshot.regime == REGIME_RANGING)
+            alignment = snapshot.confidence * 0.7; // Slightly lower for ranging
+        else if(snapshot.regime == REGIME_BREAKOUT_SETUP)
+            alignment = snapshot.confidence * 0.8; // Moderate for breakouts
+        
+        return alignment;
+    }
+    
 private:
     //+------------------------------------------------------------------+
     //| Private Helper Methods                                           |
